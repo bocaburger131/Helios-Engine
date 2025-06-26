@@ -1,5 +1,5 @@
 Helios Engine
-# junior Underwriter
+# Junior Underwriter
 # Bank Statement Analyzer API
 
 REST API for analyzing bank statements using LLM technology.
