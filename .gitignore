@@ -1,0 +1,31 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Dependencies and build
+node_modules/
+dist/
+
+# Runtime / uploads / logs
+uploads/
+*.log
+logs/
+test-results/
+
+# Local databases and caches
+ruvector.db
+.claude/memory.db
+
+# Claude Flow daemon (local only)
+.claude-flow/daemon.pid
+.claude-flow/daemon-state.json
+.claude-flow/metrics/
+
+# IDE (optional local)
+.cursor/
+
+# OS
+Thumbs.db
+.DS_Store

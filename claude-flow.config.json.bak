@@ -1,0 +1,68 @@
+{
+  "_comment": "Keep agents.providers + llm in sync with .claude-flow/config.yaml and bank-statement-analyzer-api/claude-flow.config.json.",
+  "version": "3.5",
+  "defaultProvider": "google",
+  "llm": {
+    "defaultProvider": "google",
+    "coordination": {
+      "model": "gemini-2.5-pro"
+    },
+    "routing": {
+      "model": "gemini-2.5-flash"
+    }
+  },
+  "agents": {
+    "defaultType": "coder",
+    "autoSpawn": false,
+    "maxConcurrent": 15,
+    "timeout": 300000,
+    "providers": [
+      {
+        "provider": "google",
+        "model": "gemini-2.5-pro",
+        "priority": 1,
+        "enabled": true
+      },
+      {
+        "provider": "anthropic",
+        "model": "claude-opus-4-7",
+        "priority": 2,
+        "enabled": false
+      }
+    ]
+  },
+  "swarm": {
+    "topology": "hierarchical-mesh",
+    "maxAgents": 15,
+    "autoScale": true,
+    "coordinationStrategy": "consensus",
+    "healthCheckInterval": 30000
+  },
+  "memory": {
+    "backend": "hybrid",
+    "persistPath": ".claude-flow/data",
+    "cacheSize": 100,
+    "enableHNSW": true,
+    "vectorDimension": 384
+  },
+  "mcp": {
+    "serverHost": "localhost",
+    "serverPort": 3000,
+    "autoStart": false,
+    "transportType": "stdio",
+    "tools": []
+  },
+  "cli": {
+    "colorOutput": true,
+    "interactive": true,
+    "verbosity": "normal",
+    "outputFormat": "text",
+    "progressStyle": "spinner"
+  },
+  "hooks": {
+    "enabled": true,
+    "autoExecute": true,
+    "hooks": []
+  },
+  "providers": []
+}

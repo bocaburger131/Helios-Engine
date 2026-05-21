@@ -1,20 +1,21 @@
 # RuFlo V3 Runtime Configuration
 # Generated: 2026-05-16T09:07:54.262Z
-# Keep in sync with ../claude-flow.config.json (agents.providers + llm models).
-# Do not delete the JSON file — CLI `config get agents.providers` reads it.
+# Canonical RuFlo runtime config. Legacy claude-flow.config.json archived to .bak
+# on 2026-05-19 (ruflo doctor recommendation, YAML is single source of truth).
+# Keep in sync with bank-statement-analyzer-api/.claude-flow/config.yaml.
 
-version: "3.0.0"
+version: "3.5"
 
 # Primary LLM provider for swarm/agents (API key via GOOGLE_API_KEY or GEMINI_API_KEY env)
 defaultProvider: google
 
 agents:
   providers:
-    - name: google
+    - provider: google
       model: gemini-2.5-pro
       priority: 1
       enabled: true
-    - name: anthropic
+    - provider: anthropic
       model: claude-opus-4-7
       priority: 2
       enabled: false

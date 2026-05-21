@@ -18,13 +18,13 @@
     "timeout": 300000,
     "providers": [
       {
-        "name": "google",
+        "provider": "google",
         "model": "gemini-2.5-pro",
         "priority": 1,
         "enabled": true
       },
       {
-        "name": "anthropic",
+        "provider": "anthropic",
         "model": "claude-opus-4-7",
         "priority": 2,
         "enabled": false
