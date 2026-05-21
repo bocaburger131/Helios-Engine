@@ -1,8 +1,22 @@
-# Secrets and local env
+# Local environment files
 .env
+.env.local
+.env.*.local
+.env.backup
+.env.sos-verification
+.env.production
+.env.development
+
+# Ignore env variants by default; allow templates
 .env.*
 !.env.example
 !**/.env.example
+!.env.sos-verification.example
+!**/.env.sos-verification.example
+!.env.backup.example
+!**/.env.backup.example
+!.env.development.example
+!**/.env.development.example
 
 # Dependencies and build
 node_modules/
