@@ -38,6 +38,8 @@ test-results/
 # Local databases and caches
 ruvector.db
 **/ruvector.db
+**/.mongodb-data/
+bank-statement-analyzer-api/.mongodb-data/
 .claude/memory.db
 .swarm/memory.db
 .swarm/memory.db-*
