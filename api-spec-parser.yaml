@@ -1,0 +1,235 @@
+---
+openapi: 3.0.0
+info:
+  title: Helios Engine Statement Parsing API
+  version: 1.0.0
+  description: API for parsing and analyzing bank statements.
+servers:
+  - url: /api/dev/parse-statement
+    description: Development server for statement parsing
+paths:
+  /parse-statement:
+    post:
+      summary: Parse a bank statement PDF
+      operationId: parseStatementPdf
+      tags:
+        - Statements
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The bank statement PDF file to parse.
+                statementData:
+                  type: string
+                  description: Additional statement data or metadata (optional).
+      responses:
+        '200':
+          description: Successfully parsed statement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevParseResult'
+        '400':
+          description: Bad request (e.g., invalid file format, missing data).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error during parsing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    DevParseResult:
+      type: object
+      properties:
+        id: 
+          type: string
+          description: Unique identifier for the parsed statement.
+        statementData: 
+          $ref: '#/components/schemas/HeliosStatementPayload'
+        reconciliation: 
+          type: object
+          properties:
+            amount: { type: number }
+            checksumOk: { type: boolean }
+        layoutPipelineShadow: 
+          type: object
+          properties: 
+            name: { type: string }
+            steps: 
+              type: array
+              items: { type: string }
+        parseQuality: { type: number } # e.g., 0.0 to 1.0
+        analysis:
+          type: object
+          properties:
+            documentMap: 
+              type: object
+              properties:
+                regions: 
+                  type: array
+                  items: { $ref: '#/components/schemas/DocumentRegion' }
+                ignoredRegions: 
+                  type: array
+                  items: { $ref: '#/components/schemas/DocumentRegion' }
+                blocks: 
+                  type: array
+                  items: { $ref: '#/components/schemas/DocumentBlock' }
+    ErrorResponse:
+      type: object
+      properties:
+        message: { type: string }
+        code: { type: string }
+    DocumentRegion:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string } # e.g., 'text', 'table'
+        text: { type: string }
+        value: { type: any } # Parsed value, e.g., number, date
+        bbox: { $ref: '#/components/schemas/BoundingBox' }
+        category: { type: string } # e.g., 'date', 'amount', 'merchant'
+    DocumentBlock:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string } # e.g., 'paragraph', 'table'
+        text: { type: string }
+        bbox: { $ref: '#/components/schemas/BoundingBox' }
+    BoundingBox:
+      type: object
+      properties:
+        x1: { type: number }
+        y1: { type: number }
+        x2: { type: number }
+        y2: { type: number }
+    HeliosStatementPayload:
+      type: object
+      properties:
+        id: { type: string }
+        originalFileName: { type: string }
+        uploadId: { type: string }
+        analysis:
+          type: object
+          properties:
+            documentMap: { $ref: '#/components/schemas/DocumentMap' }
+            checksumOk: { type: boolean }
+            parseQuality: { type: number }
+            layoutPipelineShadow: { type: object }
+            regions: 
+              type: array
+              items: { $ref: '#/components/schemas/DocumentRegion' }
+            blocks: 
+              type: array
+              items: { $ref: '#/components/schemas/DocumentBlock' }
+        monthlySummaries: 
+          type: array
+          items: { $ref: '#/components/schemas/MonthlyStatementSummary' }
+        dailyActivities: 
+          type: array
+          items: { $ref: '#/components/schemas/DailyActivityRow' }
+        weeklyActivities: 
+          type: array
+          items: { $ref: '#/components/schemas/WeeklyActivityRow' }
+        transactions: 
+          type: array
+          items: { $ref: '#/components/schemas/HeliosTransaction' }
+        feeTransactions: 
+          type: array
+          items: { $ref: '#/components/schemas/FeeTransaction' }
+        envelope: { $ref: '#/components/schemas/EnvelopeViewModel' }
+        projections: 
+          type: array
+          items: { $ref: '#/components/schemas/ProjectionRow' }
+        eligibility: { $ref: '#/components/schemas/EligibilityResult' }
+        alerts: 
+          type: array
+          items: { $ref: '#/components/schemas/Alert' }
+    DocumentMap:
+      type: object
+      properties:
+        regions: 
+          type: array
+          items: { $ref: '#/components/schemas/DocumentRegion' }
+        ignoredRegions: 
+          type: array
+          items: { $ref: '#/components/schemas/DocumentRegion' }
+        blocks: 
+          type: array
+          items: { $ref: '#/components/schemas/DocumentBlock' }
+    MonthlyStatementSummary:
+      type: object
+      properties:
+        month: { type: string } # e.g., 'YYYY-MM'
+        credits: { type: number }
+        debits: { type: number }
+        net: { type: number }
+        transactionsCount: { type: number }
+        adbByMonth: { type: number } # Average Daily Balance
+    HeliosTransaction:
+      type: object
+      properties:
+        id: { type: string }
+        date: { type: string } # YYYY-MM-DD
+        amount: { type: number }
+        type: { type: string } # 'credit' or 'debit'
+        description: { type: string }
+        category: { type: string } # e.g., 'income', 'rent', 'groceries'
+        merchant: { type: string } # e.g., 'Amazon', 'Bank'
+    FeeTransaction:
+      type: object
+      properties:
+        id: { type: string }
+        date: { type: string } # YYYY-MM-DD
+        amount: { type: number }
+        description: { type: string }
+        category: { type: string } # e.g., 'overdraft', 'service_fee'
+    EnvelopeViewModel:
+      type: object
+      properties:
+        dealId: { type: string }
+        envelopeId: { type: string }
+        currentMonthStatement: { $ref: '#/components/schemas/MonthlyStatementSummary' }
+        overallStatement: { $ref: '#/components/schemas/MonthlyStatementSummary' }
+        riskScore: { type: number }
+        veritasScore: { type: number }
+        lastUpdated: { type: string } # ISO 8601 format
+    ProjectionRow:
+      type: object
+      properties:
+        month: { type: string } # YYYY-MM
+        projectedCredits: { type: number }
+        projectedDebits: { type: number }
+        projectedNet: { type: number }
+    EligibilityResult:
+      type: object
+      properties:
+        dscr: { type: number } # Debt Service Coverage Ratio
+        eligibilityBands: 
+          type: array
+          items: { $ref: '#/components/schemas/EligibilityBand' }
+    EligibilityBand:
+      type: object
+      properties:
+        name: { type: string } # e.g., 'High Risk', 'Low Risk'
+        lowerBound: { type: number }
+        upperBound: { type: number }
+        color: { type: string } # e.g., '#FF0000'
+    Alert:
+      type: object
+      properties:
+        id: { type: string }
+        severity: { type: string } # e.g., 'low', 'medium', 'high', 'critical'
+        type: { type: string } # e.g., 'NSF', 'LowBalance', 'HighVelocity'
+        message: { type: string }
+        triggeredAt: { type: string } # ISO 8601 format
