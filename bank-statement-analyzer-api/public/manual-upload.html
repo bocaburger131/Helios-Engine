@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Upload Hub — Helios Engine</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/helios-sidebar.css" />
+  <link rel="stylesheet" href="./css/upload-hub.css" />
+</head>
+<body class="helios-app">
+  <aside class="helios-sidebar" aria-label="Main navigation">
+    <button type="button" id="helios-sidebar-toggle" class="helios-sidebar-toggle" aria-expanded="true" aria-label="Collapse sidebar">‹</button>
+    <div class="helios-sidebar-brand">
+      <span class="helios-sidebar-brand-badge" aria-hidden="true">S4</span>
+      <div class="helios-sidebar-brand-text">
+        <div class="helios-sidebar-brand-title">Shift 4 Funding</div>
+        <div class="helios-sidebar-brand-sub">Upload Hub</div>
+      </div>
+    </div>
+    <nav class="helios-sidebar-nav">
+      <a href="./manual-upload.html" aria-current="page"><span class="helios-nav-icon" aria-hidden="true">↑</span><span class="helios-nav-label">Upload Hub</span></a>
+      <a href="./manual-results.html"><span class="helios-nav-icon" aria-hidden="true">◉</span><span class="helios-nav-label">Results</span></a>
+      <a href="./helios-report.html?mock=1"><span class="helios-nav-icon" aria-hidden="true">📊</span><span class="helios-nav-label">Sample Report</span></a>
+      <a href="./login.html" id="sign-out-link"><span class="helios-nav-icon" aria-hidden="true">⎋</span><span class="helios-nav-label">Sign out</span></a>
+    </nav>
+    <footer class="helios-sidebar-footer">
+      <div class="helios-sidebar-fields">
+        <label for="deal-id">Deal ID</label>
+        <input type="text" id="deal-id" placeholder="APP-89234" autocomplete="off" />
+        <label for="business-name">Business name</label>
+        <input type="text" id="business-name" placeholder="Optional" autocomplete="organization" />
+        <label for="stated-revenue">Stated revenue</label>
+        <input type="text" id="stated-revenue" placeholder="e.g. 500000" autocomplete="off" />
+      </div>
+      <div id="auth-panel" class="helios-sidebar-auth auth-panel">
+        <form id="login-form">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" autocomplete="username" />
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" autocomplete="current-password" />
+          <button type="submit" id="login-btn">Sign in</button>
+        </form>
+      </div>
+      <p id="auth-status" class="helios-auth-status" role="status"></p>
+    </footer>
+  </aside>
+
+  <main class="hub-main helios-main-panel">
+    <header class="hub-header">
+      <h1>Statement ingestion</h1>
+      <p>Upload PDFs — files are classified automatically. Review extracted data in the chat, then click <strong>Run Analysis</strong> for the full macro report.</p>
+    </header>
+    <div id="chat-history" class="chat-history" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <div class="drop-zone-wrap">
+      <div id="hub-progress" class="hub-progress" hidden aria-hidden="true">
+        <div class="hub-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload PDF files">
+        <div class="drop-zone-expanded">
+          <div class="drop-zone-icon" aria-hidden="true">📄</div>
+          <p class="drop-zone-title">Drop statements and application PDFs here</p>
+          <p class="drop-zone-hint">or click to browse — multiple PDFs supported</p>
+        </div>
+        <div class="drop-zone-compact" hidden>
+          <span class="drop-zone-compact-add" aria-hidden="true">+</span>
+          <span class="drop-zone-compact-label">Add PDFs</span>
+          <span id="compact-file-count" class="drop-zone-compact-count"></span>
+        </div>
+        <input type="file" id="file-input" accept="application/pdf,application/x-pdf" multiple />
+        <ul id="staged-files-list" class="staged-files" aria-label="Staged files"></ul>
+        <div class="hub-action-row">
+          <button type="button" id="primary-action-btn" class="analyze-btn analyze-btn--upload">Upload</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <aside id="pdf-inspector" class="pdf-inspector" aria-label="Document preview" aria-hidden="true">
+    <header class="pdf-inspector-header">
+      <h2>Document preview</h2>
+      <button type="button" id="inspector-close" class="pdf-inspector-close" aria-label="Close preview">&times;</button>
+    </header>
+    <div class="pdf-inspector-frame-wrap">
+      <p id="pdf-empty" class="pdf-inspector-empty">Select “View Document” to preview the statement.</p>
+      <iframe id="pdf-frame" title="Statement PDF preview" hidden></iframe>
+    </div>
+  </aside>
+
+  <script src="./js/helios-auth.js"></script>
+  <script src="./js/helios-sidebar.js"></script>
+  <script src="./js/upload-hub.js"></script>
+</body>
+</html>

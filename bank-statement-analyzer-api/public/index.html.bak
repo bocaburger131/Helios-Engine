@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Shift 4 Funding | Vera AI Results Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --bg-soft: rgba(11, 17, 32, 0.85);
+      --card: rgba(17, 28, 52, 0.88);
+      --card-soft: rgba(17, 28, 52, 0.7);
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.16);
+      --success: #4ade80;
+      --warning: #fbbf24;
+      --danger: #f87171;
+      --muted: #9ba8c7;
+      --text: #f1f5f9;
+      --border: rgba(148, 163, 184, 0.18);
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top right, rgba(56, 189, 248, 0.1), transparent 55%), var(--bg);
+      color: var(--text);
+      font-family: "Inter", sans-serif;
+    }
+
+    .glass-card {
+      background: var(--card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 22px 44px rgba(8, 15, 31, 0.28);
+    }
+
+    .function-row {
+      display: grid;
+      grid-template-columns: 50px 2fr 120px 140px 1fr;
+      gap: 16px;
+      padding: 16px 18px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      align-items: center;
+    }
+
+    .chat-history { height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+    .chat-message { padding: 12px 14px; border-radius: 12px; max-width: 90%; font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap; }
+    .chat-message.user { align-self: flex-end; background: #2563eb; color: white; }
+    .chat-message.ai { align-self: flex-start; background: rgba(15, 23, 42, 0.75); border: 1px solid var(--border); color: #e2e8f0; }
+
+    .spinner { border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="p-4 md:p-8 lg:p-12">
+
+  <div class="max-w-7xl mx-auto flex flex-col gap-8">
+
+    <!-- ═══ HEADER ═══ -->
+    <header class="glass-card p-8 flex flex-wrap justify-between items-center gap-6">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
+          <span class="bg-blue-600 px-3 py-1 rounded text-xl">S4</span> Bank Statement Intelligence
+        </h1>
+        <p class="text-slate-400 mt-2 max-w-2xl">Macro Quarterly Engine: Real-time fraud detection, cash flow consolidation, and Vera AI underwriting assistance.</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <a href="/manual-results.html" class="text-xs font-bold uppercase tracking-widest text-blue-400 border border-blue-500/30 px-4 py-2 rounded-full hover:bg-blue-500/10 transition-colors">Full Report &rarr;</a>
+        <div class="flex flex-col items-end gap-2">
+          <span class="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest" id="base-url-chip">Loading...</span>
+          <div id="login-status" class="text-xs text-slate-500">System Ready</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+      <!-- ═══ LEFT SIDEBAR ═══ -->
+      <div class="lg:col-span-4 flex flex-col gap-6">
+
+        <!-- Auth Card -->
+        <div class="glass-card p-6">
+          <h2 class="text-lg font-bold mb-4 flex items-center gap-2">&#x1f512; Authentication</h2>
+          <form id="login-form" class="space-y-3">
+            <input type="email" id="login-email" class="w-full bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg text-sm text-slate-200 placeholder-slate-500" placeholder="Admin Email">
+            <input type="password" id="login-password" class="w-full bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg text-sm text-slate-200 placeholder-slate-500" placeholder="Password">
+            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all shadow-lg shadow-blue-900/20">Request Access Token</button>
+          </form>
+          <textarea id="token" class="w-full mt-4 bg-slate-950 border border-slate-800 p-2 rounded text-[10px] text-emerald-500 font-mono" rows="3" readonly placeholder="JWT will appear here..."></textarea>
+        </div>
+
+        <!-- Upload Card -->
+        <div class="glass-card p-6">
+          <h2 class="text-lg font-bold mb-4 flex items-center gap-2">&#x1f4c1; Batch Ingestion</h2>
+          <form id="uploadForm" class="space-y-4">
+            <input type="file" id="pdfFiles" multiple accept="application/pdf" class="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600/10 file:text-blue-400 border border-slate-800 rounded-lg p-2">
+            <input type="text" id="dealId" value="DEAL-2026-MACRO" class="w-full bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg text-sm text-slate-200 placeholder-slate-500" placeholder="Zoho Deal ID">
+            <button type="submit" id="submitBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg text-sm flex items-center justify-center gap-3">
+              <span>Run Helios Macro Analysis</span>
+              <div class="spinner hidden" id="upload-spinner"></div>
+            </button>
+          </form>
+          <p id="upload-status" class="text-xs text-slate-500 mt-2"></p>
+        </div>
+
+      </div>
+
+      <!-- ═══ MAIN CONTENT ═══ -->
+      <div class="lg:col-span-8 flex flex-col gap-6">
+
+        <!-- KPI Row -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="glass-card p-4 text-center">
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Risk Score</div>
+            <div class="text-2xl font-black text-white" id="val-risk">--</div>
+          </div>
+          <div class="glass-card p-4 text-center border-l-4 border-l-emerald-500">
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Veritas Grade</div>
+            <div class="text-2xl font-black text-emerald-400" id="val-grade">--</div>
+          </div>
+          <div class="glass-card p-4 text-center">
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Net Flow</div>
+            <div class="text-2xl font-black text-white" id="val-netflow">--</div>
+          </div>
+          <div class="glass-card p-4 text-center">
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">NSF Events</div>
+            <div class="text-2xl font-black text-rose-400" id="val-nsf">--</div>
+          </div>
+        </div>
+
+        <!-- Account Groupings Table -->
+        <div class="glass-card overflow-hidden">
+          <div class="bg-slate-800/50 px-6 py-4 border-b border-slate-700 flex justify-between items-center">
+            <h2 class="font-bold text-sm uppercase tracking-wider">Account Groupings</h2>
+            <span class="text-xs text-slate-400" id="statement-count">0 Statements Parsed</span>
+          </div>
+          <div class="p-0 overflow-x-auto">
+            <table class="w-full text-left">
+              <thead class="bg-slate-900/50 text-[10px] uppercase text-slate-500 font-bold">
+                <tr>
+                  <th class="px-6 py-3">Institution</th>
+                  <th class="px-6 py-3">Account #</th>
+                  <th class="px-6 py-3">Closing Bal</th>
+                  <th class="px-6 py-3">Fraud Alerts</th>
+                  <th class="px-6 py-3">Action</th>
+                </tr>
+              </thead>
+              <tbody id="account-table-body" class="text-sm text-slate-300">
+                <tr><td colspan="5" class="px-6 py-10 text-center text-slate-500 italic">No macro analysis data found. Upload statements to begin.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Vera AI Chat -->
+        <div class="glass-card flex flex-col h-[450px]">
+          <div class="bg-blue-600/10 px-6 py-4 border-b border-blue-500/20 flex items-center gap-3">
+            <div class="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center font-bold text-white shadow-lg">V</div>
+            <div>
+              <h3 class="font-bold text-sm text-blue-400">Vera AI Assistant</h3>
+              <p class="text-[10px] text-slate-500 uppercase font-bold">Underwriting Context Engine</p>
+            </div>
+          </div>
+          <div id="chat-history" class="chat-history p-6 bg-slate-950/20 flex-1">
+            <div class="chat-message ai">
+              Hello! I am Vera. I can help you interpret the macro analysis, identify hidden trends, or explain specific risk factors. Start by uploading a statement batch.
+            </div>
+          </div>
+          <form id="chat-form" class="p-4 bg-slate-900/50 border-t border-slate-800 flex gap-3">
+            <input type="text" id="chat-input" disabled class="flex-grow bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500" placeholder="Ask Vera about this deal...">
+            <button type="submit" id="chat-btn" disabled class="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg text-sm font-bold transition-all">Send</button>
+          </form>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════
+    // STATE
+    // ═══════════════════════════════════════════════════════════════════
+    const state = {
+      baseUrl: window.location.origin,
+      token: localStorage.getItem('bsaDashboardToken') || '',
+      currentStatementId: null
+    };
+
+    // Safe storage for account group objects (avoids XSS from inline JSON)
+    window.__groups = [];
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DOM REFS
+    // ═══════════════════════════════════════════════════════════════════
+    const chatBox = document.getElementById('chat-history');
+    const chatInput = document.getElementById('chat-input');
+    const chatBtn = document.getElementById('chat-btn');
+    const tableBody = document.getElementById('account-table-body');
+    const loginStatus = document.getElementById('login-status');
+    const baseUrlChip = document.getElementById('base-url-chip');
+
+    // Show the base URL chip
+    baseUrlChip.textContent = state.baseUrl;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+    const usd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0);
+
+    const escHtml = (str) => {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    };
+
+    const appendChat = (role, text) => {
+      const el = document.createElement('div');
+      el.className = `chat-message ${role}`;
+      el.textContent = text;
+      chatBox.appendChild(el);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UPDATE UI WITH MACRO DATA
+    // ═══════════════════════════════════════════════════════════════════
+    const updateUI = (macroData) => {
+      const summary = macroData.summary || {};
+      const overall = macroData.overallRisk || {};
+      const groups = macroData.accountGroups || [];
+
+      // KPI cards
+      document.getElementById('val-risk').textContent = overall.averageRiskScore ?? '--';
+      document.getElementById('val-grade').textContent = groups[0]?.veritasGrade || (overall.averageVeritasScore ? `Score: ${overall.averageVeritasScore}` : '--');
+
+      // Net flow: sum of all groups
+      const totalNetFlow = groups.reduce((sum, g) => sum + (g.heliosAnalysis?.financialSummary?.netChange || 0), 0);
+      document.getElementById('val-netflow').textContent = usd(totalNetFlow);
+
+      document.getElementById('val-nsf').textContent = summary.alertSummary?.critical ?? '0';
+      document.getElementById('statement-count').textContent = `${summary.parsedSuccessfully || 0} Statements Parsed`;
+
+      // Store groups safely for the "LOG OBJECT" buttons
+      window.__groups = groups;
+
+      // Render Table
+      if (groups.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-10 text-center text-slate-500 italic">No account groups returned.</td></tr>';
+        return;
+      }
+
+      tableBody.innerHTML = groups.map((g, idx) => `
+        <tr class="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
+          <td class="px-6 py-4 font-bold text-white capitalize">${escHtml(g.bankName || 'Unknown')}</td>
+          <td class="px-6 py-4 font-mono text-xs">${escHtml(g.accountNumber || '--')}</td>
+          <td class="px-6 py-4">${usd(g.closingBalance)}</td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 rounded text-[10px] font-bold ${(g.alertSummary?.critical || 0) > 0 ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">
+              ${g.alertSummary?.critical || 0} CRITICAL ALERTS
+            </span>
+          </td>
+          <td class="px-6 py-4">
+             <button data-idx="${idx}" class="log-group-btn text-blue-400 font-bold text-xs hover:underline">LOG OBJECT</button>
+          </td>
+        </tr>
+      `).join('');
+
+      // Bind the log buttons
+      document.querySelectorAll('.log-group-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = parseInt(btn.dataset.idx, 10);
+          console.log('Account Group:', window.__groups[i]);
+        });
+      });
+
+      // Unlock Chat
+      state.currentStatementId = macroData.id || null;
+      if (state.currentStatementId) {
+        chatInput.disabled = false;
+        chatBtn.disabled = false;
+        chatInput.placeholder = 'Ask Vera about the fraud alerts or net flow...';
+      }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTH
+    // ═══════════════════════════════════════════════════════════════════
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+
+      if (!email || !password) {
+        loginStatus.textContent = 'Please enter email and password.';
+        loginStatus.style.color = 'var(--danger)';
+        return;
+      }
+
+      loginStatus.textContent = 'Authenticating...';
+      loginStatus.style.color = 'var(--muted)';
+
+      try {
+        const res = await fetch(`${state.baseUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const json = await res.json();
+        const token = json?.data?.token || json?.token;
+
+        if (token) {
+          state.token = token;
+          localStorage.setItem('bsaDashboardToken', state.token);
+          document.getElementById('token').value = state.token;
+          loginStatus.textContent = 'Authenticated \u2705';
+          loginStatus.style.color = 'var(--success)';
+        } else {
+          loginStatus.textContent = json?.error || json?.message || 'Login failed';
+          loginStatus.style.color = 'var(--danger)';
+        }
+      } catch (err) {
+        loginStatus.textContent = 'Network error \u2014 is the server running?';
+        loginStatus.style.color = 'var(--danger)';
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UPLOAD
+    // ═══════════════════════════════════════════════════════════════════
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const files = document.getElementById('pdfFiles').files;
+      const spinner = document.getElementById('upload-spinner');
+      const uploadStatus = document.getElementById('upload-status');
+
+      if (!state.token) {
+        uploadStatus.textContent = 'Please authenticate first.';
+        uploadStatus.style.color = 'var(--danger)';
+        return;
+      }
+
+      if (!files.length) {
+        uploadStatus.textContent = 'Select at least one PDF file.';
+        uploadStatus.style.color = 'var(--warning)';
+        return;
+      }
+
+      if (files.length > 20) {
+        uploadStatus.textContent = 'Maximum 20 files allowed.';
+        uploadStatus.style.color = 'var(--danger)';
+        return;
+      }
+
+      spinner.classList.remove('hidden');
+      uploadStatus.textContent = `Processing ${files.length} file(s)... this may take a few minutes.`;
+      uploadStatus.style.color = 'var(--accent)';
+      document.getElementById('submitBtn').disabled = true;
+
+      const formData = new FormData();
+      formData.append('dealId', document.getElementById('dealId').value);
+
+      const isBatch = files.length > 1;
+      if (isBatch) {
+        Array.from(files).forEach(f => formData.append('statements', f));
+      } else {
+        formData.append('statement', files[0]);
+      }
+
+      const endpoint = isBatch ? '/api/statements/batch' : '/api/statements';
+
+      try {
+        const res = await fetch(`${state.baseUrl}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${state.token}` },
+          body: formData
+        });
+        const json = await res.json();
+
+        if (res.ok && json.success) {
+          updateUI(json.data);
+          uploadStatus.textContent = json.message || 'Analysis complete.';
+          uploadStatus.style.color = 'var(--success)';
+        } else {
+          uploadStatus.textContent = json?.error || json?.message || `Upload failed (${res.status})`;
+          uploadStatus.style.color = 'var(--danger)';
+          console.error('Upload response:', json);
+        }
+      } catch (err) {
+        uploadStatus.textContent = 'Network error during upload.';
+        uploadStatus.style.color = 'var(--danger)';
+        console.error(err);
+      } finally {
+        spinner.classList.add('hidden');
+        document.getElementById('submitBtn').disabled = false;
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // VERA AI CHAT
+    // ═══════════════════════════════════════════════════════════════════
+    document.getElementById('chat-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = chatInput.value.trim();
+      if (!msg) return;
+
+      if (!state.currentStatementId) {
+        appendChat('ai', 'Please upload and process a statement first so I have context to work with.');
+        return;
+      }
+
+      appendChat('user', msg);
+      chatInput.value = '';
+      chatInput.disabled = true;
+      chatBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${state.baseUrl}/api/statements/analysis/chat`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${state.token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ message: msg, statementId: state.currentStatementId })
+        });
+        const json = await res.json();
+
+        if (res.ok && json.success) {
+          const answer = json.data?.response || json.data?.answer || 'Vera AI did not return any insights.';
+          appendChat('ai', answer);
+        } else {
+          appendChat('ai', `Error: ${json?.error || json?.message || 'Chat request failed.'}`);
+        }
+      } catch (err) {
+        appendChat('ai', `Connection error: ${err.message}`);
+        console.error(err);
+      } finally {
+        chatInput.disabled = false;
+        chatBtn.disabled = false;
+        chatInput.focus();
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // INIT
+    // ═══════════════════════════════════════════════════════════════════
+    if (state.token) {
+      document.getElementById('token').value = state.token;
+      loginStatus.textContent = 'Token Loaded from Cache \u2705';
+      loginStatus.style.color = 'var(--success)';
+    }
+  </script>
+</body>
+</html>

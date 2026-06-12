@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bank Statement Upload</title>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; }
+        .upload-area { 
+            border: 2px dashed #ccc; 
+            border-radius: 10px; 
+            padding: 30px; 
+            text-align: center; 
+            margin: 20px 0;
+        }
+        button { 
+            background: #007bff; 
+            color: white; 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+        }
+        button:hover { background: #0056b3; }
+        .result { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            border-radius: 5px; 
+            display: none; 
+        }
+    </style>
+</head>
+<body>
+    <h1>Bank Statement Analyzer</h1>
+    <div class="upload-area">
+        <p>Select a CSV or PDF bank statement</p>
+        <input type="file" id="fileInput" accept=".csv,.pdf">
+        <br><br>
+        <button onclick="uploadFile()">Upload & Analyze</button>
+    </div>
+    <div id="result" class="result"></div>
+
+    <script>
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a file');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('statement', file);
+            
+            try {
+                const response = await fetch('http://localhost:3001/api/statements', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                const resultDiv = document.getElementById('result');
+                resultDiv.style.display = 'block';
+                
+                if (data.success && data.data.processed) {
+                    resultDiv.innerHTML = `
+                        <h3>Analysis Complete!</h3>
+                        <p><strong>File:</strong> ${data.data.originalName}</p>
+                        <p><strong>Transactions:</strong> ${data.data.processed.totalTransactions}</p>
+                        <p><strong>Total Credits:</strong> $${data.data.processed.totalCredits.toFixed(2)}</p>
+                        <p><strong>Total Debits:</strong> $${data.data.processed.totalDebits.toFixed(2)}</p>
+                        <p><strong>Balance:</strong> $${data.data.processed.balance.toFixed(2)}</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <h3>Upload Successful!</h3>
+                        <p><strong>File:</strong> ${data.data.originalName}</p>
+                        <p><strong>Size:</strong> ${(data.data.size / 1024).toFixed(2)} KB</p>
+                    `;
+                }
+            } catch (error) {
+                alert('Upload failed: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

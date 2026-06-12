@@ -1,0 +1,13 @@
+# Synthetic regional-bank style text (pdf-parse column-merge scenario).
+# Fictional label removed from header to avoid spurious date/amount matches on acct numbers.
+# Amounts: opening + signed txn sum = ending (11125).
+
+Beginning Balance 10000.00
+
+01/06/2024 POS DEBIT COFFEE SHOP 100.00
+01/07/2024 9900.00 50.00 POS DEBIT GAS STATION
+01/08/2024 DIRECT DEP PAYROLL 1500.00 11350.00
+01/09/2024 ATM WITHDRAWAL DOWNTOWN 200.00 11150.00
+01/10/2024 10150.00 25.00 MAINTENANCE FEE
+
+Ending Balance 11125.00

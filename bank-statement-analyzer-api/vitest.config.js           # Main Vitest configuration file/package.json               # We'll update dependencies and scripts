@@ -1,0 +1,12 @@
+const { defineConfig } = require('vitest/config');
+
+module.exports = defineConfig({
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './tests/utils/setupVitest.js',
+    transform: {
+      '^.+\\.m?js$': 'babel-jest',
+    },
+  },
+});

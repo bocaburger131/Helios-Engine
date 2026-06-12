@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vera — Manual verification</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css"
+  />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --bg-soft: #ffffff;
+      --card: #ffffff;
+      --accent: #2563eb;
+      --muted: #64748b;
+      --text: #0f172a;
+      --border: #e2e8f0;
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+      --vera-bg: #0f1419;
+      --vera-surface: #1a222d;
+      --vera-border: #2d3a4a;
+      --vera-text: #e8eef5;
+      --vera-muted: #8b9cb3;
+      --vera-warning-bg: rgba(245, 158, 11, 0.15);
+      --vera-warning-border: #d97706;
+      --vera-warning-text: #fbbf24;
+      --vera-success-bg: rgba(34, 197, 94, 0.15);
+      --vera-success-border: #22c55e;
+      --vera-success-text: #4ade80;
+      --vera-border-mismatch: #ef4444;
+      --vera-mismatch-bg: rgba(239, 68, 68, 0.08);
+      --vera-primary: #3b82f6;
+      --vera-primary-hover: #2563eb;
+      --vera-radius: 10px;
+      --vera-space: 1rem;
+      --vera-font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--vera-font);
+      background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.09), transparent 55%),
+        radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.08), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+      padding-bottom: 48px;
+    }
+
+    .top-nav {
+      background: #0f172a;
+      color: #f8fafc;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.24);
+    }
+
+    .top-nav-inner {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-name {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .brand-divider {
+      color: #64748b;
+    }
+
+    .brand-subtitle {
+      color: #60a5fa;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .nav-links a {
+      color: #cbd5e1;
+      text-decoration: none;
+      transition: color 160ms ease;
+    }
+
+    .nav-links a:hover,
+    .nav-links a[aria-current="page"] {
+      color: #93c5fd;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px 24px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .page > header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 22px 26px;
+      border-radius: 18px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+    }
+
+    .page > header h1 {
+      margin: 0 0 6px;
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .page > header p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 560px;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 22px 24px;
+      border: 1px solid var(--border);
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+    }
+
+    .card h2 {
+      margin: 0 0 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .diagnostic-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: flex-end;
+    }
+
+    .diagnostic-row label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      min-width: 0;
+      flex: 1 1 200px;
+    }
+
+    .diagnostic-input {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      color: var(--text);
+      background: var(--bg-soft);
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .diagnostic-row .btn-primary {
+      flex: 0 0 auto;
+      align-self: flex-end;
+    }
+
+    .diagnostic-api-row {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .diagnostic-api-row label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      max-width: 420px;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: linear-gradient(135deg, var(--accent), rgba(56, 189, 248, 0.85));
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 10px;
+      color: #0b1120;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(56, 189, 248, 0.2);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(56, 189, 248, 0.3);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .vera-panel .vera-btn-primary {
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.875rem;
+      background: var(--vera-primary);
+      color: #fff;
+      box-shadow: none;
+    }
+
+    .vera-panel .vera-btn-primary:hover:not(:disabled) {
+      background: var(--vera-primary-hover);
+      transform: none;
+    }
+
+    .vera-panel .vera-btn-primary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .vera-banner {
+      padding: 1rem 1.25rem;
+      border-radius: var(--vera-radius);
+      border: 1px solid;
+      margin-bottom: var(--vera-space);
+      font-size: 0.95rem;
+    }
+
+    .vera-banner-warning {
+      background: #fffbeb;
+      border-color: var(--warning);
+      color: #92400e;
+    }
+
+    .vera-banner-success {
+      background: #f0fdf4;
+      border-color: var(--success);
+      color: #166534;
+    }
+
+    .vera-banner[hidden] {
+      display: none;
+    }
+
+    .vera-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--vera-space);
+      min-height: 72vh;
+    }
+
+    @media (max-width: 960px) {
+      .vera-split {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .vera-panel {
+      background: var(--vera-surface);
+      border: 1px solid var(--vera-border);
+      border-radius: var(--vera-radius);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 400px;
+    }
+
+    .vera-panel-header {
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid var(--vera-border);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--vera-muted);
+    }
+
+    .vera-panel-pdf {
+      position: relative;
+      min-height: 520px;
+    }
+
+    .pdf-viewer-container {
+      flex: 1;
+      overflow-y: auto;
+      height: 100%;
+      min-height: 520px;
+      max-height: calc(72vh - 2.5rem);
+      background: #111;
+      position: relative;
+      padding: 0.75rem;
+    }
+
+    .vera-pdf-loading {
+      position: absolute;
+      inset: 2.5rem 0 0 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      background: rgba(15, 20, 25, 0.85);
+      z-index: 5;
+      color: var(--vera-muted);
+      font-size: 0.875rem;
+    }
+
+    .vera-pdf-loading[hidden] {
+      display: none;
+    }
+
+    .vera-pdf-loading .vera-spinner {
+      width: 2rem;
+      height: 2rem;
+      display: block;
+    }
+
+    .vera-pdf-page-wrap {
+      position: relative;
+      margin: 0 auto 12px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+    }
+
+    .vera-pdf-page-wrap canvas {
+      display: block;
+      vertical-align: top;
+    }
+
+    .textLayer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      overflow: hidden;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .textLayer span {
+      color: transparent;
+      position: absolute;
+      white-space: pre;
+      transform-origin: 0 0;
+    }
+
+    .textLayer span.vera-anchor-highlight {
+      background: rgba(251, 191, 36, 0.55);
+      color: transparent;
+      border-radius: 2px;
+      box-shadow: 0 0 0 1px var(--vera-warning-border);
+    }
+
+    .vera-pdf-error {
+      padding: 1rem;
+      color: var(--vera-border-mismatch);
+      font-size: 0.875rem;
+    }
+
+    .vera-pdf-anchor-badge {
+      font-weight: normal;
+      color: var(--vera-warning-text);
+      margin-left: 0.35rem;
+    }
+
+    .vera-form {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .vera-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .vera-field label {
+      font-size: 0.8rem;
+      color: var(--vera-muted);
+    }
+
+    .vera-field input {
+      padding: 0.55rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--vera-border);
+      background: var(--vera-bg);
+      color: var(--vera-text);
+      font-size: 1rem;
+    }
+
+    .vera-field.mismatch input {
+      border-color: var(--vera-border-mismatch);
+      background: var(--vera-mismatch-bg);
+    }
+
+    .vera-checksum {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--vera-muted);
+    }
+
+    .vera-checksum.ok {
+      color: var(--vera-success-text);
+    }
+
+    .vera-checksum .icon {
+      font-weight: bold;
+    }
+
+    .vera-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .vera-spinner {
+      width: 1.1rem;
+      height: 1.1rem;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: vera-spin 0.7s linear infinite;
+      display: none;
+    }
+
+    .vera-spinner.visible {
+      display: inline-block;
+    }
+
+    @keyframes vera-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .vera-neutral {
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: var(--vera-radius);
+      background: var(--card);
+    }
+
+    .vera-toast-host {
+      position: fixed;
+      bottom: 1.25rem;
+      right: 1.25rem;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-width: min(420px, calc(100vw - 2rem));
+    }
+
+    .vera-toast {
+      padding: 0.85rem 1.1rem;
+      border-radius: var(--vera-radius);
+      background: var(--vera-surface);
+      border: 1px solid var(--vera-success-border);
+      color: var(--vera-text);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      font-size: 0.9rem;
+    }
+
+    .vera-toast.error {
+      border-color: var(--vera-border-mismatch);
+    }
+
+    .vera-hint {
+      font-size: 0.8rem;
+      color: var(--vera-muted);
+      margin-top: 0.25rem;
+    }
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="brand">
+        <span class="brand-name">Shift 4 Funding</span>
+        <span class="brand-divider">|</span>
+        <span class="brand-subtitle">Helios · Vera</span>
+      </div>
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/manual-upload.html">Upload Hub</a>
+        <a href="/manual-results.html">Results Dashboard</a>
+        <a href="/manual-vera.html" aria-current="page">Vera Verify</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="page">
+    <header>
+      <div>
+        <h1>Manual verification (Vera)</h1>
+        <p>
+          Review statements in NEEDS_HUMAN_VERIFICATION. Load with your statement ID and bearer token from the Helios dashboard.
+        </p>
+              </div>
+    </header>
+
+    <article class="card">
+      <h2>Diagnostic &amp; Load Controls</h2>
+      <div class="diagnostic-row">
+        <label for="veraStatementId">
+          Statement ID
+          <input
+            type="text"
+            id="veraStatementId"
+            class="diagnostic-input"
+            placeholder="MongoDB statement id"
+            autocomplete="off"
+          />
+        </label>
+        <label for="veraJwtOverride">
+          JWT token override
+          <input
+            type="password"
+            id="veraJwtOverride"
+            class="diagnostic-input"
+            placeholder="Paste bearer token or use dashboard cache"
+            autocomplete="off"
+          />
+        </label>
+        <button type="button" class="btn-primary" id="veraLoadBtn">Load Statement</button>
+              </div>
+      <div class="diagnostic-api-row">
+        <label for="veraApiBase">
+          API base (optional)
+          <input
+            type="text"
+            id="veraApiBase"
+            class="diagnostic-input"
+            placeholder="Defaults to this origin"
+            autocomplete="off"
+          />
+        </label>
+              </div>
+    </article>
+
+    <div id="veraBannerWarning" class="vera-banner vera-banner-warning" hidden></div>
+    <div id="veraBannerSuccess" class="vera-banner vera-banner-success" hidden></div>
+
+    <div id="veraNeutral" class="vera-neutral" hidden></div>
+
+    <div id="veraWorkflow" hidden>
+      <div class="vera-split">
+        <div class="vera-panel vera-panel-pdf">
+          <div class="vera-panel-header">
+            PDF
+            <span id="pdfAnchorStatus" class="vera-pdf-anchor-badge" hidden></span>
+          </div>
+          <div id="veraPdfLoading" class="vera-pdf-loading" hidden>
+            <span class="vera-spinner visible" aria-hidden="true"></span>
+            <span id="veraPdfLoadingText">Loading PDF…</span>
+            </div>
+          <div id="pdf-viewer-container" class="pdf-viewer-container"></div>
+          </div>
+        <div class="vera-panel">
+          <div class="vera-panel-header">Extracted totals (edit to match PDF)</div>
+          <div class="vera-form">
+            <div class="vera-field" id="field-opening">
+              <label for="inpOpening">Opening balance</label>
+              <input id="inpOpening" inputmode="decimal" autocomplete="off" />
+              </div>
+            <div class="vera-field" id="field-closing">
+              <label for="inpClosing">Closing balance</label>
+              <input id="inpClosing" inputmode="decimal" autocomplete="off" />
+            </div>
+            <div class="vera-field" id="field-deposits">
+              <label for="inpDeposits">Total deposits</label>
+              <input id="inpDeposits" inputmode="decimal" autocomplete="off" />
+              </div>
+            <div class="vera-field" id="field-withdrawals">
+              <label for="inpWithdrawals">Total withdrawals</label>
+              <input id="inpWithdrawals" inputmode="decimal" autocomplete="off" />
+            </div>
+            <div class="vera-checksum" id="veraChecksumRow">
+              <span class="icon" id="veraChecksumIcon"></span>
+              <span id="veraChecksumText">Enter amounts to check (opening + deposits) − withdrawals = closing (±$0.01).</span>
+          </div>
+            <div class="vera-actions">
+              <button type="button" class="vera-btn-primary" id="veraConfirmBtn">Confirm &amp; Activate Template</button>
+              <span class="vera-spinner" id="veraSpinner" aria-hidden="true"></span>
+        </div>
+            <p class="vera-hint" id="veraMismatchHint" hidden></p>
+      </div>
+        </div>
+        </div>
+          </div>
+  </main>
+
+  <div class="vera-toast-host" id="veraToastHost" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      const JWT_KEY = 'veraJwt';
+      const TOLERANCE = 0.01;
+      const PDF_JS_VERSION = '3.11.174';
+
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' +
+          PDF_JS_VERSION +
+          '/pdf.worker.min.js';
+      }
+
+      const DASH_TOKEN_KEY = 'bsaDashboardToken';
+
+      const els = {
+        statementId: document.getElementById('veraStatementId'),
+        apiBase: document.getElementById('veraApiBase'),
+        jwtOverride: document.getElementById('veraJwtOverride'),
+        loadBtn: document.getElementById('veraLoadBtn'),
+        bannerWarning: document.getElementById('veraBannerWarning'),
+        bannerSuccess: document.getElementById('veraBannerSuccess'),
+        neutral: document.getElementById('veraNeutral'),
+        workflow: document.getElementById('veraWorkflow'),
+        pdfViewerContainer: document.getElementById('pdf-viewer-container'),
+        pdfViewerLoading: document.getElementById('veraPdfLoading'),
+        pdfLoadingText: document.getElementById('veraPdfLoadingText'),
+        pdfAnchorStatus: document.getElementById('pdfAnchorStatus'),
+        inpOpening: document.getElementById('inpOpening'),
+        inpClosing: document.getElementById('inpClosing'),
+        inpDeposits: document.getElementById('inpDeposits'),
+        inpWithdrawals: document.getElementById('inpWithdrawals'),
+        checksumRow: document.getElementById('veraChecksumRow'),
+        checksumIcon: document.getElementById('veraChecksumIcon'),
+        checksumText: document.getElementById('veraChecksumText'),
+        confirmBtn: document.getElementById('veraConfirmBtn'),
+        spinner: document.getElementById('veraSpinner'),
+        mismatchHint: document.getElementById('veraMismatchHint'),
+        fields: {
+          opening: document.getElementById('field-opening'),
+          closing: document.getElementById('field-closing'),
+          deposits: document.getElementById('field-deposits'),
+          withdrawals: document.getElementById('field-withdrawals')
+        },
+        toastHost: document.getElementById('veraToastHost')
+      };
+
+      let currentStatementId = '';
+      let lastVeraPayload = null;
+      let pdfRenderGeneration = 0;
+
+      function logVera(action, extra) {
+        const payload = { action, statementId: currentStatementId || undefined, ...extra };
+        console.log('[VERA_UI]', JSON.stringify(payload));
+      }
+
+      function getQueryParam(name) {
+        const u = new URL(window.location.href);
+        return u.searchParams.get(name);
+      }
+
+      function apiBaseUrl() {
+        const raw = (els.apiBase.value || '').trim() || getQueryParam('apiBase') || '';
+        if (raw) return raw.replace(/\/$/, '');
+        return window.location.origin.replace(/\/$/, '');
+      }
+
+      function getJwt() {
+        const fromField = (els.jwtOverride && els.jwtOverride.value ? els.jwtOverride.value : '').trim();
+        if (fromField) return fromField;
+        const dash = localStorage.getItem(DASH_TOKEN_KEY);
+        if (dash && String(dash).trim()) return String(dash).trim();
+        return (sessionStorage.getItem(JWT_KEY) || '').trim();
+      }
+
+      function parseMoney(val) {
+        if (val == null) return NaN;
+        const s = String(val).replace(/[$,\s]/g, '').trim();
+        if (s === '') return NaN;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : NaN;
+      }
+
+      function setMismatchHighlight(reconciliationDetails) {
+        const keys = ['opening', 'closing', 'deposits', 'withdrawals'];
+        const hasRecon = reconciliationDetails && typeof reconciliationDetails === 'object';
+        const anyPresent = hasRecon && keys.some((x) => reconciliationDetails[x] != null);
+        ['opening', 'closing', 'deposits', 'withdrawals'].forEach((k) => {
+          const wrap = els.fields[k];
+          if (!wrap) return;
+          if (anyPresent) wrap.classList.add('mismatch');
+          else wrap.classList.remove('mismatch');
+        });
+      }
+
+      function updateChecksum() {
+        const o = parseMoney(els.inpOpening.value);
+        const c = parseMoney(els.inpClosing.value);
+        const d = parseMoney(els.inpDeposits.value);
+        const w = parseMoney(els.inpWithdrawals.value);
+        const allNum = [o, c, d, w].every((n) => Number.isFinite(n));
+        if (!allNum) {
+          els.checksumRow.classList.remove('ok');
+          els.checksumIcon.textContent = '';
+          els.checksumText.textContent =
+            'Enter amounts to check (opening + deposits) − withdrawals = closing (±$0.01).';
+        return;
+      }
+        const lhs = o + d - w;
+        const diff = Math.abs(lhs - c);
+        const ok = diff <= TOLERANCE;
+        els.checksumRow.classList.toggle('ok', ok);
+        els.checksumIcon.textContent = ok ? '✓' : '';
+        els.checksumText.textContent = ok
+          ? 'Checksum balances within $0.01.'
+          : `Difference vs closing: $${diff.toFixed(2)} (tolerance $${TOLERANCE.toFixed(2)}).`;
+      }
+
+      function showToast(message, isError) {
+        const t = document.createElement('div');
+        t.className = 'vera-toast' + (isError ? ' error' : '');
+        t.textContent = message;
+        els.toastHost.appendChild(t);
+        setTimeout(() => {
+          t.remove();
+        }, 6000);
+      }
+
+      function setBanners({ mode, mismatchDetails }) {
+        els.bannerWarning.hidden = true;
+        els.bannerSuccess.hidden = true;
+        els.bannerWarning.textContent = '';
+        els.bannerSuccess.textContent = '';
+        if (!mode) return;
+        if (mode === 'warning') {
+          els.bannerWarning.hidden = false;
+          els.bannerWarning.textContent =
+            '⚠️ Verification Required: The AI layout for this institution has not been verified. Please confirm the extracted totals match the PDF.' +
+            (mismatchDetails ? ' ' + mismatchDetails : '');
+        } else if (mode === 'success') {
+          els.bannerSuccess.hidden = false;
+          els.bannerSuccess.textContent = '✅ Manually Verified by Underwriter.';
+        }
+      }
+
+      function normalizeAnchorText(text) {
+        return String(text || '')
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      function pageTextContains(pageText, searchNorm) {
+        if (!searchNorm) return false;
+        const pageNorm = normalizeAnchorText(pageText);
+        if (pageNorm.includes(searchNorm)) return true;
+        const compactPage = pageNorm.replace(/\s/g, '');
+        const compactNeedle = searchNorm.replace(/\s/g, '');
+        return compactNeedle.length > 2 && compactPage.includes(compactNeedle);
+      }
+
+      function showPdfLoading(show, message) {
+        if (!els.pdfViewerLoading) return;
+        els.pdfViewerLoading.hidden = !show;
+        if (els.pdfLoadingText && message) {
+          els.pdfLoadingText.textContent = message;
+        } else if (els.pdfLoadingText && show) {
+          els.pdfLoadingText.textContent = 'Loading PDF…';
+        }
+      }
+
+      function clearPdfViewerDom() {
+        if (els.pdfViewerContainer) els.pdfViewerContainer.innerHTML = '';
+        if (els.pdfAnchorStatus) {
+          els.pdfAnchorStatus.hidden = true;
+          els.pdfAnchorStatus.textContent = '';
+        }
+      }
+
+      function cancelPdfRender() {
+        pdfRenderGeneration += 1;
+      }
+
+      function renderManualTextLayer(container, textContent, viewport) {
+        const items = textContent.items || [];
+        const styles = textContent.styles || {};
+        for (const item of items) {
+          if (!item.str) continue;
+          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+          const angle = Math.atan2(tx[1], tx[0]);
+          const fontHeight = Math.hypot(tx[2], tx[3]);
+          const fontAscent = fontHeight;
+          let left = tx[4];
+          let top = tx[5] - fontAscent;
+          if (angle !== 0) {
+            left += fontHeight * Math.sin(angle);
+            top -= fontHeight * Math.cos(angle);
+          }
+          const span = document.createElement('span');
+          span.textContent = item.str;
+          span.style.left = left + 'px';
+          span.style.top = top + 'px';
+          span.style.fontSize = fontHeight + 'px';
+          const style = styles[item.fontName];
+          if (style && style.fontFamily) {
+            span.style.fontFamily = style.fontFamily;
+          }
+          if (angle !== 0) {
+            span.style.transform = 'rotate(' + angle + 'rad)';
+          }
+          container.appendChild(span);
+        }
+      }
+
+      function findAndHighlightAnchor(textLayerDiv, searchNorm) {
+        const spans = Array.from(textLayerDiv.querySelectorAll('span'));
+        let acc = '';
+        const parts = [];
+        for (const span of spans) {
+          const t = (span.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!t) continue;
+          const start = acc.length ? acc.length + 1 : 0;
+          acc += (acc ? ' ' : '') + t;
+          parts.push({ span, start, end: acc.length });
+        }
+        const accNorm = normalizeAnchorText(acc);
+        let idx = accNorm.indexOf(searchNorm);
+        if (idx < 0) {
+          const compactAcc = accNorm.replace(/\s/g, '');
+          const compactNeedle = searchNorm.replace(/\s/g, '');
+          if (compactNeedle.length > 2 && compactAcc.includes(compactNeedle)) {
+            idx = 0;
+          } else {
+            return null;
+          }
+        }
+        const endIdx = idx + searchNorm.length;
+        let first = null;
+        for (const p of parts) {
+          if (p.end > idx && p.start < endIdx) {
+            p.span.classList.add('vera-anchor-highlight');
+            if (!first) first = p.span;
+          }
+        }
+        if (!first && parts.length) {
+          parts[0].span.classList.add('vera-anchor-highlight');
+          first = parts[0].span;
+        }
+        return first;
+      }
+
+      async function renderPdfWithSearch(pdfUrl, searchAnchor) {
+        if (typeof pdfjsLib === 'undefined') {
+          logVera('pdf_render_error', { error: 'pdfjsLib not loaded' });
+          if (els.pdfViewerContainer) {
+            els.pdfViewerContainer.innerHTML =
+              '<p class="vera-pdf-error">PDF.js failed to load from CDN.</p>';
+          }
+          showPdfLoading(false);
+          return;
+        }
+
+        const gen = ++pdfRenderGeneration;
+        const searchNorm = normalizeAnchorText(searchAnchor);
+        showPdfLoading(true, searchNorm ? 'Searching for transaction table…' : 'Loading PDF…');
+        clearPdfViewerDom();
+
+        logVera('pdf_render_start', { hasAnchor: !!searchNorm, anchor: searchAnchor || undefined });
+
+        try {
+          const pdf = await pdfjsLib.getDocument({ url: pdfUrl }).promise;
+          if (gen !== pdfRenderGeneration) return;
+
+          const container = els.pdfViewerContainer;
+          const scale = 1.25;
+          let anchorFound = false;
+          let scrollTarget = null;
+
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            if (gen !== pdfRenderGeneration) return;
+
+            const viewport = page.getViewport({ scale });
+            const outputScale = window.devicePixelRatio || 1;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'vera-pdf-page-wrap';
+            wrap.dataset.pageNumber = String(pageNum);
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            canvas.style.width = Math.floor(viewport.width) + 'px';
+            canvas.style.height = Math.floor(viewport.height) + 'px';
+
+            const textLayerDiv = document.createElement('div');
+            textLayerDiv.className = 'textLayer';
+            textLayerDiv.style.width = Math.floor(viewport.width) + 'px';
+            textLayerDiv.style.height = Math.floor(viewport.height) + 'px';
+
+            wrap.appendChild(canvas);
+            wrap.appendChild(textLayerDiv);
+            container.appendChild(wrap);
+
+            await page.render({
+              canvasContext: ctx,
+              viewport,
+              transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null
+            }).promise;
+
+            const textContent = await page.getTextContent();
+            renderManualTextLayer(textLayerDiv, textContent, viewport);
+
+            if (!anchorFound && searchNorm) {
+              const pageJoin = textContent.items.map((i) => i.str || '').join(' ');
+              if (pageTextContains(pageJoin, searchNorm)) {
+                const hit = findAndHighlightAnchor(textLayerDiv, searchNorm);
+                if (hit) {
+                  anchorFound = true;
+                  scrollTarget = hit;
+                  logVera('pdf_anchor_found', { page: pageNum, anchor: searchAnchor });
+                }
+              }
+            }
+
+            if (typeof page.cleanup === 'function') page.cleanup();
+          }
+
+          if (gen !== pdfRenderGeneration) return;
+
+          if (els.pdfAnchorStatus) {
+            if (anchorFound) {
+              els.pdfAnchorStatus.hidden = false;
+              els.pdfAnchorStatus.textContent = '— scrolled to: ' + searchAnchor;
+            } else if (searchNorm) {
+              els.pdfAnchorStatus.hidden = false;
+              els.pdfAnchorStatus.textContent = '— anchor not found; showing page 1';
+            }
+          }
+
+          if (scrollTarget) {
+            requestAnimationFrame(() => {
+              scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+          }
+
+          logVera('pdf_render_complete', { anchorFound, pages: pdf.numPages });
+            } catch (e) {
+          if (gen !== pdfRenderGeneration) return;
+          logVera('pdf_render_error', { error: e.message });
+          if (els.pdfViewerContainer) {
+            els.pdfViewerContainer.innerHTML =
+              '<p class="vera-pdf-error">Failed to load PDF. ' +
+              (e.message || 'Unknown error') +
+              '</p>';
+          }
+        } finally {
+          if (gen === pdfRenderGeneration) {
+            showPdfLoading(false);
+          }
+        }
+      }
+
+      function hideWorkflow() {
+        els.workflow.hidden = true;
+        cancelPdfRender(); clearPdfViewerDom();
+        showPdfLoading(false);
+      }
+
+      function showNeutral(text) {
+        hideWorkflow();
+        els.neutral.hidden = false;
+        els.neutral.textContent = text;
+      }
+
+      async function fetchStatement(id) {
+        const base = apiBaseUrl();
+        const token = getJwt();
+        if (!token) {
+          showNeutral(
+            'Enter a JWT in the override field above, or sign in on Manual Upload so the dashboard token is cached (`bsaDashboardToken`).'
+          );
+          logVera('fetch_statement_skipped', { reason: 'missing_jwt' });
+          return null;
+        }
+        logVera('fetch_statement_start', { apiBase: base });
+        const res = await fetch(`${base}/api/statements/${encodeURIComponent(id)}`, {
+          headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          logVera('fetch_statement_error', { status: res.status, error: json.error || res.statusText });
+          showToast(json.error || 'Failed to load statement', true);
+          showNeutral(json.error || 'Failed to load statement.');
+          return null;
+        }
+        logVera('fetch_statement_success', { status: res.status });
+        return json.data;
+      }
+
+      function applyVeraData(data) {
+        const st = data.statement;
+        const vera = data.vera;
+        lastVeraPayload = vera;
+        const status = String(st.status || '').toUpperCase();
+
+        els.neutral.hidden = true;
+
+        if (status === 'NEEDS_HUMAN_VERIFICATION' && (!vera || !vera.pdfUrl)) {
+          setBanners({ mode: 'warning', mismatchDetails: vera && vera.mismatchDetails });
+          hideWorkflow();
+          els.neutral.hidden = false;
+          els.neutral.textContent =
+            'This statement needs verification but the Vera PDF link is unavailable. Ensure you are authenticated and own this statement.';
+          logVera('vera_context_missing', { hasVera: !!vera });
+        return;
+      }
+
+        if (status === 'NEEDS_HUMAN_VERIFICATION' && vera && vera.pdfUrl) {
+          setBanners({ mode: 'warning', mismatchDetails: vera.mismatchDetails });
+          els.workflow.hidden = false;
+          void renderPdfWithSearch(vera.pdfUrl, (vera.headerAnchors && vera.headerAnchors.tableStart) || '');
+
+          const ex = vera.extractedData || {};
+          const slice = ex.summarySlice || {};
+          const opening = typeof ex.openingBalance === 'number' ? ex.openingBalance : ex.balances?.opening;
+          const closing = typeof ex.closingBalance === 'number' ? ex.closingBalance : ex.balances?.closing;
+
+          els.inpOpening.value = opening != null && Number.isFinite(Number(opening)) ? String(opening) : '';
+          els.inpClosing.value = closing != null && Number.isFinite(Number(closing)) ? String(closing) : '';
+          const dep = slice.totalDeposits;
+          const wit = slice.totalWithdrawals;
+          els.inpDeposits.value = dep != null && Number.isFinite(Number(dep)) ? String(dep) : '';
+          els.inpWithdrawals.value = wit != null && Number.isFinite(Number(wit)) ? String(wit) : '';
+
+          setMismatchHighlight(vera.reconciliationDetails);
+          if (vera.mismatchDetails) {
+            els.mismatchHint.hidden = false;
+            els.mismatchHint.textContent = 'Checksum note: ' + vera.mismatchDetails;
+      } else {
+            els.mismatchHint.hidden = true;
+            els.mismatchHint.textContent = '';
+          }
+
+          els.confirmBtn.disabled = false;
+          updateChecksum();
+        return;
+      }
+
+        hideWorkflow();
+        if (status === 'COMPLETED' && st.veraVerification && st.veraVerification.veraVerifiedAt) {
+          setBanners({ mode: 'success' });
+          showNeutral('This statement is completed and was manually verified. No further action required.');
+        } else {
+          setBanners({ mode: null });
+          showNeutral(
+            'This statement is not awaiting human verification (status: ' +
+              (st.status || 'unknown') +
+              '). Open this page with a statement in NEEDS_HUMAN_VERIFICATION status.'
+          );
+        }
+      }
+
+      async function loadStatement() {
+        const id = (els.statementId.value || '').trim();
+        currentStatementId = id;
+        if (!id) {
+          showToast('Enter a statement ID', true);
+          logVera('load_skipped', { reason: 'missing_id' });
+        return;
+      }
+        const data = await fetchStatement(id);
+        if (!data) return;
+        applyVeraData(data);
+      }
+
+      async function submitVerify() {
+        const id = currentStatementId || (els.statementId.value || '').trim();
+        if (!id) {
+          showToast('Missing statement ID', true);
+        return;
+      }
+        const token = getJwt();
+        if (!token) {
+          showToast('Enter a JWT in the override field or use a cached dashboard token.', true);
+        return;
+      }
+        const openingBalance = parseMoney(els.inpOpening.value);
+        const closingBalance = parseMoney(els.inpClosing.value);
+        const totalDeposits = parseMoney(els.inpDeposits.value);
+        const totalWithdrawals = parseMoney(els.inpWithdrawals.value);
+        if (![openingBalance, closingBalance, totalDeposits, totalWithdrawals].every((n) => Number.isFinite(n))) {
+          showToast('All four totals must be valid numbers.', true);
+          logVera('verify_skipped', { reason: 'invalid_numbers' });
+        return;
+      }
+      
+        const base = apiBaseUrl();
+        els.confirmBtn.disabled = true;
+        els.spinner.classList.add('visible');
+        logVera('verify_submit', { apiBase: base });
+
+        try {
+          const res = await fetch(`${base}/api/statements/${encodeURIComponent(id)}/verify`, {
+          method: 'PATCH',
+          headers: {
+              Authorization: 'Bearer ' + token,
+              'Content-Type': 'application/json',
+              Accept: 'application/json'
+          },
+          body: JSON.stringify({
+              openingBalance,
+              closingBalance,
+              totalDeposits,
+              totalWithdrawals,
+              manuallyVerified: true
+          })
+        });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            logVera('verify_error', { status: res.status, error: json.error || res.statusText });
+            showToast(json.error || 'Verification failed', true);
+            els.confirmBtn.disabled = false;
+        return;
+      }
+          logVera('verify_success', { status: res.status });
+          showToast('Template Verified. Institution is now active for automated parsing.', false);
+
+          logVera('refresh_after_verify_start', {});
+          const refreshed = await fetchStatement(id);
+          if (refreshed) {
+            applyVeraData(refreshed);
+            logVera('refresh_after_verify_success', {});
+          }
+        } catch (e) {
+          logVera('verify_error', { error: e.message });
+          showToast(e.message || 'Network error', true);
+          els.confirmBtn.disabled = false;
+        } finally {
+          els.spinner.classList.remove('visible');
+        }
+      }
+
+      els.loadBtn.addEventListener('click', loadStatement);
+      els.confirmBtn.addEventListener('click', submitVerify);
+
+      ['inpOpening', 'inpClosing', 'inpDeposits', 'inpWithdrawals'].forEach((id) => {
+        document.getElementById(id).addEventListener('input', updateChecksum);
+      });
+
+      (function init() {
+        const qId = getQueryParam('id');
+        if (qId) els.statementId.value = qId;
+        const qApi = getQueryParam('apiBase');
+        if (qApi) els.apiBase.value = qApi;
+        const cachedDash = localStorage.getItem(DASH_TOKEN_KEY) || '';
+        const cachedSession = sessionStorage.getItem(JWT_KEY) || '';
+        if (els.jwtOverride) {
+          els.jwtOverride.value = (cachedDash || cachedSession).trim();
+        }
+        logVera('page_load', { hasQueryId: !!qId, hasDashboardToken: !!cachedDash });
+        els.neutral.hidden = false;
+        els.neutral.textContent =
+          'Enter a statement ID (or open with ?id=…), confirm JWT token override is set (auto-filled from dashboard when available), then click Load Statement.';
+      })();
+    })();
+  </script>
+</body>
+</html>

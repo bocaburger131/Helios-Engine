@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Results Dashboard — Helios Engine</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/helios-sidebar.css" />
+  <link rel="stylesheet" href="./css/helios-report.css" />
+  <style>
+    .results-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 24px 0;
+      flex-wrap: wrap;
+    }
+    .results-toolbar h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      color: #0f172a;
+    }
+    .results-toolbar p {
+      margin: 4px 0 0;
+      color: #64748b;
+      font-size: 0.9rem;
+    }
+    .helios-batch-status {
+      padding: 0 24px 12px;
+      font-size: 0.88rem;
+      color: #2563eb;
+    }
+    .helios-batch-status.is-error { color: #dc2626; }
+    #batch-picker {
+      padding: 0 24px 32px;
+      max-width: 720px;
+    }
+    .helios-batch-list { display: flex; flex-direction: column; gap: 8px; }
+    .helios-batch-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .helios-batch-row:hover {
+      border-color: #93c5fd;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+    }
+    .helios-analysis-list { display: flex; flex-direction: column; gap: 10px; }
+    .helios-analysis-row {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+    }
+    .helios-analysis-row-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-decoration: none;
+      color: inherit;
+      min-width: 0;
+    }
+    .helios-analysis-row-main:hover .helios-analysis-title { color: #2563eb; }
+    .helios-analysis-title { font-weight: 800; font-size: 1.05rem; color: #0f172a; }
+    .helios-analysis-months { font-size: 0.88rem; color: #334155; font-weight: 600; }
+    .helios-analysis-meta { font-size: 0.8rem; color: #64748b; }
+    .helios-analysis-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .helios-btn-sm { padding: 6px 10px; font-size: 0.75rem; }
+    .helios-btn-danger { color: #b91c1c; border-color: #fecaca; }
+    .helios-btn-danger:hover { background: #fef2f2; }
+    .helios-list-loading, .helios-list-empty, .helios-list-error {
+      color: #64748b;
+      padding: 24px 0;
+    }
+    .helios-list-error { color: #dc2626; }
+    body.helios-app .helios-report { min-height: auto; }
+    .helios-main-compact { padding: 0 24px 100px; }
+  </style>
+</head>
+<body class="helios-app helios-report">
+  <aside class="helios-sidebar" aria-label="Main navigation">
+    <button type="button" id="helios-sidebar-toggle" class="helios-sidebar-toggle" aria-expanded="true" aria-label="Collapse sidebar">‹</button>
+    <div class="helios-sidebar-brand">
+      <span class="helios-sidebar-brand-badge" aria-hidden="true">S4</span>
+      <div class="helios-sidebar-brand-text">
+        <div class="helios-sidebar-brand-title">Shift 4 Funding</div>
+        <div class="helios-sidebar-brand-sub">Helios Engine</div>
+      </div>
+    </div>
+    <nav class="helios-sidebar-nav">
+      <a href="./manual-upload.html"><span class="helios-nav-icon" aria-hidden="true">↑</span><span class="helios-nav-label">Upload Hub</span></a>
+      <a href="./manual-results.html" aria-current="page"><span class="helios-nav-icon" aria-hidden="true">◉</span><span class="helios-nav-label">Results</span></a>
+      <a href="./helios-report.html?mock=1"><span class="helios-nav-icon" aria-hidden="true">📊</span><span class="helios-nav-label">Sample Report</span></a>
+      <a href="./login.html"><span class="helios-nav-icon" aria-hidden="true">⎋</span><span class="helios-nav-label">Sign out</span></a>
+    </nav>
+    <footer class="helios-sidebar-footer">
+      <p class="helios-auth-status is-ok" id="sidebar-user-status">Signed in</p>
+    </footer>
+  </aside>
+
+  <div class="helios-main-panel">
+    <div class="results-toolbar">
+      <div>
+        <h1>Results Dashboard</h1>
+        <p>Deal context, Veritas score, L3M KPIs, and Vera briefing</p>
+      </div>
+      <a class="helios-btn helios-btn-ghost" href="./manual-upload.html">New upload</a>
+    </div>
+    <p id="helios-batch-status" class="helios-batch-status" hidden role="status"></p>
+    <div id="batch-picker" hidden></div>
+    <div id="helios-report-root" data-compact="true" data-manual-init hidden></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="./js/helios-auth.js"></script>
+  <script src="./js/helios-sidebar.js"></script>
+  <script src="./js/helios-api.js"></script>
+  <script src="./js/helios-results-bootstrap.js"></script>
+  <script src="./js/analysis-json-modal.js"></script>
+  <script src="./js/results-batch-list.js"></script>
+  <script src="./js/results-dashboard.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      if (!HeliosAuth.requireAuth('./manual-results.html')) return;
+
+      document.querySelector('.helios-sidebar-nav a[href="./login.html"]')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        HeliosAuth.logout();
+      });
+
+      const params = new URLSearchParams(location.search);
+      let statementId = params.get('id');
+      const batchPicker = document.getElementById('batch-picker');
+      const reportRoot = document.getElementById('helios-report-root');
+      const statusEl = document.getElementById('helios-batch-status');
+
+      if (window.HeliosResultsBootstrap) {
+        try {
+          const prep = await HeliosResultsBootstrap.prepare();
+          statementId =
+            statementId ||
+            prep?.statementId ||
+            prep?.json?.data?.id ||
+            prep?.json?.data?._id ||
+            new URLSearchParams(location.search).get('id');
+        } catch (err) {
+          if (statusEl) {
+            statusEl.hidden = false;
+            statusEl.textContent = err.message || 'Batch preparation failed';
+            statusEl.classList.add('is-error');
+          }
+        }
+      }
+
+      if (statementId) {
+        batchPicker.hidden = true;
+        reportRoot.hidden = false;
+        new HeliosReportDashboard(reportRoot).load();
+      } else {
+        reportRoot.hidden = true;
+        batchPicker.hidden = false;
+        HeliosBatchList.loadBatchList(batchPicker);
+      }
+    });
+  </script>
+</body>
+</html>

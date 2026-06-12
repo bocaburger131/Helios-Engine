@@ -1,0 +1,173 @@
+import { vi } from 'vitest';
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import mongoose from 'mongoose';
+import { EventEmitter } from 'events';
+import Redis from 'ioredis';
+
+let mongoServer;
+
+// MongoDB Memory Server Setup
+beforeAll(async () => {
+  mongoServer = await MongoMemoryServer.create();
+  const mongoUri = mongoServer.getUri();
+  
+  await mongoose.connect(mongoUri, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+  });
+});
+
+// Clear all collections before each test
+beforeEach(async () => {
+  const collections = mongoose.connection.collections;
+  
+  for (const key in collections) {
+    const collection = collections[key];
+    await collection.deleteMany();
+  }
+  
+  // Reset all mocks
+  vi.clearAllMocks();
+  
+  // Reset Redis mock data
+  mockRedisClient.data.clear();
+});
+
+// Disconnect and cleanup after tests
+afterAll(async () => {
+  if (mongoServer) {
+    await mongoose.connection.close();
+    await mongoServer.stop();
+  }
+});
+
+// --- Global Mocks ---
+
+// Mock Redis client
+class MockRedisClient extends EventEmitter {
+  constructor() {
+    super();
+    this.data = new Map();
+    this.connected = true;
+  }
+
+  async get(key) {
+    return this.data.get(key) || null;
+  }
+
+  async set(key, value, mode, duration) {
+    this.data.set(key, value);
+    return 'OK';
+  }
+
+  async del(key) {
+    this.data.delete(key);
+    return 1;
+  }
+
+  async quit() {
+    this.connected = false;
+    return 'OK';
+  }
+}
+
+const mockRedisClient = new MockRedisClient();
+vi.mock('ioredis', () => {
+  return {
+    default: vi.fn(() => mockRedisClient)
+  };
+});
+
+// Create a mock model factory
+const createMockModel = (modelName) => {
+  const MockModel = vi.fn().mockImplementation((data) => {
+    return {
+      ...data,
+      save: vi.fn().mockResolvedValue(data),
+      toObject: vi.fn().mockReturnValue(data)
+    };
+  });
+
+  // Static methods
+  MockModel.find = vi.fn().mockResolvedValue([]);
+  MockModel.findOne = vi.fn().mockResolvedValue(null);
+  MockModel.findById = vi.fn().mockResolvedValue(null);
+  MockModel.create = vi.fn().mockImplementation(async (data) => new MockModel(data));
+  MockModel.updateOne = vi.fn().mockResolvedValue({ nModified: 1 });
+  MockModel.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+  return MockModel;
+};
+
+// Initialize mock models
+const UserModel = createMockModel('User');
+const StatementModel = createMockModel('Statement');
+const TransactionCategoryModel = createMockModel('TransactionCategory');
+
+// Add custom methods for TransactionCategory model
+TransactionCategoryModel.findCachedCategory = vi.fn().mockImplementation(async (description) => null);
+TransactionCategoryModel.cacheCategory = vi.fn().mockImplementation(async (description, category, confidence, source) => {
+  return {
+    description,
+    category,
+    confidence,
+    source
+  };
+});
+
+// Attach mock models to global scope
+global.User = UserModel;
+global.Statement = StatementModel;
+global.TransactionCategory = TransactionCategoryModel;
+
+// Enhanced User-specific mock behaviors
+UserModel.findOne.mockImplementation(async (query) => {
+  if (query.email === 'test@example.com' || query.email === 'existing@example.com') {
+    return new UserModel({
+      _id: '507f1f77bcf86cd799439011',
+      email: query.email,
+      name: 'Test User',
+      password: '$2b$10$hashedPassword',
+      role: 'user'
+    });
+  }
+  return null;
+});
+
+UserModel.findById.mockImplementation(async (id) => {
+  if (id === '507f1f77bcf86cd799439011' || id === 'valid-user-id') {
+    return new UserModel({
+      _id: id,
+      email: 'test@example.com',
+      name: 'Test User',
+      role: 'user'
+    });
+  }
+  return null;
+});
+
+// Enhanced Statement-specific mock behaviors
+StatementModel.findOne.mockImplementation(async (query) => {
+  if (query._id === '507f1f77bcf86cd799439022') {
+    return new StatementModel({
+      _id: '507f1f77bcf86cd799439022',
+      filename: 'test-statement.pdf',
+      userId: '507f1f77bcf86cd799439011',
+      transactions: [],
+      analysisResults: {},
+      alerts: []
+    });
+  }
+  return null;
+});
+
+StatementModel.findById.mockImplementation(async (id) => {
+  if (id === '507f1f77bcf86cd799439022') {
+    return new StatementModel({
+      _id: '507f1f77bcf86cd799439022',
+      filename: 'test-statement.pdf',
+      userId: '507f1f77bcf86cd799439011'
+    });
+  }
+  return null;
+});

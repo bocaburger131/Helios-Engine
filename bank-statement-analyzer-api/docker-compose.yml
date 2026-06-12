@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Bank Statement Analyzer API service
+  api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    image: bank-statement-analyzer-api:latest
+    container_name: bank-analyzer-api
+    ports:
+      - "3000:3000"
+    env_file: .env
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - bank-analyzer-network
+
+  # Redis service for caching and rate limiting
+  redis:
+    image: redis/redis-stack:latest
+    container_name: bank-analyzer-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --protected-mode no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bank-analyzer-network
+
+  # MongoDB service for data storage
+  mongo:
+    image: mongo:6
+    container_name: bank-analyzer-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: bank-analyzer
+    restart: unless-stopped
+    command: --wiredTigerCacheSizeGB 1.5
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh mongodb://localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - bank-analyzer-network
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bank-analyzer-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - bank-analyzer-network
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bank-analyzer-grafana
+    ports:
+      - "3100:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/bank-analyzer-dashboard.json
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    networks:
+      - bank-analyzer-network
+
+volumes:
+  redis-data:
+  mongo-data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  bank-analyzer-network:
+    driver: bridge

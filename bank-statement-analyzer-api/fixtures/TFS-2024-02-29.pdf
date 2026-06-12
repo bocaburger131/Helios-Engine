@@ -1,0 +1,14 @@
+﻿BANK STATEMENT
+Account Number: 123456789
+Statement Period: 01/01/2024 - 01/31/2024
+
+Beginning Balance: ,000.00
+
+Date        Description                     Amount      Balance
+01/05/2024  Direct Deposit - Salary         +2,500.00   3,500.00
+01/10/2024  Grocery Store                   -150.00     3,350.00
+01/15/2024  Electric Bill                   -120.00     3,230.00
+01/20/2024  ATM Withdrawal                  -200.00     3,030.00
+01/25/2024  Restaurant                      -45.00      2,985.00
+
+Ending Balance: ,985.00

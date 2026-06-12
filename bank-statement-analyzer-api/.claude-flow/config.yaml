@@ -1,0 +1,64 @@
+# RuFlo V3 Runtime Configuration
+# Synced with repo root .claude-flow/config.yaml — update both when changing providers/models.
+
+version: "3.5"
+
+# Primary LLM provider for swarm/agents (API key via GOOGLE_API_KEY or GEMINI_API_KEY env)
+defaultProvider: google
+
+agents:
+  providers:
+    - provider: google
+      model: gemini-2.5-pro
+      priority: 1
+      enabled: true
+    - provider: anthropic
+      model: claude-opus-4-7
+      priority: 2
+      enabled: false
+
+llm:
+  defaultProvider: google
+  coordination:
+    model: gemini-2.5-pro
+  routing:
+    model: gemini-2.5-flash
+
+swarm:
+  topology: hierarchical-mesh
+  maxAgents: 15
+  autoScale: true
+  coordinationStrategy: consensus
+
+memory:
+  backend: hybrid
+  enableHNSW: true
+  persistPath: .claude-flow/data
+  cacheSize: 100
+  # ADR-049: Self-Learning Memory
+  learningBridge:
+    enabled: true
+    sonaMode: balanced
+    confidenceDecayRate: 0.005
+    accessBoostAmount: 0.03
+    consolidationThreshold: 10
+  memoryGraph:
+    enabled: true
+    pageRankDamping: 0.85
+    maxNodes: 5000
+    similarityThreshold: 0.8
+  agentScopes:
+    enabled: true
+    defaultScope: project
+
+neural:
+  enabled: true
+  modelPath: .claude-flow/neural
+
+hooks:
+  enabled: true
+  autoExecute: true
+
+mcp:
+  autoStart: false
+  port: 3000

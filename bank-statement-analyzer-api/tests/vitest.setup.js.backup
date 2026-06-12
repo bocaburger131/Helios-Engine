@@ -1,0 +1,476 @@
+// tests/vitest.setup.js
+import { vi, beforeEach, afterAll, beforeAll } from 'vitest';
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import mongoose from 'mongoose';
+
+// --- Mongoose Mocking ---
+let mongoServer;
+
+beforeAll(async () => {
+  mongoServer = await MongoMemoryServer.create();
+  const mongoUri = mongoServer.getUri();
+  await mongoose.connect(mongoUri);
+  console.log('Connected to in-memory test database');
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongoServer.stop();
+});
+
+// Clean all collections before each test
+beforeEach(async () => {
+  const collections = mongoose.connection.collections;
+  for (const key in collections) {
+    const collection = collections[key];
+    await collection.deleteMany({});
+  }
+});
+
+// --- Global Mocks ---
+
+// Mock the 'fs' module
+vi.mock('fs', () => ({
+  default: {
+    existsSync: vi.fn(),
+    rmSync: vi.fn(),
+    // Add any other fs methods you use as you discover them
+  },
+}));
+
+// Mock the logger to prevent console noise during tests
+vi.mock('./src/utils/logger.js', () => ({
+  default: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+// Create mock model function
+const createMockModel = (modelName) => {
+  // Constructor function for mock model instances
+  function MockModel(data = {}) {
+    // Copy all properties from data to this instance
+    Object.assign(this, data);
+    
+    // Mock common Mongoose document methods
+    this.save = vi.fn().mockResolvedValue(this);
+    this.remove = vi.fn().mockResolvedValue(this);
+    this.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    this.updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+    this.populate = vi.fn().mockResolvedValue(this);
+    this.toJSON = vi.fn().mockReturnValue({ ...data, _id: data._id || '507f1f77bcf86cd799439011' });
+    this.toObject = vi.fn().mockReturnValue(this.toJSON());
+    
+    return this;
+  }
+  
+  // CRITICAL: All static methods MUST be initialized with vi.fn()
+  MockModel.create = vi.fn().mockImplementation(async (data) => new MockModel(data));
+  MockModel.findOne = vi.fn().mockResolvedValue(null);
+  MockModel.findById = vi.fn().mockResolvedValue(null);
+  MockModel.find = vi.fn().mockResolvedValue([]);
+  MockModel.findByIdAndUpdate = vi.fn().mockResolvedValue(null);
+  MockModel.findByIdAndDelete = vi.fn().mockResolvedValue(null);
+  MockModel.findOneAndUpdate = vi.fn().mockResolvedValue(null);
+  MockModel.findOneAndDelete = vi.fn().mockResolvedValue(null);
+  MockModel.updateOne = vi.fn().mockResolvedValue({ modifiedCount: 0, matchedCount: 0 });
+  MockModel.updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0, matchedCount: 0 });
+  MockModel.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 0 });
+  MockModel.deleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 });
+  MockModel.countDocuments = vi.fn().mockResolvedValue(0);
+  MockModel.aggregate = vi.fn().mockResolvedValue([]);
+  MockModel.populate = vi.fn().mockReturnValue(MockModel);
+  MockModel.distinct = vi.fn().mockResolvedValue([]);
+  MockModel.exists = vi.fn().mockResolvedValue(null);
+  MockModel.estimatedDocumentCount = vi.fn().mockResolvedValue(0);
+  
+  // Model metadata
+  MockModel.modelName = modelName;
+  MockModel.collection = {
+    name: modelName.toLowerCase() + 's',
+    drop: vi.fn().mockResolvedValue(true),
+    createIndex: vi.fn().mockResolvedValue(true)
+  };
+  
+  return MockModel;
+};
+
+// Create User model mock with specific behaviors
+const UserMock = createMockModel('User');
+
+// Enhanced User-specific mock behaviors
+UserMock.findOne.mockImplementation(async (query) => {
+  if (query.email === 'test@example.com' || query.email === 'existing@example.com') {
+    return new UserMock({
+      _id: '507f1f77bcf86cd799439011',
+      email: query.email,
+      name: 'Test User',
+      password: '$2b$10$hashedPassword',
+      role: 'user'
+    });
+  }
+  return null;
+});
+
+UserMock.findById.mockImplementation(async (id) => {
+  if (id === '507f1f77bcf86cd799439011' || id === 'valid-user-id') {
+    return new UserMock({
+      _id: id,
+      email: 'test@example.com',
+      name: 'Test User',
+      role: 'user'
+    });
+  }
+  return null;
+});
+
+// Create Statement model mock with specific behaviors
+const StatementMock = createMockModel('Statement');
+
+// Enhanced Statement-specific mock behaviors
+StatementMock.findOne.mockImplementation(async (query) => {
+  if (query._id === '507f1f77bcf86cd799439022') {
+    return new StatementMock({
+      _id: '507f1f77bcf86cd799439022',
+      filename: 'test-statement.pdf',
+      userId: '507f1f77bcf86cd799439011',
+      transactions: [],
+      analysisResults: {},
+      alerts: []
+    });
+  }
+  return null;
+});
+
+StatementMock.findById.mockImplementation(async (id) => {
+  if (id === '507f1f77bcf86cd799439022') {
+    return new StatementMock({
+      _id: '507f1f77bcf86cd799439022',
+      filename: 'test-statement.pdf',
+      userId: '507f1f77bcf86cd799439011'
+    });
+  }
+  return null;
+});
+
+StatementMock.find.mockImplementation(async (query) => {
+  if (query.userId) {
+    return [new StatementMock({
+      _id: '507f1f77bcf86cd799439022',
+      filename: 'test-statement.pdf',
+      userId: query.userId
+    })];
+  }
+  return [];
+});
+
+// Mock the actual model files
+vi.mock('../src/models/User.js', () => ({
+  default: UserMock
+}));
+
+vi.mock('../src/models/Statement.js', () => ({
+  default: StatementMock
+}));
+
+// Make models globally available
+global.User = UserMock;
+global.Statement = StatementMock;
+
+console.log('✅ Mongoose models mocked with proper mockResolvedValue support');
+
+// =============================================================================
+// CRITICAL FIX: COMPLETE FS MOCKING INCLUDING rmSync
+// =============================================================================
+
+// Mock fs (CommonJS style)
+vi.mock('fs', () => ({
+  default: {
+    // CRITICAL: Include rmSync to fix the "rmSync is not a function" error
+    rmSync: vi.fn().mockImplementation((path, options = {}) => {
+      console.log(`🗑️ Mock rmSync called for: ${path}`);
+      return undefined; // rmSync returns void
+    }),
+    
+    // Sync methods
+    unlinkSync: vi.fn().mockImplementation((path) => undefined),
+    mkdirSync: vi.fn().mockImplementation((path, options) => undefined),
+    existsSync: vi.fn().mockReturnValue(true),
+    readFileSync: vi.fn().mockReturnValue(Buffer.from('test file content')),
+    writeFileSync: vi.fn().mockImplementation(() => undefined),
+    statSync: vi.fn().mockReturnValue({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: 1024,
+      mtime: new Date(),
+      ctime: new Date(),
+      birthtime: new Date()
+    }),
+    readdirSync: vi.fn().mockReturnValue(['test-file.txt']),
+    copyFileSync: vi.fn().mockImplementation(() => undefined),
+    renameSync: vi.fn().mockImplementation(() => undefined),
+    rmdirSync: vi.fn().mockImplementation(() => undefined),
+    
+    // Async methods
+    unlink: vi.fn().mockImplementation((path, callback) => {
+      if (callback) process.nextTick(callback, null);
+    }),
+    mkdir: vi.fn().mockImplementation((path, options, callback) => {
+      const cb = typeof options === 'function' ? options : callback;
+      if (cb) process.nextTick(cb, null);
+    }),
+    readFile: vi.fn().mockImplementation((path, options, callback) => {
+      const cb = typeof options === 'function' ? options : callback;
+      if (cb) process.nextTick(cb, null, Buffer.from('test file content'));
+    }),
+    writeFile: vi.fn().mockImplementation((path, data, options, callback) => {
+      const cb = typeof options === 'function' ? options : callback;
+      if (cb) process.nextTick(cb, null);
+    }),
+    
+    // Streams
+    createReadStream: vi.fn().mockReturnValue({
+      pipe: vi.fn(),
+      on: vi.fn(),
+      end: vi.fn(),
+      destroy: vi.fn()
+    }),
+    createWriteStream: vi.fn().mockReturnValue({
+      write: vi.fn(),
+      end: vi.fn(),
+      on: vi.fn(),
+      destroy: vi.fn()
+    }),
+    
+    // Constants
+    constants: {
+      F_OK: 0,
+      R_OK: 4,
+      W_OK: 2,
+      X_OK: 1
+    }
+  }
+}));
+
+// Mock fs/promises (ES6 style) - CRITICAL for modern Node.js apps
+vi.mock('fs/promises', () => ({
+  default: {
+    rm: vi.fn().mockResolvedValue(undefined), // Modern replacement for rmSync
+    rmdir: vi.fn().mockResolvedValue(undefined),
+    unlink: vi.fn().mockResolvedValue(undefined),
+    mkdir: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn().mockResolvedValue(Buffer.from('test file content')),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    access: vi.fn().mockResolvedValue(undefined),
+    stat: vi.fn().mockResolvedValue({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: 1024,
+      mtime: new Date(),
+      ctime: new Date(),
+      birthtime: new Date()
+    }),
+    readdir: vi.fn().mockResolvedValue(['test-file.txt']),
+    copyFile: vi.fn().mockResolvedValue(undefined),
+    rename: vi.fn().mockResolvedValue(undefined)
+  },
+  
+  // Named exports for destructuring imports
+  rm: vi.fn().mockResolvedValue(undefined),
+  rmdir: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn().mockResolvedValue(undefined),
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockResolvedValue(Buffer.from('test file content')),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  access: vi.fn().mockResolvedValue(undefined),
+  stat: vi.fn().mockResolvedValue({
+    isFile: () => true,
+    isDirectory: () => false,
+    size: 1024,
+    mtime: new Date()
+  }),
+  readdir: vi.fn().mockResolvedValue(['test-file.txt']),
+  copyFile: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined)
+}));
+
+console.log('✅ FS module mocked with rmSync and all modern methods');
+
+// =============================================================================
+// PATH MODULE MOCKING
+// =============================================================================
+
+vi.mock('path', () => ({
+  default: {
+    join: vi.fn().mockImplementation((...paths) => paths.filter(Boolean).join('/')),
+    resolve: vi.fn().mockImplementation((...paths) => '/' + paths.filter(Boolean).join('/')),
+    dirname: vi.fn().mockImplementation((path) => path.split('/').slice(0, -1).join('/') || '/'),
+    basename: vi.fn().mockImplementation((path, ext) => {
+      const base = path.split('/').pop() || '';
+      return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+    }),
+    extname: vi.fn().mockImplementation((path) => {
+      const base = path.split('/').pop() || '';
+      const lastDot = base.lastIndexOf('.');
+      return lastDot > 0 ? base.slice(lastDot) : '';
+    }),
+    normalize: vi.fn().mockImplementation((path) => path),
+    relative: vi.fn().mockImplementation((from, to) => to),
+    isAbsolute: vi.fn().mockImplementation((path) => path.startsWith('/'))
+  },
+  
+  // Named exports
+  join: vi.fn().mockImplementation((...paths) => paths.filter(Boolean).join('/')),
+  resolve: vi.fn().mockImplementation((...paths) => '/' + paths.filter(Boolean).join('/')),
+  dirname: vi.fn().mockImplementation((path) => path.split('/').slice(0, -1).join('/') || '/'),
+  basename: vi.fn().mockImplementation((path, ext) => {
+    const base = path.split('/').pop() || '';
+    return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+  }),
+  extname: vi.fn().mockImplementation((path) => {
+    const base = path.split('/').pop() || '';
+    const lastDot = base.lastIndexOf('.');
+    return lastDot > 0 ? base.slice(lastDot) : '';
+  })
+}));
+
+// =============================================================================
+// AUTHENTICATION MOCKING
+// =============================================================================
+
+vi.mock('bcrypt', () => ({
+  default: {
+    genSalt: vi.fn().mockResolvedValue('$2b$10$salt'),
+    hash: vi.fn().mockResolvedValue('$2b$10$hashedPassword'),
+    compare: vi.fn().mockImplementation(async (password, hash) => {
+      return password === 'password123' || password === 'testpassword';
+    })
+  },
+  genSalt: vi.fn().mockResolvedValue('$2b$10$salt'),
+  hash: vi.fn().mockResolvedValue('$2b$10$hashedPassword'),
+  compare: vi.fn().mockImplementation(async (password, hash) => {
+    return password === 'password123' || password === 'testpassword';
+  })
+}));
+
+vi.mock('jsonwebtoken', () => ({
+  default: {
+    sign: vi.fn().mockReturnValue('mock-jwt-token'),
+    verify: vi.fn().mockImplementation((token) => {
+      if (token === 'valid-test-token' || token === 'mock-jwt-token') {
+        return {
+          id: '507f1f77bcf86cd799439011',
+          email: 'test@example.com'
+        };
+      }
+      throw new Error('Invalid token');
+    })
+  },
+  sign: vi.fn().mockReturnValue('mock-jwt-token'),
+  verify: vi.fn().mockImplementation((token) => {
+    if (token === 'valid-test-token' || token === 'mock-jwt-token') {
+      return {
+        id: '507f1f77bcf86cd799439011',
+        email: 'test@example.com'
+      };
+    }
+    throw new Error('Invalid token');
+  })
+}));
+
+// =============================================================================
+// DATABASE MOCKING
+// =============================================================================
+
+vi.mock('mongoose', () => {
+  // Create a proper Schema mock class
+  class MockSchema {
+    constructor(definition) {
+      this.definition = definition;
+    }
+    index() { return this; }
+    pre() { return this; }
+    post() { return this; }
+    static Types = {
+      ObjectId: vi.fn().mockImplementation((id) => id || 'mock-objectid'),
+      Mixed: {},
+      String: String,
+      Number: Number,
+      Date: Date,
+      Boolean: Boolean,
+      Array: Array
+    };
+  }
+
+  const mockMongoose = {
+    connect: vi.fn().mockResolvedValue(undefined),
+    disconnect: vi.fn().mockResolvedValue(undefined),
+    connection: {
+      readyState: 1,
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn()
+    },
+    Schema: MockSchema,
+    model: vi.fn().mockImplementation((name) => {
+      if (name === 'User') return UserMock;
+      if (name === 'Statement') return StatementMock;
+      return createMockModel(name);
+    }),
+    Types: {
+      ObjectId: vi.fn().mockImplementation((id) => id || 'mock-objectid'),
+      Mixed: {},
+      String: String,
+      Number: Number,
+      Date: Date,
+      Boolean: Boolean,
+      Array: Array
+    },
+    models: {
+      User: UserMock,
+      Statement: StatementMock
+    }
+  };
+
+  return {
+    default: mockMongoose,
+    Schema: MockSchema, // Named export for destructuring
+    ...mockMongoose
+  };
+});
+
+// =============================================================================
+// LIFECYCLE MANAGEMENT
+// =============================================================================
+
+beforeEach(() => {
+  // Reset all mocks before each test
+  vi.clearAllMocks();
+  
+  // Restore critical mock behaviors that tests depend on
+  if (global.User && global.User.findOne) {
+    global.User.findOne.mockImplementation(async (query) => {
+      if (query.email === 'test@example.com' || query.email === 'existing@example.com') {
+        return new UserMock({
+          _id: '507f1f77bcf86cd799439011',
+          email: query.email,
+          name: 'Test User',
+          password: '$2b$10$hashedPassword'
+        });
+      }
+      return null;
+    });
+  }
+});
+
+afterEach(() => {
+  // Clean up any test-specific state
+  vi.restoreAllMocks();
+});
+
+console.log('✅ Global models initialized - User and Statement available globally');
+console.log('✅ Comprehensive test setup completed');
+console.log('🔧 Fixed: mockResolvedValue errors, rmSync errors, and undefined method calls');

@@ -1,0 +1,19 @@
+BANK STATEMENT
+Account Number: 123456789
+Statement Period: January 1-31, 2024
+
+Beginning Balance: $5,000.00
+
+TRANSACTIONS:
+01/02/2024 - DEPOSIT - Direct Deposit - $3,000.00 - Balance: $8,000.00
+01/05/2024 - WITHDRAWAL - ATM Cash - $100.00 - Balance: $7,900.00
+01/10/2024 - CHECK - Check #1001 - $500.00 - Balance: $7,400.00
+01/15/2024 - DEPOSIT - Check Deposit - $1,200.00 - Balance: $8,600.00
+01/20/2024 - PAYMENT - Online Bill Pay - $800.00 - Balance: $7,800.00
+01/25/2024 - NSF FEE - Overdraft Fee - $35.00 - Balance: $7,765.00
+01/28/2024 - NSF FEE - Overdraft Fee - $35.00 - Balance: $7,730.00
+
+Ending Balance: $7,730.00
+Total Deposits: $4,200.00
+Total Withdrawals: $1,470.00
+NSF Incidents: 2

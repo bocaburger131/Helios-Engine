@@ -1,0 +1,8 @@
+{
+  "name": "helios-engine-monorepo",
+  "private": true,
+  "description": "Helios Engine — bank statement analyzer API + dashboard",
+  "scripts": {
+    "dev": "node scripts/start-helios.js"
+  }
+}

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Shift 4 Funding — Helios Engine</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --nav: #08122c;
+      --nav-border: #1d2d56;
+      --page-bg: #eaedf2;
+      --panel: #ffffff;
+      --panel-border: #d7dee8;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #315fe2;
+      --accent-hover: #214fd3;
+      --dark-btn: #1e2a44;
+      --dark-btn-hover: #172138;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --console-bg: #081233;
+      --console-border: #0f1f4f;
+      --console-text: #36d399;
+      --shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+      --radius: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: var(--page-bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .top-nav {
+      background: var(--nav);
+      color: #f8fafc;
+      border-bottom: 1px solid var(--nav-border);
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.3);
+    }
+
+    .top-nav-inner {
+      max-width: 1260px;
+      margin: 0 auto;
+      height: 54px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .brand-name {
+      font-weight: 700;
+      font-size: 1.8rem;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+
+    .brand-divider {
+      color: #4f5f89;
+    }
+
+    .brand-subtitle {
+      color: #60a5fa;
+      font-weight: 500;
+      white-space: nowrap;
+      font-size: 0.95rem;
+    }
+
+    .portal-link {
+      color: #d7def2;
+      text-decoration: none;
+      font-size: 0.94rem;
+      font-weight: 500;
+    }
+
+    .portal-link:hover {
+      color: #93c5fd;
+    }
+
+    .page {
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 22px 12px 30px;
+    }
+
+    .hero {
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #d6dbe4;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 2.2rem;
+      letter-spacing: -0.02em;
+      color: #0b1635;
+      font-weight: 700;
+    }
+
+    .hero p {
+      margin: 8px 0 0;
+      color: #64748b;
+      font-size: 1.08rem;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 372px minmax(0, 1fr);
+      gap: 16px;
+      align-items: stretch;
+      min-height: 544px;
+    }
+
+    .left-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      padding: 16px 14px 14px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 1.6rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #0b1635;
+    }
+
+    .panel h2 .icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      border: 1px solid #c7d2fe;
+      font-size: 0.75rem;
+      font-weight: 700;
+      background: #eff6ff;
+      line-height: 1;
+    }
+
+    label {
+      display: block;
+      font-size: 0.77rem;
+      color: #334155;
+      font-weight: 600;
+      margin-bottom: 6px;
+      letter-spacing: 0.01em;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="file"] {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 9px;
+      padding: 9px 10px;
+      font-size: 0.94rem;
+      color: #0f172a;
+      background: #f8fafc;
+      transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      background: #fff;
+    }
+
+    input[type="file"] {
+      padding: 8px;
+      font-size: 0.86rem;
+      background: #fff;
+    }
+
+    .field-help {
+      margin: 4px 0 12px;
+      color: #64748b;
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 9px;
+      height: 40px;
+      width: 100%;
+      font-size: 0.92rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 150ms ease, transform 120ms ease;
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+      transform: none;
+    }
+
+    .btn-dark {
+      background: var(--dark-btn);
+      color: #fff;
+    }
+
+    .btn-dark:hover:not(:disabled) {
+      background: var(--dark-btn-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-blue {
+      background: var(--accent);
+      color: #fff;
+      margin-top: 2px;
+    }
+
+    .btn-blue:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .status-line {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-height: 1.1em;
+    }
+
+    .status-line.success {
+      color: var(--success);
+    }
+
+    .status-line.warning {
+      color: var(--warning);
+    }
+
+    .status-line.error {
+      color: var(--danger);
+    }
+
+    .small-note {
+      margin: 8px 0 0;
+      color: #64748b;
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+
+    .console {
+      background: var(--console-bg);
+      border: 1px solid var(--console-border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+    }
+
+    .console-header {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      background: #060f2a;
+      border-bottom: 1px solid #15295f;
+      padding: 10px 12px;
+    }
+
+    .lights {
+      display: flex;
+      gap: 6px;
+    }
+
+    .light {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .light.red { background: #ef4444; }
+    .light.yellow { background: #f59e0b; }
+    .light.green { background: #22c55e; }
+
+    .console-title {
+      color: #9fb3db;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .console-state {
+      font-size: 0.69rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 10px;
+      border-radius: 9px;
+      border: 1px solid #213b76;
+      color: #c9d5f1;
+      background: #142447;
+      white-space: nowrap;
+    }
+
+    .console-state.ready {
+      background: rgba(34, 197, 94, 0.16);
+      border-color: rgba(34, 197, 94, 0.42);
+      color: #86efac;
+    }
+
+    .console-state.working {
+      background: rgba(245, 158, 11, 0.16);
+      border-color: rgba(245, 158, 11, 0.42);
+      color: #fcd34d;
+    }
+
+    .console-state.success {
+      background: rgba(34, 197, 94, 0.16);
+      border-color: rgba(34, 197, 94, 0.42);
+      color: #86efac;
+    }
+
+    .console-state.error {
+      background: rgba(239, 68, 68, 0.16);
+      border-color: rgba(239, 68, 68, 0.42);
+      color: #fca5a5;
+    }
+
+    .console-body {
+      flex: 1;
+      overflow: auto;
+      padding: 14px 14px 18px;
+      font-family: "Fira Code", monospace;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #020617;
+      border-top: 1px solid #1e293b;
+      box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+      scrollbar-color: #334155 #020617;
+    }
+
+    .log-line {
+      display: flex;
+      gap: 10px;
+      color: #9dd7c5;
+      word-break: break-word;
+    }
+
+    .log-line .time {
+      color: #5f789f;
+      min-width: 72px;
+      font-size: 0.76rem;
+    }
+
+    .log-line.info { color: #9dd7c5; }
+    .log-line.success { color: #86efac; }
+    .log-line.warning { color: #fcd34d; }
+    .log-line.error { color: #fca5a5; }
+    .log-line.system { color: var(--console-text); }
+
+    @media (max-width: 1080px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .console {
+        min-height: 420px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .top-nav-inner {
+        height: auto;
+        padding: 10px 12px;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .brand {
+        flex-wrap: wrap;
+      }
+
+      .portal-link {
+        font-size: 0.86rem;
+      }
+
+      .page {
+        padding: 16px 10px 22px;
+      }
+
+      .hero h1 {
+        font-size: 1.8rem;
+      }
+
+      .hero p {
+        font-size: 0.97rem;
+      }
+
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="brand">
+        <img src="/assets/verta-light.svg" alt="Shift 4 Funding" height="36" style="vertical-align:middle;">
+        <span class="brand-name">Shift 4 Funding</span>
+        <span class="brand-divider">|</span>
+        <span class="brand-subtitle">Helios Engine</span>
+      </div>
+      <a class="portal-link" href="/manual-results.html">Underwriting Portal</a>
+    </div>
+  </nav>
+
+  <main class="page">
+    <header class="hero">
+      <h1>Helios Engine Processing</h1>
+      <p>Securely upload applicant bank statements to generate automated FinSight intelligence reports.</p>
+    </header>
+
+    <section class="workspace">
+      <aside class="left-column">
+        <article class="panel">
+          <h2><span class="icon">L</span>System Authentication</h2>
+
+          <label for="base-url">Backend API Base URL</label>
+          <input type="text" id="base-url" placeholder="http://localhost:3002" />
+          <p class="field-help">By default this uses the same origin as the page. Only change it if your API is running on a different host or port.</p>
+
+          <div class="field-grid">
+            <div>
+              <label for="login-email">Email</label>
+              <input type="email" id="login-email" placeholder="test@example.com" autocomplete="username" />
+            </div>
+            <div>
+              <label for="login-password">Password</label>
+              <input type="password" id="login-password" placeholder="password" autocomplete="current-password" />
+            </div>
+          </div>
+
+          <button id="login-btn" class="btn btn-dark" type="button">Generate Token</button>
+
+          <div style="margin-top: 12px;">
+            <label for="token">Active Bearer Token</label>
+            <input type="text" id="token" placeholder="Token will appear here or paste manually..." autocomplete="off" />
+            <p id="login-status" class="status-line">Token not loaded.</p>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2><span class="icon">U</span>Document Upload</h2>
+
+          <label for="file-input">Bank Statement (PDF)</label>
+          <input type="file" id="file-input" accept="application/pdf" multiple />
+
+          <div style="margin-top: 10px;">
+            <label for="deal-id">Application ID / Deal ID</label>
+            <input type="text" id="deal-id" value="APP-89234" />
+          </div>
+
+          <button id="run-btn" class="btn btn-blue" type="button">Run Helios Engine</button>
+          <p class="small-note">You can select one or multiple PDF statements. All selected files are sent in one batch request.</p>
+        </article>
+      </aside>
+
+      <section class="console" aria-label="FinSight output console">
+        <div class="console-header">
+          <div class="lights" aria-hidden="true">
+            <span class="light red"></span>
+            <span class="light yellow"></span>
+            <span class="light green"></span>
+          </div>
+          <div class="console-title">FinSight Output Console</div>
+          <span id="console-state" class="console-state">Awaiting Input</span>
+        </div>
+
+        <div id="log-output" class="console-body"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      baseUrl: (localStorage.getItem('bsaDashboardBaseUrl') || window.location.origin).replace(/\/$/, ''),
+      token: localStorage.getItem('bsaDashboardToken') || '',
+      uploadInProgress: false
+    };
+
+    const elements = {
+      baseUrl: document.getElementById('base-url'),
+      loginEmail: document.getElementById('login-email'),
+      loginPassword: document.getElementById('login-password'),
+      loginButton: document.getElementById('login-btn'),
+      token: document.getElementById('token'),
+      loginStatus: document.getElementById('login-status'),
+      fileInput: document.getElementById('file-input'),
+      dealId: document.getElementById('deal-id'),
+      runButton: document.getElementById('run-btn'),
+      consoleState: document.getElementById('console-state'),
+      logOutput: document.getElementById('log-output')
+    };
+
+    const formatTime = () => new Date().toLocaleTimeString([], { hour12: false });
+
+    const appendLog = (message, level = 'info') => {
+      const line = document.createElement('div');
+      line.className = `log-line ${level}`;
+
+      const time = document.createElement('span');
+      time.className = 'time';
+      time.textContent = `[${formatTime()}]`;
+
+      const text = document.createElement('span');
+      text.textContent = message;
+
+      line.appendChild(time);
+      line.appendChild(text);
+      elements.logOutput.appendChild(line);
+      elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+    };
+
+    const setConsoleState = (label, tone = 'idle') => {
+      elements.consoleState.textContent = label;
+      elements.consoleState.className = `console-state ${tone}`.trim();
+    };
+
+    const setLoginStatus = (message, tone = 'neutral') => {
+      elements.loginStatus.textContent = message;
+      elements.loginStatus.className = tone === 'neutral' ? 'status-line' : `status-line ${tone}`;
+    };
+
+    const setRunButtonBusy = (busy) => {
+      elements.runButton.disabled = busy;
+      elements.runButton.textContent = busy ? 'Running Helios Engine...' : 'Run Helios Engine';
+    };
+
+    const persistBaseUrl = (value) => {
+      state.baseUrl = (value || window.location.origin).trim().replace(/\/$/, '');
+      elements.baseUrl.value = state.baseUrl;
+      localStorage.setItem('bsaDashboardBaseUrl', state.baseUrl);
+    };
+
+    const persistToken = (token) => {
+      state.token = token || '';
+      elements.token.value = state.token;
+      if (state.token) {
+        localStorage.setItem('bsaDashboardToken', state.token);
+      } else {
+        localStorage.removeItem('bsaDashboardToken');
+      }
+    };
+
+    const requestToken = async () => {
+      const email = elements.loginEmail.value.trim();
+      const password = elements.loginPassword.value;
+
+      if (!email || !password) {
+        setLoginStatus('Email and password are required.', 'warning');
+        appendLog('Authentication skipped: missing email or password.', 'warning');
+        return;
+      }
+
+      elements.loginButton.disabled = true;
+      elements.loginButton.textContent = 'Generating Token...';
+      setLoginStatus('Authenticating...', 'neutral');
+      appendLog(`Requesting token from ${state.baseUrl}/api/auth/login`, 'info');
+
+      try {
+        const response = await fetch(`${state.baseUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        const token = payload?.data?.token || payload?.token;
+
+        if (!response.ok || !token) {
+          throw new Error(payload?.error || payload?.message || `Login failed (${response.status})`);
+        }
+
+        persistToken(token);
+        setLoginStatus('Authenticated. Token cached locally.', 'success');
+        setConsoleState('Authenticated', 'ready');
+        appendLog('Authentication successful. Bearer token is ready.', 'success');
+      } catch (error) {
+        setLoginStatus(error.message || 'Authentication failed.', 'error');
+        setConsoleState('Auth Error', 'error');
+        appendLog(`Authentication failed: ${error.message || 'Unknown error'}`, 'error');
+      } finally {
+        elements.loginButton.disabled = false;
+        elements.loginButton.textContent = 'Generate Token';
+      }
+    };
+
+    const runAnalysis = async () => {
+      if (state.uploadInProgress) {
+        return;
+      }
+
+      const files = Array.from(elements.fileInput.files || []);
+      const dealId = elements.dealId.value.trim();
+      const authToken = localStorage.getItem('bsaDashboardToken') || elements.token.value.trim() || state.token;
+
+      if (!files.length) {
+        appendLog('No PDF files selected. Choose at least one statement first.', 'warning');
+        setConsoleState('Awaiting Input', 'idle');
+        return;
+      }
+
+      if (!authToken) {
+        appendLog('Authentication Error: No token found. Please log in on the Dashboard first.', 'error');
+        setLoginStatus('No token found. Log in on the dashboard first.', 'warning');
+        setConsoleState('Auth Required', 'error');
+        return;
+      }
+
+      if (authToken !== state.token) {
+        persistToken(authToken);
+      }
+
+      state.uploadInProgress = true;
+      setRunButtonBusy(true);
+      setConsoleState('Processing', 'working');
+
+      appendLog(`Preparing ${files.length} file(s) for macro analysis...`, 'info');
+      files.forEach((file) => {
+        appendLog(`Queued file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`, 'system');
+      });
+
+      const formData = new FormData();
+      if (dealId) {
+        formData.append('dealId', dealId);
+      }
+      files.forEach((file) => formData.append('statements', file, file.name));
+
+      try {
+        const response = await fetch(`${state.baseUrl}/api/statements/batch`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${authToken}`
+          },
+          body: formData
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          appendLog('Authentication failed: token is invalid or expired. Please generate a new token.', 'error');
+          setLoginStatus('Token expired or invalid — re-authenticate.', 'warning');
+          setConsoleState('Auth Required', 'error');
+          return;
+        }
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || result?.message || `Batch upload failed (${response.status})`);
+        }
+
+        const summary = result?.data?.summary || {};
+        const alertSummary = summary?.alertSummary || {};
+        const risk = result?.data?.overallRisk || {};
+
+        appendLog('Batch analysis completed successfully.', 'success');
+        appendLog(`Statements parsed: ${summary.parsedSuccessfully || summary.totalFiles || files.length}`, 'system');
+        appendLog(`Transactions: ${summary.totalTransactions || 'N/A'} | Alerts: ${summary.totalAlerts || 0}`, 'system');
+        appendLog(`Alert breakdown C:${alertSummary.critical || 0} H:${alertSummary.high || 0} M:${alertSummary.medium || 0} L:${alertSummary.low || 0}`, 'system');
+        appendLog(`Average risk score: ${risk.averageRiskScore ?? 'N/A'} | Veritas: ${risk.averageVeritasScore ?? 'N/A'}`, 'system');
+        appendLog('Redirecting to manual results dashboard...', 'info');
+
+        try {
+          sessionStorage.setItem('macroResult', JSON.stringify(result));
+        } catch (storageError) {
+          appendLog('Warning: unable to cache result payload in sessionStorage.', 'warning');
+        }
+
+        setConsoleState('Complete', 'success');
+        setTimeout(() => {
+          window.location.href = '/manual-results.html';
+        }, 1200);
+      } catch (error) {
+        appendLog(`Upload failed: ${error.message || 'Unknown error'}`, 'error');
+        setConsoleState('Error', 'error');
+      } finally {
+        state.uploadInProgress = false;
+        setRunButtonBusy(false);
+      }
+    };
+
+    elements.loginButton.addEventListener('click', requestToken);
+    elements.runButton.addEventListener('click', runAnalysis);
+
+    elements.fileInput.addEventListener('change', () => {
+      const files = Array.from(elements.fileInput.files || []);
+      if (!files.length) {
+        return;
+      }
+      appendLog(`${files.length} file(s) selected for processing.`, 'info');
+    });
+
+    elements.baseUrl.addEventListener('change', () => {
+      persistBaseUrl(elements.baseUrl.value);
+      appendLog(`API base URL set to ${state.baseUrl}`, 'info');
+    });
+
+    elements.token.addEventListener('change', () => {
+      const token = elements.token.value.trim();
+      persistToken(token);
+      if (token) {
+        setLoginStatus('Token updated manually.', 'success');
+        setConsoleState('Authenticated', 'ready');
+        appendLog('Manual token accepted.', 'success');
+      } else {
+        setLoginStatus('Token cleared.', 'warning');
+        setConsoleState('Awaiting Input', 'idle');
+        appendLog('Token cleared.', 'warning');
+      }
+    });
+
+    persistBaseUrl(state.baseUrl);
+    persistToken(state.token);
+
+    appendLog('Shift 4 Funding - Vera AI Diagnostics', 'system');
+    appendLog('System status: online', 'system');
+    appendLog('Engine: Helios v2.0.0', 'system');
+    appendLog('Ready for document ingestion...', 'system');
+
+    if (state.token) {
+      setLoginStatus('Cached bearer token loaded.', 'success');
+      setConsoleState('Authenticated', 'ready');
+      appendLog('Token loaded from browser cache.', 'success');
+    } else {
+      setLoginStatus('Generate token or paste an active bearer token.', 'neutral');
+      setConsoleState('Awaiting Input', 'idle');
+    }
+  </script>
+  <footer style="background:#08122c;color:#94a3b8;text-align:center;padding:12px 16px;font-size:0.78rem;border-top:1px solid #1d2d56;">
+    <p style="font-weight:700;color:#cbd5e1;margin:0 0 4px;">Shift 4 Funding Corporate Underwriting Tool</p>
+    <p style="margin:0;">213.207.6602 &middot; <a href="mailto:Info@shift4funding.com" style="color:#94a3b8;">Info@shift4funding.com</a> &middot; Los Angeles, CA</p>
+    <p style="margin:4px 0 0;">Mon&ndash;Fri 8am&ndash;6pm, Sat&ndash;Sun 10am&ndash;5pm</p>
+  </footer>
+</body>
+</html>

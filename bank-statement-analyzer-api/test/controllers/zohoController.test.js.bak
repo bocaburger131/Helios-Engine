@@ -1,0 +1,242 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { startAnalysisHandler, getAnalysisStatusHandler } from '../../src/controllers/zohoController.js';
+import redisStreamService from '../../src/services/redisStreamService.js';
+
+// Mock Redis Stream Service
+vi.mock('../../src/services/redisStreamService.js', () => ({
+  default: {
+    addToStream: vi.fn().mockResolvedValue('job_123'),
+    getStreamInfo: vi.fn().mockResolvedValue({
+      firstEntry: ['job_123', ['type', 'analysis', 'status', 'pending']]
+    }),
+    streams: {
+      STATEMENT_UPLOAD: 'stream:statement:upload'
+    },
+    parseMessage: vi.fn().mockReturnValue({
+      type: 'analysis',
+      status: 'pending'
+    })
+  }
+}));
+
+describe('ZohoController', () => {
+  let mockReq;
+  let mockRes;
+  let mockNext;
+
+  beforeEach(() => {
+    // Reset all mocks
+    vi.clearAllMocks();
+
+    // Setup request mock
+    mockReq = {
+      body: { dealId: 'DEAL123' },
+      params: { jobId: 'job_123' },
+      crmService: {
+        getAttachmentsForDeal: vi.fn().mockResolvedValue([
+          { fileName: 'statement1.pdf' },
+          { fileName: 'statement2.pdf' },
+          { fileName: 'other.doc' }
+        ])
+      }
+    };
+
+    // Setup response mock
+    mockRes = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn()
+    };
+
+    // Setup next function mock
+    mockNext = vi.fn();
+  });
+
+  describe('startAnalysis', () => {
+    it('should queue analysis job for valid deal with PDF attachments', async () => {
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(mockRes.status).toHaveBeenCalledWith(202);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        message: expect.any(String),
+        data: {
+          jobId: 'job_123',
+          filesQueued: 2,
+          dealId: 'DEAL123',
+          statusEndpoint: `/api/zoho/analysis-status/job_123`
+        }
+      });
+      expect(redisStreamService.addToStream).toHaveBeenCalledWith(
+        'stream:statement:upload',
+        expect.objectContaining({
+          type: 'statement_analysis',
+          payload: expect.objectContaining({
+            dealId: 'DEAL123',
+            files: expect.arrayContaining([
+              expect.objectContaining({ fileName: expect.stringMatching(/\.pdf$/) })
+            ])
+          })
+        })
+      );
+    });
+
+    it('should handle deals with no PDF attachments', async () => {
+      mockReq.crmService.getAttachmentsForDeal.mockResolvedValue([
+        { fileName: 'doc.docx' }
+      ]);
+
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        message: expect.stringContaining('No PDF bank statements found')
+      });
+      expect(redisStreamService.addToStream).not.toHaveBeenCalled();
+    });
+
+    it('should handle missing dealId', async () => {
+      mockReq.body = {};
+      
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Deal ID is required'),
+          statusCode: 400
+        })
+      );
+      expect(redisStreamService.addToStream).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('startAnalysis with advanced options', () => {
+    it('should handle priority and notification options', async () => {
+      mockReq.body = {
+        dealId: 'DEAL123',
+        metadata: {
+          priority: 'high',
+          requestedBy: 'test@example.com'
+        },
+        options: {
+          notify: true
+        }
+      };
+
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(redisStreamService.addToStream).toHaveBeenCalledWith(
+        'stream:statement:upload',
+        expect.objectContaining({
+          type: 'statement_analysis',
+          payload: expect.objectContaining({
+            dealId: 'DEAL123',
+            priority: 'high',
+            notify: true
+          })
+        })
+      );
+    });
+
+    it('should handle date range filtering', async () => {
+      const startDate = '2025-01-01T00:00:00.000Z';
+      const endDate = '2025-12-31T23:59:59.999Z';
+      
+      mockReq.body = {
+        dealId: 'DEAL123',
+        dateRange: {
+          start: startDate,
+          end: endDate
+        }
+      };
+
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(redisStreamService.addToStream).toHaveBeenCalledWith(
+        'stream:statement:upload',
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            dateRange: {
+              start: startDate,
+              end: endDate
+            }
+          })
+        })
+      );
+    });
+
+    it('should validate date range order', async () => {
+      mockReq.body = {
+        dealId: 'DEAL123',
+        dateRange: {
+          start: '2025-12-31T00:00:00.000Z',
+          end: '2025-01-01T00:00:00.000Z'
+        }
+      };
+
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('End date must be after start date'),
+          statusCode: 400
+        })
+      );
+    });
+
+    it('should handle CRM service initialization failure', async () => {
+      mockReq.crmService = null;
+      process.env.ZOHO_CLIENT_ID = '';
+
+      await startAnalysis(mockReq, mockRes, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Zoho CRM service not initialized'),
+          statusCode: 500
+        })
+      );
+    });
+  });
+
+  describe('getAnalysisStatus', () => {
+    it('should return job status when job exists', async () => {
+      await getAnalysisStatus(mockReq, mockRes, mockNext);
+
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        data: {
+          jobId: 'job_123',
+          status: expect.any(Object)
+        }
+      });
+    });
+
+    it('should return 404 when job not found', async () => {
+      redisStreamService.getStreamInfo.mockResolvedValueOnce({
+        firstEntry: null
+      });
+
+      await getAnalysisStatus(mockReq, mockRes, mockNext);
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Job not found'
+      });
+    });
+
+    it('should handle missing jobId', async () => {
+      mockReq.params = {};
+      
+      await getAnalysisStatus(mockReq, mockRes, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Job ID is required'),
+          statusCode: 400
+        })
+      );
+    });
+  });
+});

@@ -1,5 +1,18 @@
-Helios Engine
-# Junior Underwriter
+# Helios Engine (monorepo)
+
+**Canonical GitHub:** https://github.com/bocaburger131/Helios-Engine.git  
+**Branch policy:** `main` = integration; Hermes/agents use `hermes/*` branches and PRs.
+
+| Component | Path |
+|-----------|------|
+| API | `bank-statement-analyzer-api/` |
+| Dashboard | `helios-dashboard/` |
+| Start both | `npm run dev` (from repo root) or `node scripts/start-helios.js` |
+
+See [REPO_LAYOUT.md](REPO_LAYOUT.md) and [HERMES_GITHUB.md](HERMES_GITHUB.md).
+
+---
+
 # Bank Statement Analyzer API
 
 REST API for analyzing bank statements using LLM technology.

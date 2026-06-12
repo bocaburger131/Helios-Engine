@@ -1,0 +1,41 @@
+# CRITICAL - Service Account Keys - NEVER commit these!
+service-account-key.json
+*-sa-key.json
+*.json
+
+# Local environment files (never commit real secrets)
+.env
+.env.local
+.env.*.local
+.env.backup
+.env.sos-verification
+.env.production
+.env.development
+
+# Ignore env variants by default; allow committed templates only
+.env.*
+!.env.example
+!**/.env.example
+!.env.sos-verification.example
+!**/.env.sos-verification.example
+!.env.backup.example
+!**/.env.backup.example
+!.env.development.example
+!**/.env.development.example
+!.env.test
+!**/.env.test
+!.env.production.template
+!**/.env.production.template
+!.env.redis-streams
+!**/.env.redis-streams
+
+# Keep these JSON files
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Other files
+node_modules/
+dist/
+uploads/
+*.log

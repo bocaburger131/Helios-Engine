@@ -1,0 +1,1 @@
+/* This file is intentionally left blank to avoid conflicts with @types/node's events definitions. */

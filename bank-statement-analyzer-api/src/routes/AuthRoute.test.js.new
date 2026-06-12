@@ -1,0 +1,194 @@
+// filepath: src/routes/AuthRoute.test.js
+import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from 'vitest';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+import app from '../app.js';
+import User from '../models/User.js';
+import { connectToInMemoryDB, closeDatabase, clearDatabase } from '../../tests/utils/testDb.js';
+
+// Authentication test variables - properly declared at top level
+const testUserPassword = 'TestPass123!@#';
+const duplicateTestEmail = 'duplicate@example.com';
+const validTestEmail = 'test@example.com';
+const invalidTestEmail = 'invalid-email';
+
+// Mock the User model
+vi.mock('../models/User.js', () => ({
+  default: {
+    findOne: vi.fn(),
+    create: vi.fn(),
+    findById: vi.fn(),
+    deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 })
+  }
+}));
+
+// Mock bcrypt for password hashing
+vi.mock('bcryptjs', () => ({
+  default: {
+    hash: vi.fn().mockResolvedValue('$2a$12$hashedpassword'),
+    compare: vi.fn().mockResolvedValue(true)
+  }
+}));
+
+// Mock jsonwebtoken
+vi.mock('jsonwebtoken', () => ({
+  default: {
+    sign: vi.fn().mockReturnValue('mock.jwt.token'),
+    verify: vi.fn().mockReturnValue({ userId: 'user123' })
+  }
+}));
+
+describe('Authentication Routes', () => {
+  let testUser;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    
+    // Set up test user data with proper password hash
+    testUser = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'Test User',
+      email: validTestEmail,
+      password: '$2a$12$hashedpassword', // Use the mocked hash
+      isEmailVerified: true
+    };
+  });
+
+  describe('POST /api/auth/register', () => {
+    it('should register a new user successfully', async () => {
+      User.findOne.mockResolvedValue(null); // No existing user
+      User.create.mockResolvedValue({
+        _id: testUser._id,
+        name: testUser.name,
+        email: testUser.email,
+        isEmailVerified: false
+      });
+
+      const response = await request(app)
+        .post('/api/auth/register')
+        .send({
+          name: 'Test User',
+          email: validTestEmail,
+          password: testUserPassword
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.success).toBe(true);
+      expect(response.body.message).toContain('registered successfully');
+    });
+
+    it('should reject duplicate email registration', async () => {
+      User.findOne.mockResolvedValue(testUser); // Existing user
+
+      const response = await request(app)
+        .post('/api/auth/register')
+        .send({
+          name: 'Duplicate User',
+          email: duplicateTestEmail,
+          password: testUserPassword
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain('already exists');
+    });
+
+    it('should reject invalid email format', async () => {
+      const response = await request(app)
+        .post('/api/auth/register')
+        .send({
+          name: 'Test User',
+          email: invalidTestEmail,
+          password: testUserPassword
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+    });
+  });
+
+  describe('POST /api/auth/login', () => {
+    it('should login with valid credentials', async () => {
+      User.findOne.mockReturnValue({
+        select: vi.fn().mockResolvedValue(testUser)
+      });
+
+      const response = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: validTestEmail,
+          password: testUserPassword
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveProperty('token');
+      expect(response.body.data).toHaveProperty('user');
+    });
+
+    it('should reject invalid password', async () => {
+      User.findOne.mockReturnValue({
+        select: vi.fn().mockResolvedValue(testUser)
+      });
+      
+      // Mock bcrypt.compare to return false for wrong password
+      const bcrypt = require('bcryptjs');
+      bcrypt.compare.mockResolvedValueOnce(false);
+
+      const response = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: validTestEmail,
+          password: 'WrongPassword'
+        });
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain('Invalid credentials');
+    });
+
+    it('should reject non-existent user', async () => {
+      User.findOne.mockReturnValue({
+        select: vi.fn().mockResolvedValue(null)
+      });
+
+      const response = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: 'nonexistent@example.com',
+          password: testUserPassword
+        });
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain('Invalid credentials');
+    });
+  });
+
+  describe('GET /api/auth/me', () => {
+    it('should return user profile with valid token', async () => {
+      User.findById.mockResolvedValue({
+        _id: testUser._id,
+        name: testUser.name,
+        email: testUser.email,
+        isEmailVerified: testUser.isEmailVerified
+      });
+
+      const response = await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer mock.jwt.token`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.user.email).toBe(validTestEmail);
+    });
+
+    it('should reject request without token', async () => {
+      const response = await request(app)
+        .get('/api/auth/me');
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+    });
+  });
+});

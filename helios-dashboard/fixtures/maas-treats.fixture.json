@@ -1,0 +1,183 @@
+{
+  "success": true,
+  "data": {
+    "statement": {
+      "_id": "6a1afb51b46733f137a80233",
+      "bankName": "Wells Fargo",
+      "accountNumber": "5195725428",
+      "applicationContext": {
+        "companyName": "maas treats and treasures llc.",
+        "requestedLoanAmount": 11000
+      },
+      "analysis": {
+        "underwritingVitals": {
+          "adb": {
+            "l3mAverage": 1140682.36,
+            "byMonth": [
+              { "month": "2023-12", "adb": 1110936.09, "daysInMonth": 31 },
+              { "month": "2024-02", "adb": 1150000, "daysInMonth": 29 },
+              { "month": "2025-01", "adb": 1200174.9, "daysInMonth": 31 }
+            ]
+          }
+        },
+        "forensicIntelligence": {
+          "prospectiveDSCR": 0.42,
+          "window": {
+            "monthlyNetCashFlow": -12000,
+            "requestedLoanAmount": 11000,
+            "monthlyBreakdown": [
+              { "key": "2023-12", "label": "Dec '23", "deposits": 69913, "withdrawals": 602103 },
+              { "key": "2024-02", "label": "Feb '24", "deposits": 152680, "withdrawals": 285831 },
+              { "key": "2025-01", "label": "Jan '25", "deposits": 192417, "withdrawals": 48826 }
+            ]
+          }
+        },
+        "documentMap": {
+          "fingerprint": "profile:wells_initiate_checking::stitch:3",
+          "regions": {
+            "transactionHistory": {
+              "type": "transactionHistory",
+              "text": "Transaction history sample",
+              "pageIndex": 1
+            },
+            "fee_ledger": {
+              "type": "fee_ledger",
+              "text": "NSF FEE 35.00",
+              "pageIndex": 2
+            }
+          },
+          "ignoredRegions": [
+            {
+              "id": "ignored_0",
+              "regionType": "disclosure",
+              "text": "Member FDIC. Equal Housing Lender. Important information about your account.",
+              "pageIndex": 0
+            },
+            {
+              "id": "ignored_1",
+              "regionType": "ad",
+              "text": "Visit us at www.wellsfargo.com for online banking.",
+              "pageIndex": 2
+            }
+          ],
+          "coverage": {
+            "totalBlocks": 6,
+            "financialBlocks": 4,
+            "ignoredBlocks": 2
+          }
+        },
+        "contextArchive": {
+          "version": "1",
+          "fingerprint": "profile:wells_initiate_checking::stitch:3",
+          "entries": [
+            {
+              "id": "ignored_0",
+              "regionType": "disclosure",
+              "pageIndex": 0,
+              "excerpt": "Member FDIC. Equal Housing Lender.",
+              "charCount": 52
+            },
+            {
+              "id": "ignored_1",
+              "regionType": "ad",
+              "pageIndex": 2,
+              "excerpt": "Visit us at www.wellsfargo.com",
+              "charCount": 48
+            }
+          ],
+          "stats": {
+            "totalBlocks": 6,
+            "financialBlocks": 4,
+            "ignoredBlocks": 2,
+            "ignoredByType": {
+              "ad": 1,
+              "faq": 0,
+              "blank_page": 0,
+              "disclosure": 1,
+              "unclassified": 0
+            }
+          }
+        },
+        "projections": {
+          "l3mMovingAverage": -12000,
+          "projectedDSCR": 0.42,
+          "eligibilityBand": "weak"
+        },
+        "vera": {
+          "decision": "DECLINE",
+          "bankabilityScore": 1,
+          "identityCrossCheck": {
+            "status": "review",
+            "confidence": 0.82,
+            "mismatches": []
+          },
+          "deltaFixes": [
+            {
+              "field": "printedDeposits",
+              "proposedValue": 69913.08,
+              "confidence": 0.88,
+              "rationale": "Align printed deposits with fee-adjusted ledger total"
+            }
+          ],
+          "briefingMarkdown": "## Deal Context\nMaas Treats and Treasures LLC, a candy business operating for 0 years (start date March 4, 2025), is requesting an $11,000 working capital loan. The application contains severe data anomalies, including an owner date of birth of November 11, 2024 (making the owner an infant) and a DBA name that suspiciously mirrors the funding company itself.\n\n## Forensic Findings\n- **Document Integrity:** 0% batch checksum pass ratio across all statement PDFs. Massive reconciliation mismatches exist, such as a computed closing balance of -$521,341.49 versus the statement's reported $439.35 (a delta of -$521,780.84).\n- **Entity Verification:** The business could not be verified with Secretary of State records.\n- **Cash Flow & Liquidity:** Net cash flow is deeply negative at -$521,750.18, with an average daily balance of -$613,406.35.\n- **Operating Risk:** A total of 124 NSF/overdraft events were flagged in the analyzed period.\n\n## Single Biggest Strength\nNominal true monthly revenue average is reported at $136,664.04, though this data is highly unreliable due to the 0% checksum pass rate.\n\n## Single Biggest Risk\nComplete failure of bank statement reconciliation (0% checksum pass ratio) combined with critical identity and entity verification failures.\n\n## Underwriter Recommendation\nThis file is officially **DECLINED**. The combination of unverified business status, impossible owner age (DOB 2024), severe NSF clusters (124 count), and total failure of bank statement arithmetic integrity indicates extreme risk of fraud or synthetic documentation."
+        }
+      },
+      "monthlyStatementSummaries": [
+        {
+          "fileName": "dec.pdf",
+          "totalDeposits": 69913.08,
+          "totalWithdrawals": 602103.32,
+          "openingBalance": 408.69,
+          "closingBalance": 2507.76,
+          "coveragePeriod": {
+            "startDate": "2023-12-01",
+            "endDate": "2023-12-31",
+            "daysCovered": 31
+          },
+          "parseQuality": "FAILED_CHECKSUM",
+          "checksumOk": false,
+          "accountKey": "WELLS FARGO-5195725428",
+          "feeTransactions": [
+            { "date": "2023-12-15", "description": "NSF FEE", "amount": 35, "category": "NSF" },
+            { "date": "2023-12-20", "description": "MONTHLY FEE", "amount": 10, "category": "Service Charge" }
+          ],
+          "identityMap": {
+            "legalName": "MAAS TREATS AND TREASURES LLC",
+            "anchorStatus": "found"
+          }
+        },
+        {
+          "fileName": "feb.pdf",
+          "totalDeposits": 152679.96,
+          "totalWithdrawals": 285831.04,
+          "openingBalance": 439.35,
+          "closingBalance": 1857.38,
+          "coveragePeriod": {
+            "startDate": "2024-02-01",
+            "endDate": "2024-02-29",
+            "daysCovered": 29
+          },
+          "parseQuality": "FAILED_CHECKSUM",
+          "checksumOk": false,
+          "accountKey": "WELLS FARGO-5195725428"
+        },
+        {
+          "fileName": "jan.pdf",
+          "totalDeposits": 192416.79,
+          "totalWithdrawals": 48825.65,
+          "openingBalance": 2507.76,
+          "closingBalance": 439.35,
+          "coveragePeriod": {
+            "startDate": "2025-01-01",
+            "endDate": "2025-01-31",
+            "daysCovered": 31
+          },
+          "parseQuality": "FAILED_CHECKSUM",
+          "checksumOk": false,
+          "accountKey": "WELLS FARGO-5195725428"
+        }
+      ]
+    },
+    "transactions": []
+  }
+}

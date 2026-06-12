@@ -1,0 +1,24 @@
+// Zoho Deluge — Attach WorkDrive live link to Deal (undocumented $type pattern)
+// Requires OAuth connection with CRM + WorkDrive scopes.
+
+dealId = input.dealId;
+workdriveFileUrl = input.workdriveFileUrl;
+fileName = input.fileName;
+
+data = Map();
+data.put("$type", "teamdrive");
+data.put("$link_url", workdriveFileUrl);
+data.put("File_Name", fileName);
+
+payload = Map();
+payload.put("data", {data});
+
+response = invokeurl
+[
+	url :"https://www.zohoapis.com/crm/v8/Deals/" + dealId + "/Attachments"
+	type :POST
+	parameters:payload
+	connection:"crm_workdrive"
+];
+
+info "WorkDrive link attached to deal " + dealId + ": " + response;

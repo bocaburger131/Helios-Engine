@@ -1,0 +1,46 @@
+# Dockerfile for Bank Statement Analyzer with Redis Streams
+FROM node:18-alpine AS base
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apk add --no-cache \
+    curl \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Copy package files
+COPY package*.json ./
+COPY pnpm-lock.yaml* ./
+
+# Install dependencies
+RUN npm ci --only=production && npm cache clean --force
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nextjs -u 1001
+
+# Copy application code
+COPY --chown=nextjs:nodejs . .
+
+# Create necessary directories
+RUN mkdir -p logs uploads && \
+    chown -R nextjs:nodejs logs uploads
+
+# Set up environment
+ENV NODE_ENV=production
+ENV PORT=3001
+
+# Expose port
+EXPOSE 3001
+
+# Switch to non-root user
+USER nextjs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3001/health || exit 1
+
+# Default command (can be overridden)
+CMD ["node", "start-redis-streams.js"]

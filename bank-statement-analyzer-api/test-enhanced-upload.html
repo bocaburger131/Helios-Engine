@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Bank Statement Analyzer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-section {
+            border: 2px dashed #3498db;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .upload-section.dragover {
+            border-color: #2980b9;
+            background-color: #ecf0f1;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        input[type="number"] {
+            width: 200px;
+            padding: 8px;
+            margin: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #7f8c8d;
+        }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        .result-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-left: 4px solid #3498db;
+            background-color: white;
+        }
+        .result-section h3 {
+            color: #2c3e50;
+            margin-top: 0;
+        }
+        .metric {
+            display: inline-block;
+            margin: 5px 15px 5px 0;
+            padding: 8px 12px;
+            background-color: #ecf0f1;
+            border-radius: 4px;
+        }
+        .metric.positive {
+            background-color: #d5edda;
+            color: #155724;
+        }
+        .metric.negative {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .risk-low { color: #28a745; }
+        .risk-medium { color: #ffc107; }
+        .risk-high { color: #dc3545; }
+        .error {
+            color: #e74c3c;
+            background-color: #f8d7da;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .nsf-transaction {
+            background-color: #f8d7da;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            border-left: 3px solid #dc3545;
+        }
+        .transaction-sample {
+            background-color: #f8f9fa;
+            padding: 8px;
+            margin: 3px 0;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏦 Enhanced Bank Statement Analyzer</h1>
+        <p style="text-align: center; color: #7f8c8d;">
+            Upload your bank statement PDF to get comprehensive financial analysis with risk assessment
+        </p>
+
+        <div class="upload-section" id="uploadSection">
+            <h3>📄 Upload Bank Statement PDF</h3>
+            <input type="file" id="fileInput" accept=".pdf" />
+            <br>
+            <label for="openingBalance">💰 Opening Balance ($):</label>
+            <input type="number" id="openingBalance" placeholder="1000.00" step="0.01" />
+            <br>
+            <button onclick="uploadFile()" id="uploadBtn">Analyze Statement</button>
+        </div>
+
+        <div id="loading" class="loading" style="display: none;">
+            <h3>🔄 Processing your statement...</h3>
+            <p>Extracting transactions and calculating risk analysis...</p>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="results" class="results" style="display: none;">
+            <!-- Results will be inserted here -->
+        </div>
+    </div>
+
+    <script>
+        let uploadedFile = null;
+
+        // File input handler
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            uploadedFile = e.target.files[0];
+            updateUploadButton();
+        });
+
+        // Drag and drop handlers
+        const uploadSection = document.getElementById('uploadSection');
+        
+        uploadSection.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadSection.classList.add('dragover');
+        });
+
+        uploadSection.addEventListener('dragleave', () => {
+            uploadSection.classList.remove('dragover');
+        });
+
+        uploadSection.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                document.getElementById('fileInput').files = files;
+                uploadedFile = files[0];
+                updateUploadButton();
+            }
+        });
+
+        function updateUploadButton() {
+            const btn = document.getElementById('uploadBtn');
+            if (uploadedFile) {
+                btn.textContent = `Analyze ${uploadedFile.name}`;
+                btn.disabled = false;
+            } else {
+                btn.textContent = 'Analyze Statement';
+                btn.disabled = true;
+            }
+        }
+
+        async function uploadFile() {
+            if (!uploadedFile) {
+                showError('Please select a PDF file');
+                return;
+            }
+
+            const openingBalance = document.getElementById('openingBalance').value || '0';
+
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('uploadBtn').disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('statement', uploadedFile);
+                formData.append('openingBalance', openingBalance);
+
+                const response = await fetch('/api/statements-enhanced/analyze', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        // Note: In a real app, you'd include authentication headers here
+                        // 'Authorization': 'Bearer ' + authToken
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayResults(result.data);
+                } else {
+                    showError(result.error || 'Analysis failed');
+                }
+
+            } catch (error) {
+                console.error('Upload error:', error);
+                showError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            
+            const html = `
+                <h2>📊 Analysis Results</h2>
+                
+                <div class="result-section">
+                    <h3>📄 File Information</h3>
+                    <div class="metric">File: ${data.fileInfo.filename}</div>
+                    <div class="metric">Size: ${(data.fileInfo.fileSize / 1024).toFixed(1)} KB</div>
+                    <div class="metric">Processed: ${new Date(data.fileInfo.processedAt).toLocaleString()}</div>
+                </div>
+
+                <div class="result-section">
+                    <h3>📈 Transaction Summary</h3>
+                    <div class="metric">Total Transactions: ${data.transactionSummary.totalTransactions}</div>
+                    <div class="metric positive">Credits: ${data.transactionSummary.creditTransactions}</div>
+                    <div class="metric negative">Debits: ${data.transactionSummary.debitTransactions}</div>
+                    <div class="metric">Period: ${data.transactionSummary.dateRange.daysCovered} days</div>
+                </div>
+
+                <div class="result-section">
+                    <h3>💰 Financial Summary</h3>
+                    <div class="metric">Opening Balance: $${data.financialSummary.openingBalance.toFixed(2)}</div>
+                    <div class="metric positive">Total Deposits: $${data.financialSummary.totalDeposits.toFixed(2)}</div>
+                    <div class="metric negative">Total Withdrawals: $${data.financialSummary.totalWithdrawals.toFixed(2)}</div>
+                    <div class="metric ${data.financialSummary.netChange >= 0 ? 'positive' : 'negative'}">
+                        Net Change: $${data.financialSummary.netChange.toFixed(2)}
+                    </div>
+                    <div class="metric">Estimated Closing: $${data.financialSummary.estimatedClosingBalance.toFixed(2)}</div>
+                </div>
+
+                <div class="result-section">
+                    <h3>⚖️ Balance Analysis</h3>
+                    <div class="metric">Average Daily Balance: $${data.balanceAnalysis.averageDailyBalance.toFixed(2)}</div>
+                    <div class="metric">Analysis Period: ${data.balanceAnalysis.periodDays} days</div>
+                </div>
+
+                <div class="result-section">
+                    <h3>⚠️ NSF Analysis</h3>
+                    <div class="metric ${data.nsfAnalysis.nsfCount > 0 ? 'negative' : 'positive'}">
+                        NSF Count: ${data.nsfAnalysis.nsfCount}
+                    </div>
+                    ${data.nsfAnalysis.nsfTransactions.length > 0 ? `
+                        <h4>NSF Transactions:</h4>
+                        ${data.nsfAnalysis.nsfTransactions.map(t => `
+                            <div class="nsf-transaction">
+                                ${t.date}: ${t.description} - $${Math.abs(t.amount).toFixed(2)}
+                            </div>
+                        `).join('')}
+                    ` : ''}
+                </div>
+
+                <div class="result-section">
+                    <h3>🎯 Risk Analysis</h3>
+                    <div class="metric">Risk Score: ${data.riskAnalysis.riskScore}/100</div>
+                    <div class="metric risk-${data.riskAnalysis.riskLevel.toLowerCase()}">
+                        Risk Level: ${data.riskAnalysis.riskLevel}
+                    </div>
+                    <h4>Risk Factors:</h4>
+                    <ul>
+                        ${data.riskAnalysis.riskFactors.map(factor => `<li>${factor}</li>`).join('')}
+                    </ul>
+                    <h4>Recommendations:</h4>
+                    <ul>
+                        ${data.riskAnalysis.recommendations.map(rec => `<li>${rec}</li>`).join('')}
+                    </ul>
+                </div>
+
+                ${data.categoryBreakdown ? `
+                <div class="result-section">
+                    <h3>📊 Category Breakdown</h3>
+                    ${Object.entries(data.categoryBreakdown).map(([category, stats]) => `
+                        <div class="metric">
+                            ${category}: ${stats.count} transactions, $${stats.totalAmount.toFixed(2)} total
+                        </div>
+                    `).join('')}
+                </div>
+                ` : ''}
+
+                ${data.sampleTransactions && data.sampleTransactions.length > 0 ? `
+                <div class="result-section">
+                    <h3>📝 Sample Transactions (First 10)</h3>
+                    ${data.sampleTransactions.map(t => `
+                        <div class="transaction-sample">
+                            ${t.date} | ${t.description} | $${t.amount.toFixed(2)} | ${t.type}
+                        </div>
+                    `).join('')}
+                </div>
+                ` : ''}
+            `;
+
+            resultsDiv.innerHTML = html;
+            resultsDiv.style.display = 'block';
+        }
+
+        // Initialize
+        updateUploadButton();
+    </script>
+</body>
+</html>

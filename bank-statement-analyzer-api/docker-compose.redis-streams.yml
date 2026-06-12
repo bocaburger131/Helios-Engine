@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  # Redis with Streams support
+  redis:
+    image: redis:7-alpine
+    container_name: bank-analyzer-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MongoDB
+  mongodb:
+    image: mongo:7
+    container_name: bank-analyzer-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: bank-statement-analyzer
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongodb/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Bank Statement Analyzer API with Redis Streams
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.redis-streams
+    container_name: bank-analyzer-api
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      MONGODB_URI: mongodb://admin:password@mongodb:27017/bank-statement-analyzer?authSource=admin
+      REDIS_URL: redis://redis:6379
+      ENABLE_WORKERS: "true"
+      ENABLE_CLUSTERING: "false"
+      MAX_WORKERS: 4
+      STATEMENT_WORKERS: 2
+      CATEGORIZATION_WORKERS: 3
+      RISK_WORKERS: 2
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key}
+      API_KEY_SECRET: ${API_KEY_SECRET:-your-api-key-secret}
+      AI_CACHE_ENABLED: "true"
+      AI_CACHE_TTL: 86400
+      AI_CACHE_MAX_SIZE: 10000
+      LOG_LEVEL: info
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Redis Commander (Optional - for Redis monitoring)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: bank-analyzer-redis-commander
+    hostname: redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # MongoDB Express (Optional - for MongoDB monitoring)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: bank-analyzer-mongo-express
+    ports:
+      - "8082:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: password
+      ME_CONFIG_MONGODB_URL: mongodb://admin:password@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-admin}
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Worker Manager (Separate container for scaling workers)
+  workers:
+    build:
+      context: .
+      dockerfile: Dockerfile.redis-streams
+    container_name: bank-analyzer-workers
+    command: ["node", "src/workers/workerManager.js"]
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://admin:password@mongodb:27017/bank-statement-analyzer?authSource=admin
+      REDIS_URL: redis://redis:6379
+      ENABLE_CLUSTERING: "true"
+      MAX_WORKERS: 6
+      STATEMENT_WORKERS: 2
+      CATEGORIZATION_WORKERS: 3
+      RISK_WORKERS: 2
+      AI_CACHE_ENABLED: "true"
+      AI_CACHE_TTL: 86400
+      LOG_LEVEL: info
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - workers-separate
+
+volumes:
+  redis_data:
+    driver: local
+  mongodb_data:
+    driver: local
+
+networks:
+  default:
+    name: bank-analyzer-network

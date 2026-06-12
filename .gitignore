@@ -24,13 +24,23 @@ dist/
 
 # Runtime / uploads / logs
 uploads/
+**/uploads/
+bank-statement-analyzer-api/logs/
 *.log
 logs/
 test-results/
+**/.next/
+
+# Python cache
+**/__pycache__/
+*.pyc
 
 # Local databases and caches
 ruvector.db
+**/ruvector.db
 .claude/memory.db
+.swarm/memory.db
+.swarm/memory.db-*
 
 # Claude Flow daemon (local only)
 .claude-flow/daemon.pid

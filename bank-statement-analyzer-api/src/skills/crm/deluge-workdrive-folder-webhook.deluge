@@ -1,0 +1,29 @@
+// Zoho Deluge — WorkDrive folder created → notify Helios
+// Call after zoho.workdrive.createFolder or createTeamFolder in a Deal workflow.
+
+dealId = input.dealId;
+folderId = input.folderId;
+folderName = input.folderName;
+workdriveUrl = "https://workdrive.zoho.com/file/" + folderId;
+
+payload = Map();
+payload.put("event", "workdrive.folder.created");
+payload.put("dealId", dealId.toString());
+payload.put("correlationId", dealId.toString());
+payload.put("folderId", folderId);
+payload.put("folderName", folderName);
+payload.put("workdriveUrl", workdriveUrl);
+
+headers = Map();
+headers.put("Content-Type", "application/json");
+headers.put("X-Helios-Webhook-Secret", "HELIOS_WEBHOOK_SECRET");
+
+response = invokeurl
+[
+	url :"HELIOS_WEBHOOK_URL/api/crm/webhooks/zoho/workdrive-folder"
+	type :POST
+	parameters:payload.toString()
+	headers:headers
+];
+
+info "Helios workdrive-folder webhook response: " + response;

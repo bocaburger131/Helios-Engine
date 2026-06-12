@@ -1,0 +1,33 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment
+.env
+.env.*
+
+# Version control
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Tests
+test/
+coverage/
+*.test.js
+
+# Documentation
+*.md
+docs/
+
+# Build
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Temp files
+*.log
+*.tmp

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Multi-File Upload Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .upload-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .upload-area {
+            border: 2px dashed #007bff;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            background-color: #f8f9fa;
+        }
+        .upload-area.dragover {
+            background-color: #e3f2fd;
+            border-color: #2196f3;
+        }
+        .file-list {
+            margin: 20px 0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            justify-content: space-between;
+        }
+        .file-item button {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-primary:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .progress {
+            margin-top: 20px;
+            display: none;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #28a745;
+            width: 0%;
+            transition: width 0.3s;
+            text-align: center;
+            color: white;
+            line-height: 20px;
+        }
+        .results {
+            margin-top: 20px;
+        }
+        .result-item {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+        .result-success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .result-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Multi-File Upload Test</h1>
+    
+    <div class="upload-container">
+        <div>
+            <div class="upload-area" id="uploadArea">
+                <h3>📁 Drop files here or click to select</h3>
+                <p>Supports PDF and CSV files (max 10 files, 50MB each)</p>
+                <input type="file" id="fileInput" multiple accept=".pdf,.csv" style="display: none;">
+                <button class="btn-primary" onclick="document.getElementById('fileInput').click()">
+                    Select Files
+                </button>
+            </div>
+            
+            <div class="file-list" id="fileList"></div>
+            
+            <div style="margin: 20px 0;">
+                <label>Bank Name: <input type="text" id="bankName" value="Test Bank"></label><br><br>
+                <label>Account Name: <input type="text" id="accountName" value="Test Account"></label>
+            </div>
+            
+            <button class="btn-primary" id="uploadBtn" onclick="uploadFiles()" disabled>
+                Upload All Files
+            </button>
+            <button class="btn-primary" onclick="clearFiles()">Clear</button>
+            
+            <div class="progress" id="progress">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill">0%</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="results">
+            <h3>📊 Upload Results</h3>
+            <div id="results"></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const results = document.getElementById('results');
+        const progress = document.getElementById('progress');
+        const progressFill = document.getElementById('progressFill');
+
+        // File selection
+        fileInput.addEventListener('change', (e) => {
+            addFiles(e.target.files);
+        });
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            addFiles(e.dataTransfer.files);
+        });
+
+        function addFiles(files) {
+            for (let file of files) {
+                if (selectedFiles.length >= 10) {
+                    alert('Maximum 10 files allowed');
+                    break;
+                }
+                
+                const isDuplicate = selectedFiles.some(f => 
+                    f.name === file.name && f.size === file.size
+                );
+                
+                if (!isDuplicate) {
+                    selectedFiles.push(file);
+                }
+            }
+            
+            updateFileList();
+            uploadBtn.disabled = selectedFiles.length === 0;
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+            uploadBtn.disabled = selectedFiles.length === 0;
+        }
+
+        function updateFileList() {
+            fileList.innerHTML = '';
+            selectedFiles.forEach((file, index) => {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                item.innerHTML = `
+                    <span>${file.name} (${(file.size / 1024).toFixed(2)} KB)</span>
+                    <button onclick="removeFile(${index})">Remove</button>
+                `;
+                fileList.appendChild(item);
+            });
+        }
+
+        function clearFiles() {
+            selectedFiles = [];
+            fileInput.value = '';
+            updateFileList();
+            uploadBtn.disabled = true;
+            results.innerHTML = '';
+            progress.style.display = 'none';
+        }
+
+        async function uploadFiles() {
+            if (selectedFiles.length === 0) {
+                alert('Please select files to upload');
+                return;
+            }
+
+            uploadBtn.disabled = true;
+            progress.style.display = 'block';
+            results.innerHTML = '';
+
+            const formData = new FormData();
+            
+            // Add files
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+            
+            // Add metadata
+            formData.append('bankName', document.getElementById('bankName').value);
+            formData.append('accountName', document.getElementById('accountName').value);
+
+            try {
+                // First, get a test token (in production, use real authentication)
+                const token = await getTestToken();
+                
+                const response = await fetch('http://localhost:3000/api/statements/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
+                });
+
+                const data = await response.json();
+                displayResults(data);
+                
+                if (data.successful > 0) {
+                    progressFill.style.width = '100%';
+                    progressFill.textContent = '100%';
+                }
+                
+            } catch (error) {
+                results.innerHTML = `
+                    <div class="result-item result-error">
+                        <h4>❌ Upload Failed</h4>
+                        <p>${error.message}</p>
+                        <p>Make sure the server is running and authentication is configured.</p>
+                    </div>
+                `;
+            } finally {
+                uploadBtn.disabled = false;
+            }
+        }
+
+        async function getTestToken() {
+            // For testing, create a user and get token
+            // In production, use your login flow
+            try {
+                const response = await fetch('http://localhost:3000/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: 'test@example.com',
+                        password: 'testpassword'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    return data.token;
+                }
+            } catch (error) {
+                console.log('Using test token');
+            }
+            
+            // Return a test token if login fails
+            return 'test-token';
+        }
+
+        function displayResults(data) {
+            let html = `
+                <div class="result-item">
+                    <strong>${data.message}</strong><br>
+                    ✅ Successful: ${data.successful}<br>
+                    ❌ Failed: ${data.failed}
+                </div>
+            `;
+
+            if (data.results && data.results.length > 0) {
+                html += '<h4>Successful Uploads:</h4>';
+                data.results.forEach(result => {
+                    html += `
+                        <div class="result-item result-success">
+                            ✅ ${result.fileName}<br>
+                            ID: ${result.statementId}<br>
+                            <small>URL: ${result.fileUrl}</small>
+                        </div>
+                    `;
+                });
+            }
+
+            if (data.errors && data.errors.length > 0) {
+                html += '<h4>Failed Uploads:</h4>';
+                data.errors.forEach(error => {
+                    html += `
+                        <div class="result-item result-error">
+                            ❌ ${error.file}<br>
+                            Error: ${error.error}
+                        </div>
+                    `;
+                });
+            }
+
+            results.innerHTML = html;
+        }
+
+        // Check server on load
+        fetch('http://localhost:3000/health')
+            .then(res => res.json())
+            .then(data => {
+                console.log('Server status:', data);
+            })
+            .catch(err => {
+                results.innerHTML = `
+                    <div class="result-item result-error">
+                        <h4>⚠️ Server Not Running</h4>
+                        <p>Start the server with: <code>npm run dev</code></p>
+                    </div>
+                `;
+            });
+    </script>
+</body>
+</html>

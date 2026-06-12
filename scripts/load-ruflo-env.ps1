@@ -21,7 +21,6 @@ foreach ($line in Get-Content $envFile) {
 }
 
 $binPath = Join-Path $env:USERPROFILE '.local\bin'
-$logPath = Join-Path $repoRoot 'debug-e9c255.log'
 
 # Refresh PATH from registry (fixes Cursor terminals opened before User PATH was updated)
 $merged = [System.Collections.Generic.List[string]]::new()
@@ -37,22 +36,6 @@ if ((Test-Path $binPath) -and ($merged -notcontains $binPath)) {
   $merged.Insert(0, $binPath)
 }
 $env:PATH = ($merged | Select-Object -Unique) -join ';'
-
-#region agent log
-$logEntry = @{
-  sessionId    = 'e9c255'
-  runId        = 'post-fix'
-  hypothesisId = 'H1'
-  location     = 'load-ruflo-env.ps1'
-  message      = 'PATH refresh'
-  data         = @{
-    sessionPathHasLocalBin = ($env:PATH -like "*\.local\bin*")
-    claudeFound            = [bool](Get-Command claude -ErrorAction SilentlyContinue)
-  }
-  timestamp    = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-} | ConvertTo-Json -Compress
-Add-Content -Path $logPath -Value $logEntry -Encoding utf8
-#endregion
 
 foreach ($k in $keys) {
   if (Get-Item "env:$k" -ErrorAction SilentlyContinue) {

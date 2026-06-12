@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sign in — Helios Engine</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, #0f172a 0%, #1e3a5f 50%, #0f172a 100%);
+      color: #f8fafc;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: #fff;
+      color: #0f172a;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    p.sub { margin: 0 0 24px; color: #64748b; font-size: 0.9rem; }
+    label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 6px; color: #475569; }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      font-size: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .status { margin-top: 16px; font-size: 0.85rem; min-height: 1.2em; }
+    .status.error { color: #dc2626; }
+    .hint { margin-top: 20px; font-size: 0.78rem; color: #94a3b8; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Helios Engine</h1>
+    <p class="sub">Shift 4 Funding — sign in with your credentials</p>
+    <form id="login-form">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" autocomplete="username" required />
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+    <p class="status" id="status" role="status"></p>
+    <p class="hint">Default seed: admin@shift4funding.com / password123</p>
+  </div>
+  <script src="./js/helios-auth.js"></script>
+  <script>
+    (function () {
+      const form = document.getElementById('login-form');
+      const status = document.getElementById('status');
+      const btn = document.getElementById('submit-btn');
+      const params = new URLSearchParams(location.search);
+      const redirect = params.get('redirect') || './manual-upload.html';
+
+      if (HeliosAuth.isValidJwt(HeliosAuth.getToken())) {
+        location.replace(redirect);
+        return;
+      }
+
+      HeliosAuth.setBaseUrl(location.origin);
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        status.textContent = '';
+        status.className = 'status';
+        btn.disabled = true;
+        try {
+          await HeliosAuth.login(
+            document.getElementById('email').value.trim(),
+            document.getElementById('password').value,
+            location.origin
+          );
+          location.replace(redirect);
+        } catch (err) {
+          status.textContent = err.message || 'Login failed';
+          status.className = 'status error';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

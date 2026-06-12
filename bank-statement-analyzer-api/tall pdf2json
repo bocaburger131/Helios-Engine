@@ -1,0 +1,208 @@
+[33mcommit b3a8398d581512e278fdc575175c4a057abe080c[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m
+Author: Bocaburger <Gbriceno88@gmail.com>
+Date:   Wed May 28 00:54:01 2025 -0700
+
+    Initial project setup
+
+[1mdiff --git a/src/services/pdfParserService.js b/src/services/pdfParserService.js[m
+[1mnew file mode 100644[m
+[1mindex 0000000..fecf049[m
+[1m--- /dev/null[m
+[1m+++ b/src/services/pdfParserService.js[m
+[36m@@ -0,0 +1,195 @@[m
+[32m+[m[32mconst pdf = require('pdf-parse');[m
+[32m+[m
+[32m+[m[32m// Helper function to extract dates using multiple common formats[m
+[32m+[m[32mconst extractDate = (text) => {[m
+[32m+[m[32m    const datePatterns = [[m
+[32m+[m[32m        /\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/, // DD/MM/YYYY or DD-MM-YYYY[m
+[32m+[m[32m        /\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b/, // YYYY/MM/DD or YYYY-MM-DD[m
+[32m+[m[32m        /\b(\w+)\s+(\d{1,2}),?\s+(20\d{2})\b/      // Month DD, YYYY[m
+[32m+[m[32m    ];[m
+[32m+[m
+[32m+[m[32m    for (const pattern of datePatterns) {[m
+[32m+[m[32m        const match = text.match(pattern);[m
+[32m+[m[32m        if (match) {[m
+[32m+[m[32m            // Convert to YYYY-MM-DD format[m
+[32m+[m[32m            try {[m
+[32m+[m[32m                const date = new Date(match[0]);[m
+[32m+[m[32m                return date.toISOString().split('T')[0];[m
+[32m+[m[32m            } catch (e) {[m
+[32m+[m[32m                console.warn('Date parsing failed:', match[0]);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return null;[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32m// Helper to extract currency amounts[m
+[32m+[m[32mconst extractAmount = (text) => {[m
+[32m+[m[32m    // Handle various currency formats[m
+[32m+[m[32m    const amountPattern = /[-]?\$?\s*[\d,]+\.?\d*/g;[m
+[32m+[m[32m    const match = text.match(amountPattern);[m
+[32m+[m[32m    if (match) {[m
+[32m+[m[32m        // Clean up and convert to number[m
+[32m+[m[32m        return Number(match[0].replace(/[$,\s]/g, ''));[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return null;[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32m// Main parsing function with enhanced structure[m
+[32m+[m[32mexports.parsePdf = async (pdfBuffer) => {[m
+[32m+[m[32m    try {[m
+[32m+[m[32m        const data = await pdf(pdfBuffer);[m
+[32m+[m[32m        const lines = data.text.split('\n').map(line => line.trim()).filter(Boolean);[m
+[32m+[m[41m        [m
+[32m+[m[32m        // Initialize structured data object[m
+[32m+[m[32m        const result = {[m
+[32m+[m[32m            accountInfo: {[m
+[32m+[m[32m                accountHolder: null,[m
+[32m+[m[32m                accountNumber: null,[m
+[32m+[m[32m                bankName: null,[m
+[32m+[m[32m                statementPeriod: {[m
+[32m+[m[32m                    startDate: null,[m
+[32m+[m[32m                    endDate: null[m
+[32m+[m[32m                },[m
+[32m+[m[32m                balances: {[m
+[32m+[m[32m                    opening: null,[m
+[32m+[m[32m                    closing: null[m
+[32m+[m[32m                }[m
+[32m+[m[32m            },[m
+[32m+[m[32m            transactions: [],[m
+[32m+[m[32m            rawText: data.text,[m
+[32m+[m[32m            pageCount: data.numpages,[m
+[32m+[m[32m            parsingMetadata: {[m
+[32m+[m[32m                confidence: 'medium',[m
+[32m+[m[32m                warningMessages: [][m
+[32m+[m[32m            }[m
+[32m+[m[32m        };[m
+[32m+[m
+[32m+[m[32m        // Extract account information using common patterns[m
+[32m+[m[32m        for (const line of lines) {[m
+[32m+[m[32m            // Look for account number[m
+[32m+[m[32m            if (line.match(/acc(oun)?t\s*(no|number|#)?:?\s*(\d+)/i)) {[m
+[32m+[m[32m                result.accountInfo.accountNumber = line.match(/(\d{8,})/)[0];[m
+[32m+[m[32m            }[m
+[32m+[m[41m            [m
+[32m+[m[32m            // Look for account holder (usually near the top, often with "Mr/Mrs/Ms")[m
+[32m+[m[32m            if (line.match(/(mr|mrs|ms|dr)\.?\s+[\w\s]+/i) && !result.accountInfo.accountHolder) {[m
+[32m+[m[32m                result.accountInfo.accountHolder = line.trim();[m
+[32m+[m[32m            }[m
+[32m+[m
+[32m+[m[32m            // Look for statement period[m
+[32m+[m[32m            if (line.toLowerCase().includes('statement period') ||[m[41m [m
+[32m+[m[32m                line.toLowerCase().includes('statement date')) {[m
+[32m+[m[32m                const dates = line.match(/\b\d{1,2}[/-]\d{1,2}[/-]20\d{2}\b/g);[m
+[32m+[m[32m                if (dates && dates.length >= 2) {[m
+[32m+[m[32m                    result.accountInfo.statementPeriod.startDate = extractDate(dates[0]);[m
+[32m+[m[32m                    result.accountInfo.statementPeriod.endDate = extractDate(dates[1]);[m
+[32m+[m[32m                }[m
+[32m+[m[32m            }[m
+[32m+[m
+[32m+[m[32m            // Look for opening/closing balances[m
+[32m+[m[32m            if (line.toLowerCase().includes('opening balance')) {[m
+[32m+[m[32m                result.accountInfo.balances.opening = extractAmount(line);[m
+[32m+[m[32m            }[m
+[32m+[m[32m            if (line.toLowerCase().includes('closing balance')) {[m
+[32m+[m[32m                result.accountInfo.balances.closing = extractAmount(line);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        // Extract transactions[m
+[32m+[m[32m        // This is the most complex part - we'll look for patterns that might indicate transaction lines[m
+[32m+[m[32m        let currentTransaction = null;[m
+[32m+[m[32m        const transactionStartPatterns = [[m
+[32m+[m[32m            /^\d{1,2}[/-]\d{1,2}[/-]20\d{2}/,  // Starts with date[m
+[32m+[m[32m            /^\d{2}\s+[A-Z]{3}/                 // Starts with day + month abbreviation[m
+[32m+[m[32m        ];[m
+[32m+[m
+[32m+[m[32m        for (const line of lines) {[m
+[32m+[m[32m            // Check if line might be start of new transaction[m
+[32m+[m[32m            const isTransactionStart = transactionStartPatterns.some(pattern => pattern.test(line));[m
+[32m+[m[41m            [m
+[32m+[m[32m            if (isTransactionStart) {[m
+[32m+[m[32m                // If we have a previous transaction, save it[m
+[32m+[m[32m                if (currentTransaction) {[m
+[32m+[m[32m                    result.transactions.push(currentTransaction);[m
+[32m+[m[32m                }[m
+[32m+[m
+[32m+[m[32m                // Start new transaction[m
+[32m+[m[32m                currentTransaction = {[m
+[32m+[m[32m                    date: extractDate(line),[m
+[32m+[m[32m                    description: line.replace(/^\d{1,2}[/-]\d{1,2}[/-]20\d{2}/, '').trim(),[m
+[32m+[m[32m                    debit: null,[m
+[32m+[m[32m                    credit: null,[m
+[32m+[m[32m                    balance: null,[m
+[32m+[m[32m                    raw: line // Keep raw line for debugging[m
+[32m+[m[32m                };[m
+[32m+[m
+[32m+[m[32m                // Extract amounts[m
+[32m+[m[32m                const amounts = line.match(/[-]?\$?\s*[\d,]+\.?\d*/g);[m
+[32m+[m[32m                if (amounts) {[m
+[32m+[m[32m                    // Logic to determine which amount is debit/credit/balance[m
+[32m+[m[32m                    // This varies by bank format - here's a simple example[m
+[32m+[m[32m                    if (amounts.length >= 3) {[m
+[32m+[m[32m                        currentTransaction.debit = extractAmount(amounts[0]);[m
+[32m+[m[32m                        currentTransaction.credit = extractAmount(amounts[1]);[m
+[32m+[m[32m                        currentTransaction.balance = extractAmount(amounts[2]);[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                }[m
+[32m+[m[32m            } else if (currentTransaction && line.trim()) {[m
+[32m+[m[32m                // If not a new transaction and we have text, it might be[m
+[32m+[m[32m                // continuation of previous transaction description[m
+[32m+[m[32m                currentTransaction.description += ' ' + line.trim();[m
+[32m+[m[41m                [m
+[32m+[m[32m                // Check for amounts in continuation line[m
+[32m+[m[32m                const amounts = line.match(/[-]?\$?\s*[\d,]+\.?\d*/g);[m
+[32m+[m[32m                if (amounts && (!currentTransaction.debit || !currentTransaction.credit)) {[m
+[32m+[m[32m                    // Try to fill in missing amounts[m
+[32m+[m[32m                    if (!currentTransaction.debit) currentTransaction.debit = extractAmount(amounts[0]);[m
+[32m+[m[32m                    if (!currentTransaction.credit) currentTransaction.credit = extractAmount(amounts[1]);[m
+[32m+[m[32m                }[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        // Don't forget to add the last transaction if exists[m
+[32m+[m[32m        if (currentTransaction) {[m
+[32m+[m[32m            result.transactions.push(currentTransaction);[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        // Add confidence level based on what we found[m
+[32m+[m[32m        result.parsingMetadata.confidence = determineConfidenceLevel(result);[m
+[32m+[m[41m        [m
+[32m+[m[32m        return result;[m
+[32m+[m
+[32m+[m[32m    } catch (error) {[m
+[32m+[m[32m        console.error('Error parsing PDF:', error);[m
+[32m+[m[32m        throw new Error('Failed to parse PDF content: ' + error.message);[m
+[32m+[m[32m    }[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32m// Helper to determine confidence level in our parsing[m
+[32m+[m[32mfunction determineConfidenceLevel(result) {[m
+[32m+[m[32m    let score = 0;[m
+[32m+[m[32m    const checks = {[m
+[32m+[m[32m        hasAccountNumber: !!result.accountInfo.accountNumber,[m
+[32m+[m[32m        hasAccountHolder: !!result.accountInfo.accountHolder,[m
+[32m+[m[32m        hasStatementPeriod: !!(result.accountInfo.statementPeriod.startDate &&[m[41m [m
+[32m+[m[32m                              result.accountInfo.statementPeriod.endDate),[m
+[32m+[m[32m        hasBalances: !!(result.accountInfo.balances.opening !== null ||[m[41m [m
+[32m+[m[32m                       result.accountInfo.balances.closing !== null),[m
+[32m+[m[32m        hasTransactions: result.transactions.length > 0,[m
+[32m+[m[32m        transactionsHaveData: result.transactions.every(t =>[m[41m [m
+[32m+[m[32m            t.date && (t.debit !== null || t.credit !== null))[m
+[32m+[m[32m    };[m
+[32m+[m
+[32m+[m[32m    // Calculate confidence score[m
+[32m+[m[32m    score += checks.hasAccountNumber ? 20 : 0;[m
+[32m+[m[32m    score += checks.hasAccountHolder ? 15 : 0;[m
+[32m+[m[32m    score += checks.hasStatementPeriod ? 15 : 0;[m
+[32m+[m[32m    score += checks.hasBalances ? 20 : 0;[m
+[32m+[m[32m    score += checks.hasTransactions ? 15 : 0;[m
+[32m+[m[32m    score += checks.transactionsHaveData ? 15 : 0;[m
+[32m+[m
+[32m+[m[32m    if (score >= 90) return 'high';[m
+[32m+[m[32m    if (score >= 60) return 'medium';[m
+[32m+[m[32m    return 'low';[m
+[32m+[m[32m}[m
+\ No newline at end of file[m

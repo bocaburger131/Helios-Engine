@@ -1,0 +1,141 @@
+import redisStreamService from '../services/redisStreamService.js';
+import ZohoCrmService from '../services/crm/zoho.service.js';
+import logger from '../utils/logger.js';
+import { AppError } from '../utils/errors.js';
+
+// Initialize Zoho CRM service
+let zohoCrmService = null;
+
+/**
+ * Initialize the Zoho CRM service with configuration
+ */
+const initializeZohoCrmService = () => {
+  if (!zohoCrmService) {
+    const config = {
+      clientId: process.env.ZOHO_CLIENT_ID,
+      clientSecret: process.env.ZOHO_CLIENT_SECRET,
+      refreshToken: process.env.ZOHO_REFRESH_TOKEN,
+      apiDomain: process.env.ZOHO_API_DOMAIN || 'https://www.zohoapis.com',
+      apiVersion: 'v2'
+    };
+    
+    if (config.clientId && config.clientSecret && config.refreshToken) {
+      zohoCrmService = new ZohoCrmService(config);
+      logger.info('Zoho CRM service initialized successfully');
+    } else {
+      logger.warn('Zoho CRM service not initialized - missing required environment variables');
+    }
+  }
+  return zohoCrmService;
+};
+
+/**
+ * Start analysis of bank statements for a Zoho deal
+ */
+export const startAnalysis = async (req, res, next) => {
+  try {
+    const { dealId } = req.body;
+    
+    if (!dealId) {
+      throw new AppError('Deal ID is required.', 400);
+    }
+
+    logger.info(`Starting analysis for Deal ID: ${dealId}`, { dealId });
+
+    // Quick validation and file fetch
+    const crm = req.crmService || initializeZohoCrmService();
+    if (!crm) {
+      throw new AppError('Zoho CRM service not initialized', 500);
+    }
+
+    // Fetch attachments from Zoho
+    const attachments = await crm.getAttachmentsForDeal(dealId);
+    const bankStatementFiles = attachments.filter(file => 
+      file.fileName.toLowerCase().endsWith('.pdf')
+    );
+
+    if (bankStatementFiles.length === 0) {
+      logger.warn(`No PDF statements found for Deal ID: ${dealId}`, { dealId });
+      return res.status(200).json({
+        success: true,
+        message: 'No PDF bank statements found to analyze.'
+      });
+    }
+
+    // Add job to Redis stream
+    const jobId = await redisStreamService.addToStream(
+      redisStreamService.streams.STATEMENT_UPLOAD,
+      { 
+        type: 'statement_analysis',
+        payload: {
+          dealId, 
+          files: bankStatementFiles,
+        },
+        metadata: {
+          totalFiles: bankStatementFiles.length,
+          fileNames: bankStatementFiles.map(f => f.fileName)
+        }
+      }
+    );
+
+    // Return immediate success response
+    res.status(202).json({
+      success: true,
+      message: 'Analysis started. Results will be available in Zoho CRM.',
+      data: {
+        jobId,
+        dealId,
+        filesQueued: bankStatementFiles.length,
+        statusEndpoint: `/api/zoho/analysis-status/${jobId}`
+      }
+    });
+
+  } catch (error) {
+    logger.error(`Error starting analysis for Deal ID: ${req.body.dealId}`, {
+      dealId: req.body.dealId,
+      error: error.message
+    });
+    next(error);
+  }
+};
+
+/**
+ * Get the status of an analysis job
+ */
+export const getAnalysisStatus = async (req, res, next) => {
+  try {
+    const { jobId } = req.params;
+    
+    if (!jobId) {
+      throw new AppError('Job ID is required.', 400);
+    }
+
+    const streamInfo = await redisStreamService.getStreamInfo(
+      redisStreamService.streams.STATEMENT_UPLOAD
+    );
+    
+    const status = streamInfo.firstEntry ? streamInfo.firstEntry[1] : null;
+    
+    if (!status) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        jobId,
+        status: redisStreamService.parseMessage(status)
+      }
+    });
+
+  } catch (error) {
+    logger.error(`Error getting analysis status for Job ID: ${req.params.jobId}`, {
+      jobId: req.params.jobId,
+      error: error.message
+    });
+    next(error);
+  }
+};
