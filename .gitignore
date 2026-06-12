@@ -40,9 +40,13 @@ ruvector.db
 **/ruvector.db
 **/.mongodb-data/
 bank-statement-analyzer-api/.mongodb-data/
-.claude/memory.db
-.swarm/memory.db
-.swarm/memory.db-*
+**/.swarm/memory.db
+**/.swarm/memory.db-*
+**/data/memory/
+**/.claude/memory.db
+**/.jest-cache/
+bank-statement-analyzer-api/temp_test_output.txt
+bank-statement-analyzer-api/*-test.png
 
 # Claude Flow daemon (local only)
 .claude-flow/daemon.pid
