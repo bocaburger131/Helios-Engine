@@ -1,3 +1,4 @@
+import logger from '../utils/logger.js';
 import { fileUploadService } from './fileUpload.service.js';
 import { documentParserService } from './documentParser.service.js';
 import { statementExtractorService } from './statementExtractor.service.js';
@@ -27,7 +28,7 @@ export class StatementProcessingService {
     // Process asynchronously
     this.processStatementAsync(fileInfo.path, initialStatement._id, userId)
       .catch(error => {
-        console.error('Statement processing failed:', error);
+        logger.error('Statement processing failed:', error);
         // Update statement with error
         statementRepository.updateParseStatus(
           initialStatement._id, 
@@ -99,7 +100,7 @@ export class StatementProcessingService {
         const tempFiles = path.join(dirName, 'temp_*');
         // Remove temp files if any
       } catch (e) {
-        console.error('Error cleaning up temp files:', e);
+        logger.error('Error cleaning up temp files:', e);
       }
     }
   }

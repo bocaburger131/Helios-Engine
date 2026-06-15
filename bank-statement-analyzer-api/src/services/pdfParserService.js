@@ -4,7 +4,6 @@ import fs from 'fs/promises';
 import logger from '../utils/logger.js';
 import { logStructured } from '../utils/structuredLog.js';
 import { PDFParseError } from '../utils/errors.js';
-import { categorizeTransactions } from './categorizationService.js';
 import { PerplexityService } from './perplexityService.js';
 import { pickNumeric, hasValidAmountPattern, getAmountContext } from '../utils/financialValidation.js';
 import { getAbsurdityThreshold } from '../utils/amountSanityGuardrails.js';
@@ -1021,31 +1020,24 @@ export class PDFParserService {
     });
 
 
-    console.log('--- Constructed Lines (New Logic) ---');
-    lines.forEach((line, i) => {
-        console.log(`Line ${i}:`, line.map(t => `"${t.text}"@${t.x.toFixed(2)}`).join(' | '));
-    });
-    console.log('------------------------------------');
-
-
     const dateRegex = /^\d{2}-\d{2}/;
     let inTransactionSection = false;
     let multiLineDescription = '';
 
     for (const line of lines) {
         const trimmedLine = line.text.trim();
-        console.log(`Processing Line: "${trimmedLine}" | inTransactionSection: ${inTransactionSection}`);
+        logger.debug(`[_extractTfsTransactionsFromData] Processing Line: "${trimmedLine}" | inTransactionSection: ${inTransactionSection}`);
 
         if (trimmedLine.includes('Date Transaction Detail Amount($) Balance($)')) {
             inTransactionSection = true;
             multiLineDescription = ''; // Reset on new section
-            console.log('Transaction section started.');
+            logger.debug('[_extractTfsTransactionsFromData] Transaction section started.');
             continue;
         }
 
         if (trimmedLine.includes('Ending Balance') || trimmedLine.includes('Average Daily Balance') || trimmedLine.includes('Items Paid')) {
             if (inTransactionSection) {
-                console.log('Transaction section ended.');
+                logger.debug('[_extractTfsTransactionsFromData] Transaction section ended.');
                 inTransactionSection = false;
             }
             continue;
@@ -1061,12 +1053,12 @@ export class PDFParserService {
             // If we have a pending multi-line description, it belongs to the previous transaction, which we can't easily map back.
             // For now, we'll reset it. A more advanced implementation might hold the previous transaction and append to its description.
             if (multiLineDescription) {
-                console.log(`Discarding multi-line description: "${multiLineDescription}"`);
+                logger.debug('[_extractTfsTransactionsFromData] Discarding multi-line description.');
                 multiLineDescription = '';
             }
 
             if (trimmedLine.includes('Beginning Balance')) {
-                console.log('Skipping "Beginning Balance" line.');
+                logger.debug('[_extractTfsTransactionsFromData] Skipping "Beginning Balance" line.');
                 continue;
             }
 
@@ -1103,31 +1095,31 @@ export class PDFParserService {
                     amount = -Math.abs(amount);
                 }
                 
-                console.log(`Parsed: date=${date}, desc=${description}, amount=${amount}, balance=${balance}, type=${type}`);
+                logger.debug('[_extractTfsTransactionsFromData] Parsed transaction row.', { date, type });
 
                 if (date && description && !isNaN(amount) && !isNaN(balance)) {
                     transactions.push({ date, description, amount, balance, type });
-                    console.log(`Added transaction: ${JSON.stringify(transactions[transactions.length - 1])}`);
+                    logger.debug(`[_extractTfsTransactionsFromData] Added transaction #${transactions.length}`);
                 } else {
-                    console.log('Incomplete transaction data, might be a multi-line description.');
+                    logger.debug('[_extractTfsTransactionsFromData] Incomplete transaction data, might be a multi-line description.');
                     multiLineDescription = description; // Store for next line
                 }
             } else {
-                console.log('Line did not match transaction regex.');
+                logger.debug('[_extractTfsTransactionsFromData] Line did not match transaction regex.');
             }
         } else if (inTransactionSection && transactions.length > 0) {
             // This is likely a continuation of a description
             const lastTransaction = transactions[transactions.length - 1];
             if (lastTransaction) {
                 const newDescription = `${lastTransaction.description} ${trimmedLine}`;
-                console.log(`Appending to description of last transaction. New description: "${newDescription}"`);
+                logger.debug('[_extractTfsTransactionsFromData] Appending to description of last transaction.');
                 lastTransaction.description = newDescription;
             }
         }
     }
 
 
-    console.log(`Found ${transactions.length} transactions.`);
+    logger.debug(`[_extractTfsTransactionsFromData] Found ${transactions.length} transactions.`);
     return transactions;
   }
 

@@ -1730,14 +1730,14 @@ class StatementController {
     
     try {
       // Debug logging
-      console.log('📝 DEBUG - Upload request received');
-      console.log('📝 DEBUG - req.file:', req.file ? 'EXISTS' : 'MISSING');
-      console.log('📝 DEBUG - req.body:', req.body);
-      console.log('📝 DEBUG - req.user:', req.user);
+      logger.debug('📝 DEBUG - Upload request received');
+      logger.debug('📝 DEBUG - req.file:', req.file ? 'EXISTS' : 'MISSING');
+      logger.debug('📝 DEBUG - req.body:', req.body);
+      logger.debug('📝 DEBUG - req.user:', req.user);
       
       // Step 1: Receive the uploaded PDF file
       if (!req.file) {
-        console.log('📝 DEBUG - No file found, returning 400');
+        logger.debug('📝 DEBUG - No file found, returning 400');
         return res.status(400).json({ 
           success: false, 
           error: 'No PDF file uploaded' 
@@ -1754,18 +1754,18 @@ class StatementController {
 
       // Validate uploadId is present
       // #region agent log
-      console.log('📝 TRACE-1: pre-uploadId-check, uploadId=', req.body.uploadId);
+      logger.debug('📝 TRACE-1: pre-uploadId-check, uploadId=', req.body.uploadId);
       // #endregion
       if (!req.body.uploadId) {
         // #region agent log
-        console.log('📝 TRACE-2: no uploadId – calling res.status(400).json');
+        logger.debug('📝 TRACE-2: no uploadId – calling res.status(400).json');
         // #endregion
         const r400 = res.status(400).json({
           success: false,
           error: 'Upload ID is required'
         });
         // #region agent log
-        console.log('📝 TRACE-3: 400 sent for missing uploadId');
+        logger.debug('📝 TRACE-3: 400 sent for missing uploadId');
         // #endregion
         return r400;
       }
@@ -1774,11 +1774,11 @@ class StatementController {
       const fileExt = path.extname(req.file.originalname).toLowerCase();
       const fileMime = req.file.mimetype || '';
       // #region agent log
-      console.log('📝 TRACE-4: file type check, ext=', fileExt, 'mime=', fileMime);
+      logger.debug('📝 TRACE-4: file type check, ext=', fileExt, 'mime=', fileMime);
       // #endregion
       if (fileExt !== '.pdf' && !fileMime.includes('pdf')) {
         // #region agent log
-        console.log('📝 TRACE-5: non-PDF – returning 400');
+        logger.debug('📝 TRACE-5: non-PDF – returning 400');
         // #endregion
         return res.status(400).json({
           success: false,
@@ -5853,7 +5853,7 @@ Vera's Underwriting Report:`;
       const pages = total > 0 ? Math.ceil(total / limit) : 0;
 
       // #region agent log
-      console.log('📝 GET-TRACE: statementList.length=', statementList.length, 'total=', total);
+      logger.debug('📝 GET-TRACE: statementList.length=', statementList.length, 'total=', total);
       // #endregion
       res.json({
         success: true,

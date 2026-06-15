@@ -70,12 +70,12 @@ const testModeEnabled = process.env.TEST_MODE === 'true' || process.env.NODE_ENV
 
 if (testModeEnabled) {
   router.get('/test/statements', (req, res) => {
-    console.log('[TEST MODE] Accessing /test/statements without auth');
+    logger.info('[TEST MODE] Accessing /test/statements without auth');
     return controller.getStatements(req, res);
   });
   
   router.get('/test/aggregate-summary', (req, res) => {
-    console.log('[TEST MODE] Accessing /test/aggregate-summary without auth');
+    logger.info('[TEST MODE] Accessing /test/aggregate-summary without auth');
     return controller.getAggregatedAnalysis(req, res);
   });
 }

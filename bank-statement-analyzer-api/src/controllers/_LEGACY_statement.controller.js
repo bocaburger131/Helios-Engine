@@ -169,25 +169,25 @@ class StatementController {
   async processStatementAsync(statementId) {
     let statement;
     try {
-      console.log(`[START] processStatementAsync for ${statementId}`);
+      logger.debug(`[START] processStatementAsync for ${statementId}`);
       statement = await Statement.findById(statementId).select('+user');
       if (!statement || !statement.user) {
         throw new Error(`Statement or statement.user not found for id: ${statementId}`);
       }
-      console.log(`[1] Fetched statement, user: ${statement.user}`);
+      logger.debug(`[1] Fetched statement, user: ${statement.user}`);
 
       statement.status = 'PROCESSING';
       statement.logs.push({ timestamp: new Date(), message: 'Statement processing started.' });
       await statement.save();
-      console.log(`[2] Saved status: PROCESSING`);
+      logger.debug(`[2] Saved status: PROCESSING`);
 
       const filePath = statement.filePath;
       
-      console.log(`[PRE-BUFFER] Reading file buffer from: ${filePath}`);
+      logger.debug(`[PRE-BUFFER] Reading file buffer from: ${filePath}`);
       const fileBuffer = await fs.readFile(filePath);
-      console.log(`[POST-BUFFER] File buffer read successfully. Length: ${fileBuffer.length}`);
+      logger.debug(`[POST-BUFFER] File buffer read successfully. Length: ${fileBuffer.length}`);
 
-      console.log(`[PRE-PARSE] Calling pdfParserService.parseStatement with buffer.`);
+      logger.debug(`[PRE-PARSE] Calling pdfParserService.parseStatement with buffer.`);
       const parsedData = await Promise.race([
         pdfParserService.parseStatement(fileBuffer), // Pass buffer directly
         new Promise((_, reject) => 
@@ -195,8 +195,8 @@ class StatementController {
         )
       ]);
 
-      console.log(`[3] PDF parsed`);
-      console.log(`[3.0] Parsed data:`, {
+      logger.debug(`[3] PDF parsed`);
+      logger.debug(`[3.0] Parsed data:`, {
         bankName: parsedData.bankName,
         accountNumber: parsedData.accountNumber,
         openingBalance: parsedData.openingBalance,
@@ -208,18 +208,18 @@ class StatementController {
       // Update statement with parsed data (only non-null, non-undefined values)
       if (parsedData.bankName && parsedData.bankName !== 'Unknown') {
         statement.bankName = parsedData.bankName;
-        console.log(`[3.1] Updated bankName: ${parsedData.bankName}`);
+        logger.debug(`[3.1] Updated bankName: ${parsedData.bankName}`);
       }
       if (parsedData.accountNumber) {
         statement.accountNumber = parsedData.accountNumber;
       }
       if (parsedData.openingBalance !== undefined && parsedData.openingBalance !== null) {
         statement.openingBalance = parsedData.openingBalance;
-        console.log(`[3.2] Updated openingBalance: ${parsedData.openingBalance}`);
+        logger.debug(`[3.2] Updated openingBalance: ${parsedData.openingBalance}`);
       }
       if (parsedData.closingBalance !== undefined && parsedData.closingBalance !== null) {
         statement.closingBalance = parsedData.closingBalance;
-        console.log(`[3.3] Updated closingBalance: ${parsedData.closingBalance}`);
+        logger.debug(`[3.3] Updated closingBalance: ${parsedData.closingBalance}`);
       }
       if (parsedData.statementDate) {
         statement.statementDate = parsedData.statementDate;
@@ -241,28 +241,28 @@ class StatementController {
       
       // Save updated statement data
       await statement.save();
-      console.log(`[3.4] Statement updated with parsed data`);
+      logger.debug(`[3.4] Statement updated with parsed data`);
 
       if (!statement.user) throw new Error('[ERROR] User lost after PDF parsing');
-      console.log(`[4] User still present: ${statement.user}`);
+      logger.debug(`[4] User still present: ${statement.user}`);
 
       const transactions = await transactionService.saveTransactions(parsedData.transactions, statementId, statement.user);
-      console.log(`[5] Transactions saved`);
+      logger.debug(`[5] Transactions saved`);
 
       if (!statement.user) throw new Error('[ERROR] User lost after saving transactions');
-      console.log(`[6] User still present: ${statement.user}`);
+      logger.debug(`[6] User still present: ${statement.user}`);
 
       const analysis = await riskAnalysisService.analyze(statementId, transactions);
-      console.log(`[7] Risk analysis complete`);
+      logger.debug(`[7] Risk analysis complete`);
 
       statement.status = 'COMPLETED';
       statement.analysis = analysis;
       statement.logs.push({ timestamp: new Date(), message: 'Statement processing completed successfully.' });
       await statement.save();
-      console.log(`[SUCCESS] processStatementAsync for ${statementId}`);
+      logger.debug(`[SUCCESS] processStatementAsync for ${statementId}`);
 
     } catch (error) {
-      console.error(`[CRITICAL] processStatementAsync for ${statementId}`, { message: error.message, stack: error.stack });
+      logger.error(`[CRITICAL] processStatementAsync for ${statementId}`, { message: error.message, stack: error.stack });
       if (statement) {
         statement.status = 'FAILED';
         statement.error = { message: error.message, stack: error.stack, timestamp: new Date() };

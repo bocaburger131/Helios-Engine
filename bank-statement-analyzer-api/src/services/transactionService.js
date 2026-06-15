@@ -11,12 +11,11 @@ class TransactionService {
    */
   async saveTransactions(transactionData, statementId, userId) {
     // --- BEGIN DEBUG LOG ---
-    console.log('--- transactionService.saveTransactions ---');
-    console.log('Received transactionData count:', transactionData?.length);
-    console.log('Received statementId:', statementId);
-    console.log('Received userId:', userId);
-    console.log('Type of userId:', typeof userId);
-    // --- END DEBUG LOG ---
+    logger.debug('transactionService.saveTransactions called', {
+      count: transactionData?.length,
+      statementId,
+      userId
+    });
 
     if (!userId) {
       // Use a more descriptive error message

@@ -1,16 +1,14 @@
 /**
  * Zod schema for financial alerts used throughout the Helios Engine.
  *
- * Matches the normalized alert shape at statementController.js:5431-5439
- * and all alert builders (identityCrossCheckService, templateGraduationService,
- * macroBestEffort, etc.).
+ * Sources: AlertsEngineService, identityCrossCheckService, templateGraduationService,
+ *          macroBestEffort, statementController (inline), amountSanityGuardrails,
+ *          statementValidator, macroAnalytics, crmReconciliationService.
  */
 import { z } from 'zod';
 
 /**
  * Alert code enum — union of all codes observed across the codebase.
- * Sources: identityCrossCheckService, templateGraduationService, macroBestEffort,
- *          AlertsEngineService, statementController (inline), amountSanityGuardrails.
  */
 export const ALERT_CODES = [
   // ── Reconciliation / checksum ──
@@ -60,6 +58,38 @@ export const ALERT_CODES = [
   'HIGH_VOLUME_ACTIVITY',
   'OFAC_SCREENING_REQUIRED',
 
+  // ── AlertsEngineService — data quality ──
+  'INCOMPLETE_APPLICATION_DATA',
+  'DATA_INCONSISTENCY',
+  'INSUFFICIENT_TRANSACTION_DATA',
+
+  // ── AlertsEngineService — fraud indicators ──
+  'SUSPICIOUS_ROUND_AMOUNTS',
+  'UNUSUAL_TIMING_PATTERN',
+
+  // ── AlertsEngineService — debt service ──
+  'HIGH_DEBT_SERVICE_RATIO',
+
+  // ── AlertsEngineService — industry ──
+  'HIGH_RISK_INDUSTRY',
+  'CASH_INTENSIVE_HIGH_VELOCITY',
+
+  // ── AlertsEngineService — time in business ──
+  'TIME_IN_BUSINESS_DISCREPANCY',
+
+  // ── statementValidator.js — forensic flags ──
+  'ROUND_DOLLAR_SPIKE',
+  'WEEKEND_CLEARING',
+  'HIGH_TXN_VOLUME',
+
+  // ── macroAnalytics.js ──
+  'NSF_CLUSTER',
+  'MCA_STACKING',
+  'NON_REVENUE_DEPOSITS',
+
+  // ── crmReconciliationService.js ──
+  'DATA_CONFLICT',
+
   // ── Error / fallback ──
   'REVENUE_VERIFICATION_ERROR',
   'ALERT_GENERATION_ERROR',
@@ -78,15 +108,15 @@ export const ALERT_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 /**
  * Schema for an individual alert object.
  *
- * All fields are required at save time; the normalization step (5431-5439)
- * supplies defaults for type, title, recommendation, and data before they
- * reach the schema, so we keep them required here.
+ * type and title are optional with defaults because many alert sources
+ * (especially AlertsEngineService inline alerts) don't provide them.
+ * The defaults are applied at parse time for consistent data shape.
  */
 export const alertSchema = z.object({
   code: z.enum(ALERT_CODES),
-  type: z.enum(ALERT_TYPES),
+  type: z.enum(ALERT_TYPES).default('COMPLIANCE'),
   severity: z.enum(ALERT_SEVERITIES),
-  title: z.string().min(1, 'Alert title is required'),
+  title: z.string().default(''),
   message: z.string().min(1, 'Alert message is required'),
   recommendation: z.string().default(''),
   data: z.record(z.unknown()).default({}),

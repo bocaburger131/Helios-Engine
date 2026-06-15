@@ -1,6 +1,7 @@
 /**
  * Minimal Authentication Middleware for Testing
  */
+import logger from '../utils/logger.js';
 
 export const authenticateToken = async (req, res, next) => {
   try {
@@ -33,7 +34,7 @@ export const authenticateToken = async (req, res, next) => {
     
     next();
   } catch (error) {
-    console.error('Authentication error:', error);
+    logger.error('Authentication error:', error);
     return res.status(500).json({
       success: false,
       error: 'Authentication service error'

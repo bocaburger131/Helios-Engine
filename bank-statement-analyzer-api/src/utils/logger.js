@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import winston from 'winston';
 
 const SKIP_META_KEYS = new Set([
@@ -60,6 +61,33 @@ function resolveHeadline(info) {
   }
   return '';
 }
+
+// --- PII Redaction Functions ---
+
+/**
+ * Hashes a string for logging, to prevent PII leakage.
+ * @param {string|null|undefined} input
+ * @returns {string}
+ */
+export function hashForLog(input) {
+  if (!input) return '[EMPTY]';
+  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 12);
+}
+
+/**
+ * Redacts potentially sensitive log snippets/messages.
+ * @param {string|null|undefined} message
+ * @returns {string}
+ */
+export function redactLogData(message) {
+  if (!message) return '[REDACTED]';
+  // Return a generic message for snippets/errors, or a very short truncated hash
+  // if more detail is needed for debugging without leaking full content.
+  // For this task, we'll just indicate redaction.
+  return '[REDACTED_DATA]';
+}
+
+// --------------------------------
 
 const consolePrintf = winston.format.printf((info) => {
   const level = info.level;
