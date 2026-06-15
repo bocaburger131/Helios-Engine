@@ -193,13 +193,11 @@ const statementSchema = new mongoose.Schema({
   },
   openingBalance: {
     type: Number,
-    default: 0,
-    min: [0, 'Opening balance cannot be negative']
+    default: 0
   },
   closingBalance: {
     type: Number,
-    default: 0,
-    min: [0, 'Closing balance cannot be negative']
+    default: 0
   },
   transactionCount: {
     type: Number,

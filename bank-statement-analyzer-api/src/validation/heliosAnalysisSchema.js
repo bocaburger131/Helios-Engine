@@ -112,8 +112,8 @@ export const analyticsSchema = z.object({
   totalTransactions: z.number().int().nonnegative(),
   totalIncome: z.number(),
   totalExpenses: z.number(),
-  statementPeriodStart: z.string().nullable().optional(),
-  statementPeriodEnd: z.string().nullable().optional(),
+  statementPeriodStart: z.coerce.date().nullable().optional(),
+  statementPeriodEnd: z.coerce.date().nullable().optional(),
   riskMetrics: z.object({
     overdraftCount: z.number().int().nonnegative(),
     riskScore: z.number(),
@@ -123,8 +123,8 @@ export const analyticsSchema = z.object({
 // ── Processing info sub-object ─────────────────────────────────
 
 export const processingSchema = z.object({
-  startedAt: z.string(),
-  completedAt: z.string(),
+  startedAt: z.coerce.date(),
+  completedAt: z.coerce.date(),
   duration: z.number().nonnegative(),
   processor: z.string(),
   version: z.string(),

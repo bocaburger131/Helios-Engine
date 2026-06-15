@@ -9,23 +9,61 @@ import { z } from 'zod';
 
 /**
  * Alert code enum — union of all codes observed across the codebase.
+ * Sources: identityCrossCheckService, templateGraduationService, macroBestEffort,
+ *          AlertsEngineService, statementController (inline), amountSanityGuardrails.
  */
 export const ALERT_CODES = [
+  // ── Reconciliation / checksum ──
   'RECONCILIATION_MISMATCH',
   'IDENTITY_MISMATCH',
   'CRITICAL_TAMPERING_ALERT',
   'PARSING_BLEED_DETECTED',
-  'REVENUE_VERIFICATION_ERROR',
-  'ALERT_GENERATION_ERROR',
+
+  // ── AlertsEngineService — cross-report ──
+  'INCONSISTENT_NSF_PATTERNS',
+  'BALANCE_INCONSISTENCY',
+  'MULTI_ACCOUNT_HIGH_RISK',
+
+  // ── AlertsEngineService — revenue ──
+  'ANNUAL_REVENUE_DISCREPANCY',
   'BUSINESS_NAME_MISMATCH',
   'GROSS_ANNUAL_REVENUE_MISMATCH',
-  'NSF_TRANSACTION_ALERT',
+
+  // ── AlertsEngineService — NSF / balance ──
+  'HIGH_NSF_COUNT',
+  'NEGATIVE_BALANCE_DAYS',
   'LOW_AVERAGE_BALANCE',
-  'NEGATIVE_BALANCE_ALERT',
-  'FREQUENT_LOW_BALANCE',
+
+  // ── AlertsEngineService — cash flow ──
+  'NEGATIVE_CASH_FLOW',
+  'HIGH_WITHDRAWAL_RATIO',
   'HIGH_VELOCITY_RATIO',
   'INCOME_INSTABILITY',
-] ;
+
+  // ── AlertsEngineService — deposit / withdrawal patterns ──
+  'LARGE_DEPOSIT_PATTERN',
+  'POTENTIAL_STRUCTURING',
+  'LARGE_CASH_WITHDRAWALS',
+  'EXCESSIVE_ATM_USAGE',
+
+  // ── AlertsEngineService — business verification ──
+  'BUSINESS_NOT_VERIFIED',
+  'BUSINESS_INACTIVE_STATUS',
+  'NEWLY_REGISTERED_BUSINESS',
+
+  // ── AlertsEngineService — credit risk ──
+  'VERY_HIGH_CREDIT_RISK',
+  'HIGH_CREDIT_RISK',
+  'MODERATE_CREDIT_RISK',
+
+  // ── AlertsEngineService — compliance ──
+  'HIGH_VOLUME_ACTIVITY',
+  'OFAC_SCREENING_REQUIRED',
+
+  // ── Error / fallback ──
+  'REVENUE_VERIFICATION_ERROR',
+  'ALERT_GENERATION_ERROR',
+];
 
 /**
  * Alert type enum.
