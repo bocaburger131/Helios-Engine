@@ -107,6 +107,11 @@ import {
   tagMacroTransactionsFromStatement
 } from '../utils/macroBestEffort.js';
 
+// ── Zod validation schemas ──
+import { validateData } from '../validation/validateData.js';
+import { heliosAnalysisSchema, analyticsSchema, processingSchema } from '../validation/heliosAnalysisSchema.js';
+import { alertSchema } from '../validation/alertSchema.js';
+
 /**
  * Waterfall Analysis Criteria Configuration
  * Controls when expensive third-party API calls should be made
@@ -2425,6 +2430,16 @@ class StatementController {
         },
         alerts: checksumAlert ? [checksumAlert] : []
       };
+
+      // ── Zod validation (single-file path) ──
+      if (checksumAlert) {
+        const alertResult = validateData(alertSchema, checksumAlert, { label: 'singleFile.checksumAlert' });
+        if (!alertResult.ok) {
+          logger.warn('Single-file checksum alert failed schema validation', {
+            errors: alertResult.errors.slice(0, 3),
+          });
+        }
+      }
 
       // Create new Statement document
       const statement = new Statement(statementData);
@@ -5362,6 +5377,25 @@ Vera's Underwriting Report:`;
         return a.rtnKey.localeCompare(b.rtnKey);
       });
       const macroInstitutionalProfileId = macroProfileCandidates[0]?.profileId ?? null;
+
+      // ── Zod schema validation (best-effort; logs warnings but does not block) ──
+      const macroDocValidation = validateData(heliosAnalysisSchema, consolidatedMacroAnalysis, { label: 'heliosAnalysisSchema' });
+      if (!macroDocValidation.ok) {
+        logger.warn('heliosAnalysisSchema validation failed before Statement.create', {
+          errorCount: macroDocValidation.errors.length,
+          sampleErrors: macroDocValidation.errors.slice(0, 5),
+        });
+      }
+      // Validate each alert
+      for (let i = 0; i < allAlerts.length; i++) {
+        const alertResult = validateData(alertSchema, allAlerts[i], { label: `alertSchema[${i}]` });
+        if (!alertResult.ok) {
+          logger.warn(`Alert[${i}] failed schema validation`, {
+            code: allAlerts[i].code,
+            errors: alertResult.errors.slice(0, 3),
+          });
+        }
+      }
 
       const savedStatement = await Statement.create({
         user: (userId !== 'anonymous' && mongoose.Types.ObjectId.isValid(userId)) ? userId : new mongoose.Types.ObjectId(),
