@@ -5391,7 +5391,7 @@ Vera's Underwriting Report:`;
         const alertResult = validateData(alertSchema, allAlerts[i], { label: `alertSchema[${i}]` });
         if (!alertResult.ok) {
           logger.warn(`Alert[${i}] failed schema validation`, {
-            code: allAlerts[i].code,
+            code: allAlerts[i]?.code,
             errors: alertResult.errors.slice(0, 3),
           });
         }

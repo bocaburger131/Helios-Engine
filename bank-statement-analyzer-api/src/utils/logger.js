@@ -71,7 +71,8 @@ function resolveHeadline(info) {
  */
 export function hashForLog(input) {
   if (!input) return '[EMPTY]';
-  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 12);
+  const str = typeof input === 'string' ? input : String(input);
+  return crypto.createHash('sha256').update(str).digest('hex').substring(0, 12);
 }
 
 /**

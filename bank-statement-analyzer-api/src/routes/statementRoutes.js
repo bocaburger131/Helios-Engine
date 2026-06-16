@@ -81,8 +81,8 @@ if (testModeEnabled) {
 }
 
 // Maintain backwards compatibility with legacy root endpoints
-router.post('/', authenticateToken, validateBody(uploadStatementSchema), upload.single('statement'), controller.uploadStatement);
-router.post('/batch/triage', authenticateToken, validateBody(triageSchema), upload.array('statements', 20), controller.triageStatements);
+router.post('/', authenticateToken, upload.single('statement'), validateBody(uploadStatementSchema), controller.uploadStatement);
+router.post('/batch/triage', authenticateToken, upload.array('statements', 20), validateBody(triageSchema), controller.triageStatements);
 router.get('/batch/progress/:correlationId', authenticateToken, controller.getBatchProgress);
 router.get('/batch/jobs/:jobId', authenticateToken, controller.getMacroBatchJob);
 router.get(
@@ -91,7 +91,7 @@ router.get(
   controller.getTriageSessionFile
 );
 router.post('/batch/confirm-bank', authenticateToken, validateBody(confirmBankSchema), controller.confirmBankAndResume);
-router.post('/batch', authenticateToken, validateBody(batchUploadSchema), upload.array('statements', 20), controller.uploadStatements);
+router.post('/batch', authenticateToken, upload.array('statements', 20), validateBody(batchUploadSchema), controller.uploadStatements);
 
 // Demo-only login-free ingestion (gated by ENABLE_PUBLIC_UPLOAD + DEMO_MODE)
 const publicUploadChain = [
@@ -118,7 +118,7 @@ if (isPublicUploadEnabled()) {
 router.get('/', authenticateToken, controller.getStatements);
 
 // Core endpoints
-router.post('/upload', authenticateToken, validateBody(uploadStatementSchema), upload.single('statement'), controller.uploadStatement);
+router.post('/upload', authenticateToken, upload.single('statement'), validateBody(uploadStatementSchema), controller.uploadStatement);
 router.get('/list', authenticateToken, controller.getStatements);
 router.get('/aggregate-summary', authenticateToken, controller.getAggregatedAnalysis);
 router.post('/analysis/chat', authenticateToken, controller.chatAboutStatements);
