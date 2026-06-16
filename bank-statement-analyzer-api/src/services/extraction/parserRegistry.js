@@ -71,9 +71,28 @@ export function listParserAdapters(ctx = {}) {
  * @returns {Promise<ParseAdapterResult|null>}
  */
 export async function parseWithRegistry(buffer, ctx, meta = {}) {
-  const adapter = selectParserAdapter(ctx);
+  let adapter = selectParserAdapter(ctx);
   if (!adapter) return null;
-  const result = await adapter.parse(buffer, meta);
+
+  let result = await adapter.parse(buffer, meta);
+
+  // Rescue path: if digital PDF yielded zero transactions, try scan OCR as a fallback.
+  if (
+    !result.success &&
+    result.error === 'zero_transactions' &&
+    ctx.extractionMode === EXTRACTION_MODES.DIGITAL_PDF
+  ) {
+    const rescueCtx = { ...ctx, extractionMode: EXTRACTION_MODES.SCAN, rescue: true };
+    const scanAdapter = selectParserAdapter(rescueCtx);
+
+    if (scanAdapter) {
+      const scanResult = await scanAdapter.parse(buffer, meta);
+      if (scanResult.success && scanResult.transactions.length > 0) {
+        result = scanResult;
+        adapter = scanAdapter; // Use the scan adapter's ID in metadata
+      }
+    }
+  }
   return {
     ...result,
     metadata: {

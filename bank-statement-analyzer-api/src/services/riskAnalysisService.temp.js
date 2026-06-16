@@ -323,7 +323,7 @@ const riskAnalysisService = {
       const batch = transactions.slice(i, i + batchSize);
       
       if (showProgress) {
-        console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(transactions.length / batchSize)}`);
+        logger.debug(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(transactions.length / batchSize)}`);
       }
 
       // Process batch in parallel

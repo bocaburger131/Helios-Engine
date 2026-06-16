@@ -36,11 +36,9 @@ class StorageService {
       };
       
       logger.info(`File uploaded successfully to local storage: ${fileName}`);
-      console.log('✅ File uploaded to local storage:', fileName);
       return fileData;
     } catch (error) {
       logger.error('Error uploading file to local storage:', error);
-      console.error('❌ Local storage upload error:', error);
       throw error;
     }
   }

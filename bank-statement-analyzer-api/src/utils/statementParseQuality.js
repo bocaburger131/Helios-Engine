@@ -22,6 +22,9 @@ import {
   dedupeExactFingerprints,
   parseDebugEnabled
 } from './parseDiagnosticReport.js';
+import { validateData } from '../validation/validateData.js';
+import { checksumReconSchema } from '../validation/checksumReconSchema.js';
+import { parseDiagnosticSchema } from '../validation/parseDiagnosticSchema.js';
 
 /**
  * Flip positive amounts on debit-hint lines when balance inference did not sign them.
@@ -118,6 +121,8 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
   if (reconInput.closingBalance != null) parsedStatement.closingBalance = reconInput.closingBalance;
 
   const checksumRecon = validateReconciliation(reconInput);
+  const reconValidation = validateData(checksumReconSchema, checksumRecon, { label: 'applyParseQualityPipeline.checksumRecon' });
+  if (!reconValidation.ok) { logger.warn('checksumRecon validation failed', { errors: reconValidation.errors.slice(0, 3) }); }
   parsedStatement.checksumRecon = checksumRecon;
 
   const validationReport = validateStatement(parsedStatement, {
@@ -146,6 +151,8 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
       checksumRecon,
       parseSanityStats: stats
     });
+    const diagValidation = validateData(parseDiagnosticSchema, parsedStatement.parseDiagnostic, { label: 'applyParseQualityPipeline.parseDiagnostic' });
+    if (!diagValidation.ok) { logger.warn('parseDiagnostic validation failed', { errors: diagValidation.errors.slice(0, 3) }); }
     if (!checksumRecon.ok) {
       logger.warn('[PARSE_DIAGNOSTIC] Checksum failed', {
         fileName: parsedStatement.fileName,

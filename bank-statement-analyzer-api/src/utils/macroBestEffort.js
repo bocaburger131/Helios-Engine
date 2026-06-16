@@ -3,6 +3,10 @@
  * @license Copyright (c) 2025 Shift 4 Financial INC
  */
 
+import { validateData } from '../validation/validateData.js';
+import { alertSchema } from '../validation/alertSchema.js';
+import logger from '../utils/logger.js';
+
 /**
  * @param {object} stmt
  * @param {boolean} bestEffortChecksumMode
@@ -34,7 +38,7 @@ export function batchHasUsableTransactions(parsedStatements) {
 export function buildChecksumGateBestEffortAlert(batchChecksumStats, minRatio, batchOutcome) {
   const ratioPct = (batchChecksumStats.ratio * 100).toFixed(0);
   const minPct = (minRatio * 100).toFixed(0);
-  return {
+  const alert = {
     code: 'RECONCILIATION_MISMATCH',
     type: 'COMPLIANCE',
     severity: 'HIGH',
@@ -49,6 +53,9 @@ export function buildChecksumGateBestEffortAlert(batchChecksumStats, minRatio, b
       parseOutcome: batchOutcome ?? null
     }
   };
+  const alertValidation = validateData(alertSchema, alert, { label: 'buildChecksumGateBestEffortAlert' });
+  if (!alertValidation.ok) { logger.warn('alert validation failed', { errors: alertValidation.errors.slice(0, 3) }); }
+  return alert;
 }
 
 /**

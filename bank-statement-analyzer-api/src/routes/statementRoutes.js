@@ -11,6 +11,13 @@ import { publicUploadRateLimit } from '../middleware/publicUploadRateLimit.js';
 import { isPublicUploadEnabled } from '../config/appMode.js';
 import logger from '../utils/logger.js';
 import enhancedAnalysisRoutes from './enhancedAnalysisRoutes.js';
+import {
+  validateBody,
+  uploadStatementSchema,
+  triageSchema,
+  batchUploadSchema,
+  confirmBankSchema,
+} from '../middleware/validateRequest.js';
 
 // Initialize router and controller
 const router = express.Router();
@@ -63,19 +70,19 @@ const testModeEnabled = process.env.TEST_MODE === 'true' || process.env.NODE_ENV
 
 if (testModeEnabled) {
   router.get('/test/statements', (req, res) => {
-    console.log('[TEST MODE] Accessing /test/statements without auth');
+    logger.info('[TEST MODE] Accessing /test/statements without auth');
     return controller.getStatements(req, res);
   });
   
   router.get('/test/aggregate-summary', (req, res) => {
-    console.log('[TEST MODE] Accessing /test/aggregate-summary without auth');
+    logger.info('[TEST MODE] Accessing /test/aggregate-summary without auth');
     return controller.getAggregatedAnalysis(req, res);
   });
 }
 
 // Maintain backwards compatibility with legacy root endpoints
-router.post('/', authenticateToken, upload.single('statement'), controller.uploadStatement);
-router.post('/batch/triage', authenticateToken, upload.array('statements', 20), controller.triageStatements);
+router.post('/', authenticateToken, validateBody(uploadStatementSchema), upload.single('statement'), controller.uploadStatement);
+router.post('/batch/triage', authenticateToken, validateBody(triageSchema), upload.array('statements', 20), controller.triageStatements);
 router.get('/batch/progress/:correlationId', authenticateToken, controller.getBatchProgress);
 router.get('/batch/jobs/:jobId', authenticateToken, controller.getMacroBatchJob);
 router.get(
@@ -83,8 +90,8 @@ router.get(
   authenticateToken,
   controller.getTriageSessionFile
 );
-router.post('/batch/confirm-bank', authenticateToken, controller.confirmBankAndResume);
-router.post('/batch', authenticateToken, upload.array('statements', 20), controller.uploadStatements);
+router.post('/batch/confirm-bank', authenticateToken, validateBody(confirmBankSchema), controller.confirmBankAndResume);
+router.post('/batch', authenticateToken, validateBody(batchUploadSchema), upload.array('statements', 20), controller.uploadStatements);
 
 // Demo-only login-free ingestion (gated by ENABLE_PUBLIC_UPLOAD + DEMO_MODE)
 const publicUploadChain = [
@@ -93,7 +100,7 @@ const publicUploadChain = [
   assignPublicGuest,
   upload.array('statements', 20)
 ];
-router.post('/batch/triage/public', ...publicUploadChain, controller.triageStatements);
+router.post('/batch/triage/public', ...publicUploadChain, validateBody(triageSchema), controller.triageStatements);
 router.get('/batch/progress/:correlationId/public', assignPublicGuest, controller.getBatchProgress);
 router.get('/batch/jobs/:jobId/public', assignPublicGuest, controller.getMacroBatchJob);
 router.get(
@@ -101,8 +108,8 @@ router.get(
   assignPublicGuest,
   controller.getTriageSessionFile
 );
-router.post('/batch/confirm-bank/public', assignPublicGuest, controller.confirmBankAndResume);
-router.post('/batch/public', ...publicUploadChain, controller.uploadStatements);
+router.post('/batch/confirm-bank/public', assignPublicGuest, validateBody(confirmBankSchema), controller.confirmBankAndResume);
+router.post('/batch/public', ...publicUploadChain, validateBody(batchUploadSchema), controller.uploadStatements);
 
 if (isPublicUploadEnabled()) {
   logger.info('[statementRoutes] Registered public upload: POST /batch/triage/public, POST /batch/public');
@@ -111,7 +118,7 @@ if (isPublicUploadEnabled()) {
 router.get('/', authenticateToken, controller.getStatements);
 
 // Core endpoints
-router.post('/upload', authenticateToken, upload.single('statement'), controller.uploadStatement);
+router.post('/upload', authenticateToken, validateBody(uploadStatementSchema), upload.single('statement'), controller.uploadStatement);
 router.get('/list', authenticateToken, controller.getStatements);
 router.get('/aggregate-summary', authenticateToken, controller.getAggregatedAnalysis);
 router.post('/analysis/chat', authenticateToken, controller.chatAboutStatements);

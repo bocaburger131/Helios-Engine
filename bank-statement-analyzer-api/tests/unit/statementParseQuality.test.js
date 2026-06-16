@@ -69,4 +69,21 @@ describe('statementParseQuality best-effort', () => {
     expect(batch.httpStatus).toBe(200);
     expect(capriStyleRows.length).toBeGreaterThan(0);
   });
+
+  it('summarizeBatchParseOutcomes handles mixed outcomes with no transactions', () => {
+    const batch = summarizeBatchParseOutcomes([
+      {
+        transactions: [{ amount: 50 }],
+        checksumRecon: { ok: false },
+        parseQuality: 'FAILED_CHECKSUM'
+      },
+      {
+        transactions: [],
+        checksumRecon: { ok: false },
+        parseQuality: 'FAILED_CHECKSUM'
+      }
+    ]);
+    expect(batch.httpStatus).toBe(422); // Because one of them has no transactions
+    expect(batch.primaryReason).toBe('no_transactions');
+  });
 });

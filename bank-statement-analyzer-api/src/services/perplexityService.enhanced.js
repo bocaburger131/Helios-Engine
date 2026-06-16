@@ -1,6 +1,7 @@
 // Enhanced PerplexityService with robust error handling and null checks
 import axios from 'axios';
 import { LLMError } from '../utils/errors.js';
+import logger from '../utils/logger.js';
 
 export class PerplexityService {
   constructor(options = {}) {
@@ -117,7 +118,7 @@ export class PerplexityService {
         }
       } catch (parseError) {
         // Fallback to text response if JSON parsing fails - this is expected
-        console.log('JSON parsing failed, falling back to text response');
+        logger.warn('JSON parsing failed, falling back to text response');
       }
       
       // Return as text analysis if JSON parsing fails

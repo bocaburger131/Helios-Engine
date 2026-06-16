@@ -107,6 +107,11 @@ import {
   tagMacroTransactionsFromStatement
 } from '../utils/macroBestEffort.js';
 
+// ── Zod validation schemas ──
+import { validateData } from '../validation/validateData.js';
+import { heliosAnalysisSchema, analyticsSchema, processingSchema } from '../validation/heliosAnalysisSchema.js';
+import { alertSchema } from '../validation/alertSchema.js';
+
 /**
  * Waterfall Analysis Criteria Configuration
  * Controls when expensive third-party API calls should be made
@@ -1725,14 +1730,14 @@ class StatementController {
     
     try {
       // Debug logging
-      console.log('📝 DEBUG - Upload request received');
-      console.log('📝 DEBUG - req.file:', req.file ? 'EXISTS' : 'MISSING');
-      console.log('📝 DEBUG - req.body:', req.body);
-      console.log('📝 DEBUG - req.user:', req.user);
+      logger.debug('📝 DEBUG - Upload request received');
+      logger.debug('📝 DEBUG - req.file:', req.file ? 'EXISTS' : 'MISSING');
+      logger.debug('📝 DEBUG - req.body:', req.body);
+      logger.debug('📝 DEBUG - req.user:', req.user);
       
       // Step 1: Receive the uploaded PDF file
       if (!req.file) {
-        console.log('📝 DEBUG - No file found, returning 400');
+        logger.debug('📝 DEBUG - No file found, returning 400');
         return res.status(400).json({ 
           success: false, 
           error: 'No PDF file uploaded' 
@@ -1749,18 +1754,18 @@ class StatementController {
 
       // Validate uploadId is present
       // #region agent log
-      console.log('📝 TRACE-1: pre-uploadId-check, uploadId=', req.body.uploadId);
+      logger.debug('📝 TRACE-1: pre-uploadId-check, uploadId=', req.body.uploadId);
       // #endregion
       if (!req.body.uploadId) {
         // #region agent log
-        console.log('📝 TRACE-2: no uploadId – calling res.status(400).json');
+        logger.debug('📝 TRACE-2: no uploadId – calling res.status(400).json');
         // #endregion
         const r400 = res.status(400).json({
           success: false,
           error: 'Upload ID is required'
         });
         // #region agent log
-        console.log('📝 TRACE-3: 400 sent for missing uploadId');
+        logger.debug('📝 TRACE-3: 400 sent for missing uploadId');
         // #endregion
         return r400;
       }
@@ -1769,11 +1774,11 @@ class StatementController {
       const fileExt = path.extname(req.file.originalname).toLowerCase();
       const fileMime = req.file.mimetype || '';
       // #region agent log
-      console.log('📝 TRACE-4: file type check, ext=', fileExt, 'mime=', fileMime);
+      logger.debug('📝 TRACE-4: file type check, ext=', fileExt, 'mime=', fileMime);
       // #endregion
       if (fileExt !== '.pdf' && !fileMime.includes('pdf')) {
         // #region agent log
-        console.log('📝 TRACE-5: non-PDF – returning 400');
+        logger.debug('📝 TRACE-5: non-PDF – returning 400');
         // #endregion
         return res.status(400).json({
           success: false,
@@ -2425,6 +2430,16 @@ class StatementController {
         },
         alerts: checksumAlert ? [checksumAlert] : []
       };
+
+      // ── Zod validation (single-file path) ──
+      if (checksumAlert) {
+        const alertResult = validateData(alertSchema, checksumAlert, { label: 'singleFile.checksumAlert' });
+        if (!alertResult.ok) {
+          logger.warn('Single-file checksum alert failed schema validation', {
+            errors: alertResult.errors.slice(0, 3),
+          });
+        }
+      }
 
       // Create new Statement document
       const statement = new Statement(statementData);
@@ -5363,6 +5378,25 @@ Vera's Underwriting Report:`;
       });
       const macroInstitutionalProfileId = macroProfileCandidates[0]?.profileId ?? null;
 
+      // ── Zod schema validation (best-effort; logs warnings but does not block) ──
+      const macroDocValidation = validateData(heliosAnalysisSchema, consolidatedMacroAnalysis, { label: 'heliosAnalysisSchema' });
+      if (!macroDocValidation.ok) {
+        logger.warn('heliosAnalysisSchema validation failed before Statement.create', {
+          errorCount: macroDocValidation.errors.length,
+          sampleErrors: macroDocValidation.errors.slice(0, 5),
+        });
+      }
+      // Validate each alert
+      for (let i = 0; i < allAlerts.length; i++) {
+        const alertResult = validateData(alertSchema, allAlerts[i], { label: `alertSchema[${i}]` });
+        if (!alertResult.ok) {
+          logger.warn(`Alert[${i}] failed schema validation`, {
+            code: allAlerts[i].code,
+            errors: alertResult.errors.slice(0, 3),
+          });
+        }
+      }
+
       const savedStatement = await Statement.create({
         user: (userId !== 'anonymous' && mongoose.Types.ObjectId.isValid(userId)) ? userId : new mongoose.Types.ObjectId(),
         uploadId: batchId,
@@ -5819,7 +5853,7 @@ Vera's Underwriting Report:`;
       const pages = total > 0 ? Math.ceil(total / limit) : 0;
 
       // #region agent log
-      console.log('📝 GET-TRACE: statementList.length=', statementList.length, 'total=', total);
+      logger.debug('📝 GET-TRACE: statementList.length=', statementList.length, 'total=', total);
       // #endregion
       res.json({
         success: true,

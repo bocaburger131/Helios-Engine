@@ -1,3 +1,4 @@
+import logger from '../utils/logger.js';
 import { LLMError } from '../utils/errors.js';
 import { bankPatternRegistry } from '../utils/bankPatterns.js';
 import { openai } from '../config/openai.js';
@@ -35,7 +36,7 @@ export class StatementExtractorService {
       try {
         return this.extractWithPatterns(content, this.bankRegistry[bankId]);
       } catch (error) {
-        console.log(`Pattern extraction failed, falling back to LLM: ${error.message}`);
+        logger.warn(`Pattern extraction failed, falling back to LLM: ${error.message}`);
         // Fall back to LLM if pattern extraction fails
       }
     }

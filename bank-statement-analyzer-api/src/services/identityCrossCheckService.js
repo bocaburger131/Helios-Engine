@@ -4,6 +4,9 @@
 
 import { fuzzyMatch } from '../utils/stringUtils.js';
 import { crossCheckIdentity } from './extraction/layoutPipeline/veraReconciliationFallback.js';
+import { validateData } from '../validation/validateData.js';
+import { alertSchema } from '../validation/alertSchema.js';
+import logger from '../utils/logger.js';
 
 /**
  * @param {object} identityMap
@@ -53,7 +56,7 @@ export function crossCheckIdentityAgainstApplication(
  */
 export function buildIdentityMismatchAlert(crossCheck, fileName = 'statement') {
   if (!crossCheck || crossCheck.status === 'pass') return null;
-  return {
+  const alert = {
     code: 'IDENTITY_MISMATCH',
     type: 'COMPLIANCE',
     severity: crossCheck.status === 'mismatch' ? 'HIGH' : 'MEDIUM',
@@ -65,6 +68,14 @@ export function buildIdentityMismatchAlert(crossCheck, fileName = 'statement') {
       confidence: crossCheck.confidence
     }
   };
+  // Validate alert shape at creation time
+  const validation = validateData(alertSchema, alert, { label: 'buildIdentityMismatchAlert' });
+  if (!validation.ok) {
+    logger.warn('buildIdentityMismatchAlert produced invalid alert shape', {
+      errors: validation.errors.slice(0, 3),
+    });
+  }
+  return alert;
 }
 
 export default {

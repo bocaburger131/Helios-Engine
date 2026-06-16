@@ -7,6 +7,8 @@ import BigNumber from 'bignumber.js';
 import InstitutionalProfile from '../models/InstitutionalProfile.js';
 import riskAnalysisService from './riskAnalysisService.js';
 import logger from '../utils/logger.js';
+import { validateData } from '../validation/validateData.js';
+import { alertSchema } from '../validation/alertSchema.js';
 
 const TOLERANCE = new BigNumber('0.01');
 
@@ -158,7 +160,7 @@ export async function processTemplateOutcome(routingNumber, templateVersion, isS
 }
 
 export function buildReconciliationMismatchAlert(recon) {
-  return {
+  const alert = {
     code: 'RECONCILIATION_MISMATCH',
     type: 'COMPLIANCE',
     severity: 'MEDIUM',
@@ -174,4 +176,7 @@ export function buildReconciliationMismatchAlert(recon) {
       delta: recon.delta
     }
   };
+  const alertValidation = validateData(alertSchema, alert, { label: 'buildReconciliationMismatchAlert' });
+  if (!alertValidation.ok) { logger.warn('alert validation failed', { errors: alertValidation.errors.slice(0, 3) }); }
+  return alert;
 }
