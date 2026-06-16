@@ -17,10 +17,10 @@ export function validateBody(schema, options = {}) {
   const { label = 'requestBody', warnOnly = false } = options;
 
   return (req, res, next) => {
-    // Skip if no body (file-only uploads should pass through)
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return next();
-    }
+    // NOTE: In a normal req/res flow multer runs before this middleware,
+    // so req.body should already be populated for file upload routes.
+    // This middleware intentionally does NOT skip on empty bodies, allowing
+    // the schema to validate (and reject) truly missing required fields.
 
     const result = validateData(schema, req.body, { label });
 

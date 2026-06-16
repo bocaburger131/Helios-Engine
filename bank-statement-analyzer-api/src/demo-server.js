@@ -25,7 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'hermes-demo-2024';
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 // ── Setup ──
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -35,8 +35,9 @@ app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// ── Static files (this is what makes the UI work!) ──
+// ── Static files (no auto index.html — we serve login.html at /) ──
 app.use(express.static(PUBLIC_DIR, {
+  index: false,
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css');
     if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript');
@@ -47,7 +48,7 @@ app.use(express.static(PUBLIC_DIR, {
 // ── Multer ──
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${path.basename(file.originalname)}`)
 });
 const upload = multer({
   storage,
