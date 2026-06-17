@@ -52,11 +52,13 @@ export default async function DashboardPage({ params, searchParams }: PageProps)
         serverToken={token}
       />
     );
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load statement";
     return (
       <DashboardClientLoader
         statementId={id}
         serverToken={token}
+        serverFetchError={message}
       />
     );
   }

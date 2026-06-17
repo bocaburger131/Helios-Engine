@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import ForensicChart from "@/components/charts/ForensicChart";
-import RiskHeatmap from "@/components/charts/RiskHeatmap";
 import DocumentProvenance from "@/components/provenance/DocumentProvenance";
 import HeroGrid from "@/components/results/HeroGrid";
 import IdentityBadge from "@/components/results/IdentityBadge";
@@ -11,14 +10,17 @@ import MetricsRow from "@/components/results/MetricsRow";
 import ProjectionsPanel from "@/components/results/ProjectionsPanel";
 import ResultsToolbar from "@/components/results/ResultsToolbar";
 import VeraBriefingPanel from "@/components/results/VeraBriefingPanel";
-import VeraDock from "@/components/results/VeraDock";
+import VeraFloatingDock from "@/components/results/VeraFloatingDock";
 import VeraFixModal from "@/components/results/VeraFixModal";
 import VeritasScoreCard from "@/components/results/VeritasScoreCard";
 import { PipelineShadowPanel } from "@/components/ParseTestPanels";
 import {
+  effectiveChecksumOk,
   formatCurrency,
   getChecksumFailures,
   getLayoutShadowEntries,
+  parseQualityLabel,
+  statementPeriodLabel,
   type HeliosStatementPayload,
 } from "@/lib/analysisAdapter";
 import { buildEnvelopeViewModel } from "@/lib/envelopeAdapter";
@@ -48,7 +50,6 @@ export default function UnderwritingDashboard({
 
   const [jsonOpen, setJsonOpen] = useState(false);
   const [veraFixOpen, setVeraFixOpen] = useState(false);
-  const [heatmapCategory, setHeatmapCategory] = useState<string | null>(null);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -79,8 +80,8 @@ export default function UnderwritingDashboard({
           <ul className="mt-2 list-inside list-disc text-rose-900/80">
             {checksumFailures.map((row) => (
               <li key={row.fileName}>
-                {row.fileName}
-                {row.parseQuality ? ` (${row.parseQuality})` : ""}
+                {statementPeriodLabel(row)}
+                {row.parseQuality ? ` (${parseQualityLabel(row)})` : ""}
               </li>
             ))}
           </ul>
@@ -109,18 +110,11 @@ export default function UnderwritingDashboard({
 
       <MetricsRow view={view} />
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <ForensicChart payload={payload} defaultHorizon="l3m" />
-        <RiskHeatmap payload={payload} onCategoryClick={setHeatmapCategory} />
-      </div>
+      <ForensicChart payload={payload} defaultHorizon="l3m" />
 
       <ProjectionsPanel payload={payload} />
 
-      <DocumentProvenance
-        payload={payload}
-        pdfUrl={pdfUrl}
-        highlightCategory={heatmapCategory}
-      />
+      <DocumentProvenance payload={payload} pdfUrl={pdfUrl} />
 
       <VeraBriefingPanel markdown={view.veraBriefing} />
 
@@ -133,7 +127,7 @@ export default function UnderwritingDashboard({
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                 <tr>
-                  <th className="px-4 py-3 sm:px-6">File</th>
+                  <th className="px-4 py-3 sm:px-6">Period</th>
                   <th className="px-4 py-3">Deposits</th>
                   <th className="px-4 py-3">Withdrawals</th>
                   <th className="px-4 py-3">Quality</th>
@@ -142,8 +136,11 @@ export default function UnderwritingDashboard({
               <tbody className="divide-y divide-slate-100">
                 {summaries.map((row) => (
                   <tr key={row.fileName}>
-                    <td className="px-4 py-3 font-medium text-slate-800 sm:px-6">
-                      {row.fileName}
+                    <td className="px-4 py-3 sm:px-6">
+                      <p className="font-medium text-slate-800">
+                        {statementPeriodLabel(row)}
+                      </p>
+                      <p className="text-xs text-slate-400">{row.fileName}</p>
                     </td>
                     <td className="px-4 py-3 text-green-700">
                       {formatCurrency(row.totalDeposits)}
@@ -154,12 +151,12 @@ export default function UnderwritingDashboard({
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                          row.checksumOk
+                          effectiveChecksumOk(row)
                             ? "bg-green-100 text-green-800"
                             : "bg-amber-100 text-amber-900"
                         }`}
                       >
-                        {row.parseQuality || (row.checksumOk ? "OK" : "Review")}
+                        {parseQualityLabel(row)}
                       </span>
                     </td>
                   </tr>
@@ -190,7 +187,11 @@ export default function UnderwritingDashboard({
         </section>
       )}
 
-      <VeraDock decision={view.veraDecision} score={view.veraScore} />
+      <VeraFloatingDock
+        statementId={statementId}
+        decision={view.veraDecision}
+        score={view.veraScore}
+      />
 
       <JsonInspectorModal
         open={jsonOpen}

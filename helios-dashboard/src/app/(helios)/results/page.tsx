@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { fetchDevStatements, type StatementListItem } from "@/lib/apiClient";
+import { formatAnalyzedAt } from "@/lib/analysisAdapter";
 
 const QUICK_IDS = [
   { id: "6a1b2a60f0fe2f7a4015c5ad", label: "Maas Treats (newer batch)" },
@@ -96,14 +97,25 @@ function ResultsPageInner() {
           <ul className="divide-y divide-slate-100">
             {statements.map((s) => {
               const id = s.id ?? s._id ?? "";
+              const title =
+                s.analysisTitle ||
+                s.applicationContext?.companyName ||
+                s.fileName ||
+                "Untitled";
+              const analyzed = formatAnalyzedAt(
+                s.analyzedAt || s.uploadDate || null
+              );
               return (
                 <li
                   key={id}
                   className="flex flex-col gap-2 px-6 py-4 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
-                    <p className="font-medium text-slate-900">{s.fileName ?? "Untitled"}</p>
+                    <p className="font-medium text-slate-900">{title}</p>
                     <p className="text-xs text-slate-500">
+                      Analyzed {analyzed}
+                      {s.monthsAnalyzedLabel ? ` · ${s.monthsAnalyzedLabel}` : ""}
+                      {" · "}
                       {s.bankName ?? "Unknown bank"} · {s.status ?? "—"}
                       {s.veraDecision ? ` · Vera: ${s.veraDecision}` : ""}
                     </p>

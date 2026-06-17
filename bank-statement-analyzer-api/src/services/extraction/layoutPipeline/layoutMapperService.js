@@ -11,11 +11,8 @@ import {
 import { parseIdentityFromHeader } from './identityParser.js';
 import { buildBlockInventory } from './negativeSpaceClassifier.js';
 import { splitPages } from '../../statementStitcher.js';
-import {
-  extractSummary,
-  extractTransactionSection,
-  normalizeSpaces
-} from '../profiles/wellsFargoInitiateProfile.js';
+import { normalizeSpaces } from '../profiles/wellsFargoInitiateProfile.js';
+import { getProfileLayoutHooks } from './profileLayoutHooks.js';
 
 export const FEE_LEDGER_ANCHORS = [
   /service charge/i,
@@ -87,6 +84,40 @@ export function buildLayoutFingerprint(params = {}) {
 }
 
 /**
+ * Apply stored template header anchors to locate region text when possible.
+ * @param {string} text
+ * @param {object} layoutTemplate
+ * @param {string} regionKey
+ * @returns {string}
+ */
+function sliceRegionFromTemplateAnchors(text, layoutTemplate, regionKey) {
+  const anchors = layoutTemplate?.headerAnchors;
+  if (!Array.isArray(anchors) || !anchors.length) return '';
+  const anchor = anchors.find(
+    (a) =>
+      String(a.region || a.key || '').toLowerCase() === regionKey.toLowerCase() ||
+      String(a.key || '').toLowerCase().includes(regionKey.toLowerCase())
+  );
+  if (!anchor?.pattern) return '';
+  try {
+    const re = new RegExp(anchor.pattern, anchor.flags || 'i');
+    const m = String(text || '').match(re);
+    if (!m?.index && m?.index !== 0) return '';
+    const start = m.index;
+    const endAnchor = anchor.endPattern ? new RegExp(anchor.endPattern, 'i') : null;
+    let end = Math.min(text.length, start + (anchor.maxLen ?? 12000));
+    if (endAnchor) {
+      const tail = text.slice(start + 1);
+      const em = tail.match(endAnchor);
+      if (em?.index != null) end = start + 1 + em.index;
+    }
+    return text.slice(start, end);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * @param {object} input
  * @returns {ReturnType<typeof createDocumentMap>}
  */
@@ -102,12 +133,26 @@ export function buildDocumentMap(input = {}) {
     profileId: input.profileId
   });
 
-  const summary = extractSummary(combined);
-  const summaryText = summary ? combined.slice(0, 2500) : combined.slice(0, 2000);
-  const txnSection =
-    extractTransactionSection(combined) ||
-    extractTransactionSection(altText) ||
+  const hooks = getProfileLayoutHooks(profile.id);
+  const hasTemplate = Boolean(input.layoutTemplate?.headerAnchors?.length);
+
+  let summaryText =
+    sliceRegionFromTemplateAnchors(combined, input.layoutTemplate, 'summary') ||
+    hooks.buildSummaryRegion(combined);
+  if (!summaryText?.trim()) summaryText = combined.slice(0, 2000);
+
+  let txnSection =
+    sliceRegionFromTemplateAnchors(combined, input.layoutTemplate, 'transactionHistory') ||
+    hooks.buildTransactionRegion(combined) ||
+    hooks.buildTransactionRegion(altText) ||
     '';
+
+  const mappingSource = hasTemplate
+    ? txnSection && summaryText
+      ? 'hybrid'
+      : 'template_hint'
+    : 'heuristic';
+
   const feeText = buildFeeLedgerRegion(combined);
   const identityText = buildIdentityRegion(combined);
   const identity = parseIdentityFromHeader(identityText);
@@ -154,12 +199,17 @@ export function buildDocumentMap(input = {}) {
     }),
     profileId: profile.id,
     pageCount: input.pageCount ?? 0,
-    recoveryEligible: profile.id === 'wells_initiate_checking' || profile.id === 'chase_business_complete',
+    recoveryEligible:
+      profile.id === 'wells_initiate_checking' ||
+      profile.id === 'chase_business_complete' ||
+      profile.id === 'regions_business_checking' ||
+      profile.id === 'generic_digital',
     identity,
     regions,
     blocks,
     ignoredRegions,
     coverage,
+    mappingSource,
     meta: {
       bankName: input.bankName ?? null,
       rtn: input.rtn ?? null,

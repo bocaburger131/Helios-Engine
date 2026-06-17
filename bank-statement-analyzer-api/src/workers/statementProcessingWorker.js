@@ -77,6 +77,12 @@ worker.on('failed', (job, err) => {
   });
 });
 
+worker.on('stalled', (jobId) => {
+  logger.warn('[STATEMENT_WORKER] Job stalled — may be double-processed on recovery', {
+    jobId
+  });
+});
+
 worker.on('error', (err) => {
   logger.error('[STATEMENT_WORKER] Worker error', { error: err?.message });
 });

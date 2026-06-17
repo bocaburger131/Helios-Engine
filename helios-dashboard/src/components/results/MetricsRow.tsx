@@ -22,7 +22,7 @@ export default function MetricsRow({ view }: Props) {
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
       <MetricTile label="L3M ADB" value={formatCurrency(m.l3mAdb)} />
       <MetricTile
-        label="NSF count"
+        label="NSF / OD"
         value={m.nsfCount != null ? String(m.nsfCount) : "—"}
       />
       <MetricTile label="DSCR" value={m.dscr != null ? m.dscr.toFixed(2) : "—"} />

@@ -24,6 +24,28 @@ export type DailyActivityRow = {
 
 export type WeeklyActivityRow = DailyActivityRow & { weekKey: string };
 
+export type ChartActivityBucket = {
+  date: string;
+  deposits: number;
+  withdrawals: number;
+  net: number;
+  txnCount: number;
+  balance?: number | null;
+};
+
+export type ChartActivityWeeklyBucket = ChartActivityBucket & {
+  weekKey: string;
+};
+
+export type ChartActivity = {
+  version?: number;
+  openingBalance?: number;
+  daily?: ChartActivityBucket[];
+  weekly?: ChartActivityWeeklyBucket[];
+  sourceTxnCount?: number;
+  computedAt?: string;
+};
+
 function toDateKey(d: string | Date): string | null {
   if (!d) return null;
   if (typeof d === "string") {
@@ -185,4 +207,49 @@ export function getTransactionsFromPayload(payload: {
   const outer = payload.data?.transactions ?? [];
   const inner = payload.data?.statement?.transactions ?? [];
   return outer.length > 0 ? outer : inner;
+}
+
+export function getChartActivityFromPayload(payload: {
+  data?: {
+    statement?: {
+      analysis?: { chartActivity?: ChartActivity | null };
+      transactionDataSource?: string;
+    };
+  };
+}): ChartActivity | null {
+  return payload.data?.statement?.analysis?.chartActivity ?? null;
+}
+
+export function rollupDailyToActivityRows(daily: ChartActivityBucket[]): DailyActivityRow[] {
+  return daily.map((row) => ({
+    date: row.date,
+    label: formatDayLabel(row.date),
+    deposits: row.deposits,
+    withdrawals: row.withdrawals,
+    net: row.net,
+    txnCount: row.txnCount,
+    balance: row.balance ?? null,
+  }));
+}
+
+export function rollupWeeklyToActivityRows(
+  weekly: ChartActivityWeeklyBucket[]
+): WeeklyActivityRow[] {
+  return weekly.map((row) => ({
+    weekKey: row.weekKey,
+    date: row.date,
+    label: row.weekKey.replace("-W", " W"),
+    deposits: row.deposits,
+    withdrawals: row.withdrawals,
+    net: row.net,
+    txnCount: row.txnCount,
+    balance: row.balance ?? null,
+  }));
+}
+
+export function hasChartActivityData(payload: {
+  data?: { statement?: { analysis?: { chartActivity?: ChartActivity | null } } };
+}): boolean {
+  const activity = getChartActivityFromPayload(payload);
+  return (activity?.daily?.length ?? 0) > 0;
 }

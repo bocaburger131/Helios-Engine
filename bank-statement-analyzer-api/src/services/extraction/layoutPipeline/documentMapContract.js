@@ -420,6 +420,8 @@ export function createDocumentMap(params = {}) {
 
     anchors: params.anchors ?? {},
 
+    mappingSource: params.mappingSource ?? 'heuristic',
+
     meta: params.meta ?? {}
 
   };

@@ -6,6 +6,9 @@ import { resolveExtractionMode, EXTRACTION_MODES } from '../services/extraction/
 import { parseWithRegistry } from '../services/extraction/parserRegistry.js';
 import { batchConfirmationApplies, resolveBankIdFromName } from './bankConfirmationGate.js';
 import { normalizeInstitutionName } from './identityMethodRank.js';
+import { resolveLayoutTemplateForParse } from '../services/institutionalTemplatePersist.js';
+import { buildDocumentMap } from '../services/extraction/layoutPipeline/layoutMapperService.js';
+import { buildLayoutDiscoveryPayload } from '../services/extraction/layoutPipeline/layoutDiscoveryHelper.js';
 
 /**
  * Build parseResult-shaped object from sidecar adapter output.
@@ -72,6 +75,15 @@ export async function parseOneStatementPdfForBatch({
     });
 
     let parseResult;
+    const batchRtn = finalAnchorData?.rtn ?? identitySources?.rtn ?? null;
+    let templateHint = null;
+    if (batchRtn) {
+      try {
+        templateHint = await resolveLayoutTemplateForParse(batchRtn);
+      } catch (hintErr) {
+        logger.warn(`[BATCH] layout template hint failed: ${hintErr.message}`);
+      }
+    }
 
     if (modeInfo.extractionMode === EXTRACTION_MODES.SCAN) {
       logger.info(`[BATCH] SCAN mode OCR for ${hashForLogging(file.originalname)}`);
@@ -89,6 +101,28 @@ export async function parseOneStatementPdfForBatch({
         );
       }
       parseResult = buildParseResultFromSidecar(ocrResult, modeInfo, file.originalname);
+      const ocrText = ocrResult.metadata?.rawText || ocrResult.rawText || '';
+      if (ocrText) {
+        try {
+          const documentMap = buildDocumentMap({
+            text: ocrText,
+            bankName: confirmedBankName || sessionConfirmedBank?.bankName,
+            rtn: batchRtn,
+            layoutTemplate: templateHint?.mapping ?? null
+          });
+          const layoutDiscovery = buildLayoutDiscoveryPayload(
+            { documentMap, contextArchive: null },
+            templateHint
+          );
+          parseResult.metadata = {
+            ...(parseResult.metadata || {}),
+            layoutPipelineDocumentMap: documentMap,
+            layoutDiscovery
+          };
+        } catch (mapErr) {
+          logger.warn(`[BATCH] SCAN layout map failed: ${mapErr.message}`);
+        }
+      }
     } else if (modeInfo.extractionMode === EXTRACTION_MODES.NATIVE) {
       throw new Error(
         `Native format ${modeInfo.nativeFormat || 'unknown'} (${file.originalname}) is not yet supported in macro batch`
@@ -99,7 +133,10 @@ export async function parseOneStatementPdfForBatch({
         suppressWaterfallDetailLogs: true,
         correlationId,
         fileName: file.originalname,
-        extractionMode: modeInfo.extractionMode
+        extractionMode: modeInfo.extractionMode,
+        forceLayoutFirstPrimary: true,
+        layoutTemplate: templateHint?.mapping ?? null,
+        templateHintMeta: templateHint
       });
     }
 
@@ -183,7 +220,16 @@ export async function parseOneStatementPdfForBatch({
       statementDate,
       fileHash,
       parseResult,
-      fileBuffer
+      fileBuffer,
+      layoutDiscovery:
+        parseResult.metadata?.layoutDiscovery ??
+        buildLayoutDiscoveryPayload(
+          {
+            documentMap: parseResult.metadata?.layoutPipelineDocumentMap,
+            contextArchive: parseResult.metadata?.layoutPipelineContextArchive
+          },
+          parseResult.metadata?.templateHintMeta ?? templateHint
+        )
     };
 
     const { checksumRecon, parseQuality } = applyParseQualityPipeline(parsed, {

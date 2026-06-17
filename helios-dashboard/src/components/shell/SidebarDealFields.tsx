@@ -3,8 +3,16 @@
 import { useDealContext } from "@/components/shell/DealContext";
 
 export default function SidebarDealFields() {
-  const { dealId, companyName, statedRevenue, setDealId, setCompanyName, setStatedRevenue } =
-    useDealContext();
+  const {
+    dealId,
+    companyName,
+    statedRevenue,
+    requestedLoanAmount,
+    setDealId,
+    setCompanyName,
+    setStatedRevenue,
+    setRequestedLoanAmount,
+  } = useDealContext();
 
   return (
     <div className="space-y-3 border-b border-white/10 pb-4">
@@ -28,6 +36,16 @@ export default function SidebarDealFields() {
           value={companyName}
           onChange={(e) => setCompanyName(e.target.value)}
           placeholder="Company name"
+          className="mt-1 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder:text-slate-500"
+        />
+      </label>
+      <label className="block text-xs text-slate-400">
+        Requested amount
+        <input
+          type="text"
+          value={requestedLoanAmount}
+          onChange={(e) => setRequestedLoanAmount(e.target.value)}
+          placeholder="$0"
           className="mt-1 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder:text-slate-500"
         />
       </label>

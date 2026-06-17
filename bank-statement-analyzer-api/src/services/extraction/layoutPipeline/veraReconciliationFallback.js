@@ -6,6 +6,7 @@ import logger from '../../../utils/logger.js';
 import { fuzzyMatch } from '../../../utils/stringUtils.js';
 import { reconcileRawBundle } from './reconciliationService.js';
 import { normalizeIdentityMap } from './documentMapContract.js';
+import { isInstitutionBleedName } from './identityParser.js';
 
 export const AUTO_FIX_CONFIDENCE = 0.85;
 
@@ -28,6 +29,18 @@ export function crossCheckIdentity(documentMap, applicationContext = {}) {
   let confidence = 1;
 
   if (appName && identity.legalName) {
+    if (isInstitutionBleedName(identity.legalName)) {
+      return {
+        status: 'pass',
+        mismatches: [],
+        confidence: 0.85,
+        bankBleedSkipped: true,
+        displayName: appName,
+        identityMap: normalizeIdentityMap({ ...identity, legalName: appName }),
+        note:
+          'Statement header matched bank letterhead; using application company name for cross-check.'
+      };
+    }
     const score = fuzzyMatch(appName, identity.legalName);
     if (score < 0.72) {
       mismatches.push({

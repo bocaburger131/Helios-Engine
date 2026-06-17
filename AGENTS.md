@@ -12,3 +12,5 @@
 5. Open PR to `main`; run tests before push.
 
 Full details: [HERMES_GITHUB.md](HERMES_GITHUB.md) and [REPO_LAYOUT.md](REPO_LAYOUT.md).
+
+Hermes Docker setup: run `C:\BocaBurger\HermesScripts\setup-hermes-github.ps1 -Token github_pat_xxx` after creating a fine-grained PAT.

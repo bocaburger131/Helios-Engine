@@ -103,6 +103,19 @@
           "projectedDSCR": 0.42,
           "eligibilityBand": "weak"
         },
+        "chartActivity": {
+          "version": 1,
+          "openingBalance": 408.69,
+          "sourceTxnCount": 339,
+          "daily": [
+            { "date": "2023-12-02", "deposits": 1200, "withdrawals": 800, "net": 400, "txnCount": 12, "balance": 808.69 },
+            { "date": "2023-12-03", "deposits": 900, "withdrawals": 1100, "net": -200, "txnCount": 9, "balance": 608.69 },
+            { "date": "2023-12-04", "deposits": 2100, "withdrawals": 500, "net": 1600, "txnCount": 15, "balance": 2208.69 }
+          ],
+          "weekly": [
+            { "weekKey": "2023-W49", "date": "2023-12-04", "deposits": 4200, "withdrawals": 2400, "net": 1800, "txnCount": 36, "balance": 2208.69 }
+          ]
+        },
         "vera": {
           "decision": "DECLINE",
           "bankabilityScore": 1,
@@ -176,7 +189,8 @@
           "checksumOk": false,
           "accountKey": "WELLS FARGO-5195725428"
         }
-      ]
+      ],
+      "transactionDataSource": "rollup"
     },
     "transactions": []
   }

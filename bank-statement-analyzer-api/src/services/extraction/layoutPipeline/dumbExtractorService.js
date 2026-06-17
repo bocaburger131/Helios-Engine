@@ -66,7 +66,19 @@ export async function extractRaw(documentMap, ctx = {}) {
     text: ctx.text,
     altText: ctx.altText,
     defaultYear: ctx.defaultYear,
-    sectionChunks
+    sectionChunks,
+    parserService: ctx.parserService,
+    resolvedBankType: ctx.resolvedBankType,
+    plumberTransactions: ctx.plumberTransactions,
+    rtn: ctx.rtn,
+    accountNumber: ctx.accountNumber,
+    stitcherPrinted: ctx.stitcherPrinted,
+    typeAText: ctx.typeAText,
+    stitcher: ctx.stitcher,
+    options: {
+      layoutTemplate: ctx.layoutTemplate,
+      fileName: ctx.fileName
+    }
   });
 
   let bundle = mapProfileResultToRawBundle(profileResult, documentMap);

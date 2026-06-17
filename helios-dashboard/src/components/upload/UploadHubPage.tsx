@@ -14,11 +14,13 @@ import UploadPrimaryButton, {
 } from "@/components/upload/UploadPrimaryButton";
 import {
   extractStatementId,
+  formatBatchError,
   pollBatchJob,
   redirectToDashboard,
   runBatchAnalysis,
   triageStatements,
   type BatchProgress,
+  type TriageResult,
 } from "@/lib/batchUploadClient";
 import { fetchDevConfig, getStoredToken } from "@/lib/apiClient";
 
@@ -44,6 +46,9 @@ export default function UploadHubPage() {
   const [progress, setProgress] = useState<BatchProgress | null>(null);
   const [inspectorFile, setInspectorFile] = useState<File | null>(null);
   const [serverConfig, setServerConfig] = useState("");
+  const [institutionGate, setInstitutionGate] = useState<
+    TriageResult["institutionProfileGate"] | null
+  >(null);
 
   const triageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triageGen = useRef(0);
@@ -78,6 +83,7 @@ export default function UploadHubPage() {
 
         setUploadSessionId(result.uploadSessionId);
         setPrimaryMode("runAnalysis");
+        setInstitutionGate(result.institutionProfileGate ?? null);
 
         const names =
           result.triage?.statements?.map((s) => s.name).filter(Boolean) ?? [];
@@ -96,6 +102,23 @@ export default function UploadHubPage() {
         }
         if (result.extractedAnchorData?.statedRevenue && !statedRevenue.trim()) {
           setStatedRevenue(String(result.extractedAnchorData.statedRevenue));
+        }
+
+        if (result.institutionProfileGate) {
+          const g = result.institutionProfileGate;
+          const bank = g.bankName || "Institution";
+          const status = g.profileStatus || "UNKNOWN";
+          const layoutStatus = g.layoutDiscoveryStatus || "unknown";
+          append(
+            `<strong>Step 1 — ${escapeHtml(bank)}</strong><br/>` +
+              `Profile: <code>${escapeHtml(g.codeProfileId || "unknown")}</code> · ` +
+              `Status: <strong>${escapeHtml(status)}</strong> · ` +
+              `Layout discovery: <strong>${escapeHtml(layoutStatus)}</strong>` +
+              (g.step1Required
+                ? `<br/><span class="text-amber-700">Layout mapping or institution profile incomplete before production underwriting.</span>`
+                : `<br/><span class="text-emerald-700">Institution profile ready for production analysis.</span>`),
+            g.step1Required ? "warning" : "success"
+          );
         }
 
         append("Click <strong>Run Analysis</strong> when ready.", "system");
@@ -165,6 +188,7 @@ export default function UploadHubPage() {
         companyName: companyName.trim() || undefined,
         statedRevenue: statedRevenue.trim() || undefined,
         dealId: dealId.trim() || undefined,
+        allowProbeAnalysis: true,
       });
 
       let resultJson: Record<string, unknown> | null = null;
@@ -183,7 +207,7 @@ export default function UploadHubPage() {
       } else if (status === 201) {
         resultJson = json;
       } else {
-        throw new Error(String(json.error || json.message || `Batch failed (${status})`));
+        throw new Error(formatBatchError(json, status));
       }
 
       const statementId = extractStatementId(resultJson ?? json);
@@ -228,6 +252,38 @@ export default function UploadHubPage() {
         </header>
 
         <BatchProgressPanel phase={phase} progress={progress} busy={busy} />
+
+        {institutionGate?.layoutDiscoveryStatus &&
+          institutionGate.layoutDiscoveryStatus !== "complete" && (
+          <div
+            className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+            role="status"
+          >
+            <p className="font-semibold">
+              Layout discovery: {institutionGate.layoutDiscoveryStatus}
+            </p>
+            <p className="mt-1 text-sky-800">
+              Every statement is mapped on parse; partial or failed maps may limit provenance
+              and checksum quality until templates graduate.
+            </p>
+          </div>
+        )}
+
+        {institutionGate?.step1Required && (
+          <div
+            className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+            role="status"
+          >
+            <p className="font-semibold">
+              Layout learning active — {institutionGate.bankName || "Institution"} (
+              {institutionGate.profileStatus || "LEARNING"})
+            </p>
+            <p className="mt-1 text-sky-800">
+              {institutionGate.recommendation ||
+                "Checksums improve as templates graduate to VERIFIED. Macro analysis runs while learning is in progress."}
+            </p>
+          </div>
+        )}
 
         {busy && (
           <div className="hub-progress">

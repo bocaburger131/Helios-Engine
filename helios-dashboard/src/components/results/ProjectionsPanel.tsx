@@ -10,6 +10,7 @@ const BAND_STYLE: Record<EligibilityBand, string> = {
   Moderate: "bg-blue-100 text-blue-800",
   Weak: "bg-amber-100 text-amber-900",
   Ineligible: "bg-rose-100 text-rose-800",
+  Unreliable: "bg-slate-200 text-slate-700",
 };
 
 type Props = {

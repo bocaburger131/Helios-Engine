@@ -19,6 +19,17 @@ export type TriageResult = {
     statedRevenue?: number;
     annualRevenue?: number;
   };
+  institutionProfileGate?: {
+    step1Required?: boolean;
+    productionReady?: boolean;
+    profileStatus?: string;
+    codeProfileId?: string;
+    bankName?: string | null;
+    routingNumber?: string | null;
+    recommendation?: string | null;
+    layoutDiscoveryStatus?: string;
+    layoutMapped?: boolean;
+  };
   error?: string;
   message?: string;
 };
@@ -49,6 +60,8 @@ export type UploadContext = {
   statedRevenue?: string;
   dealId?: string;
   usePublicUpload?: boolean;
+  /** When true, run macro analysis even if institution profile Step 1 is incomplete */
+  allowProbeAnalysis?: boolean;
 };
 
 const USE_PUBLIC =
@@ -104,7 +117,45 @@ export function buildBatchFormData(
       businessAddress: "",
     })
   );
+  if (ctx.allowProbeAnalysis !== false) {
+    const layoutLearningDefault =
+      process.env.NEXT_PUBLIC_USE_PUBLIC_UPLOAD === "true" ||
+      process.env.NODE_ENV !== "production";
+    if (ctx.allowProbeAnalysis || layoutLearningDefault) {
+      fd.append("allowProbeAnalysis", "true");
+    }
+  }
   return fd;
+}
+
+/** Human-readable batch/triage failure from API JSON (gate block, bank confirm, etc.). */
+export function formatBatchError(
+  json: Record<string, unknown>,
+  status?: number
+): string {
+  const code = String(json.error ?? "");
+  const gate = json.institutionProfileGate as
+    | { recommendation?: string | null; bankName?: string | null }
+    | undefined;
+
+  if (code === "INSTITUTION_PROFILE_STEP1_REQUIRED") {
+    const bank = gate?.bankName ? ` (${gate.bankName})` : "";
+    return (
+      gate?.recommendation ||
+      `Institution profile Step 1 required${bank}. Enable layout learning or complete profile graduation.`
+    );
+  }
+
+  if (json.message && typeof json.message === "string") {
+    return json.message;
+  }
+  if (json.error && typeof json.error === "string" && json.error !== code) {
+    return json.error;
+  }
+  if (status != null) {
+    return `Batch failed (${status})`;
+  }
+  return "Batch analysis failed";
 }
 
 export function extractStatementId(json: Record<string, unknown>): string | null {
@@ -232,7 +283,9 @@ export async function pollBatchJob(
     interval = Math.min(interval + 1000, 12000);
   }
 
-  throw new Error("Macro analysis timed out after 30 minutes");
+  throw new Error(
+    `Macro analysis timed out after 30 minutes (correlationId: ${options.correlationId ?? "unknown"})`
+  );
 }
 
 export function redirectToDashboard(statementId: string, token?: string | null) {

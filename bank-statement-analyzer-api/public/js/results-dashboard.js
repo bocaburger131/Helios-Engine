@@ -662,16 +662,40 @@
         });
       });
 
-      document.getElementById('vera-chat-form')?.addEventListener('submit', (e) => {
+      document.getElementById('vera-chat-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const input = e.target.querySelector('input');
         const q = input?.value?.trim();
         if (!q || !veraBody) return;
         const note = document.createElement('p');
         note.style.marginTop = '10px';
-        note.innerHTML = '<em>Demo:</em> ' + escapeHtml(q) + ' — Vera chat API in Phase 2.';
+        note.innerHTML = '<em>You:</em> ' + escapeHtml(q);
         veraBody.appendChild(note);
         input.value = '';
+        try {
+          const res = await apiFetch('/api/statements/analysis/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              statementId: statementId,
+              message: q
+            })
+          });
+          const json = await res.json();
+          const answer = json?.data?.answer || json?.answer || 'No response from Vera.';
+          const reply = document.createElement('p');
+          reply.style.marginTop = '8px';
+          reply.innerHTML = '<strong>Vera:</strong> ' + escapeHtml(String(answer));
+          veraBody.appendChild(reply);
+        } catch (err) {
+          const errP = document.createElement('p');
+          errP.style.marginTop = '8px';
+          errP.innerHTML =
+            '<strong>Vera:</strong> <span style="color:#b91c1c">' +
+            escapeHtml(err.message || 'Chat failed') +
+            '</span>';
+          veraBody.appendChild(errP);
+        }
       });
 
       const statementId = this.envelope?.id || this.envelope?.data?.id;

@@ -8,19 +8,25 @@ import * as wellsInitiate from './profiles/wellsFargoInitiateProfile.js';
 
 import * as chaseBusiness from './profiles/chaseBusinessCompleteProfile.js';
 
+import * as regionsBusiness from './profiles/regionsBusinessCheckingProfile.js';
+
 import * as genericDigital from './profiles/genericDigitalProfile.js';
 
 import logger from '../../utils/logger.js';
+
+import { getReconciliationSpec } from './reconciliationSpec.js';
 
 
 
 const PROFILE_META = Object.freeze({
 
-  [wellsInitiate.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true },
+  [wellsInitiate.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(wellsInitiate.PROFILE_ID) },
 
-  [chaseBusiness.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true },
+  [chaseBusiness.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(chaseBusiness.PROFILE_ID) },
 
-  [genericDigital.PROFILE_ID]: { strictProfile: false, blockLegacyFallback: false }
+  [regionsBusiness.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(regionsBusiness.PROFILE_ID) },
+
+  [genericDigital.PROFILE_ID]: { strictProfile: false, blockLegacyFallback: false, reconciliationSpec: getReconciliationSpec(genericDigital.PROFILE_ID) }
 
 });
 
@@ -54,6 +60,18 @@ const PROFILES = [
 
   {
 
+    id: regionsBusiness.PROFILE_ID,
+
+    detect: regionsBusiness.detect,
+
+    extract: regionsBusiness.extract,
+
+    extractRaw: regionsBusiness.extractRaw
+
+  },
+
+  {
+
     id: genericDigital.PROFILE_ID,
 
     detect: genericDigital.detect,
@@ -82,7 +100,13 @@ const DETECT_THRESHOLD = Number(process.env.BANK_PROFILE_DETECT_THRESHOLD) || 0.
 
 export function getProfileMeta(profileId) {
 
-  return PROFILE_META[profileId] ?? { strictProfile: false, blockLegacyFallback: false };
+  return (
+    PROFILE_META[profileId] ?? {
+      strictProfile: false,
+      blockLegacyFallback: false,
+      reconciliationSpec: getReconciliationSpec(genericDigital.PROFILE_ID)
+    }
+  );
 
 }
 
@@ -156,6 +180,24 @@ export function resolveProfile(input = {}) {
 
   }
 
+  const bankHint = String(input.bankName || '').toLowerCase();
+  const body = String(text || '');
+  const chaseAnchors =
+    /jpmorgan\s+chase/i.test(body) && /deposits?\s+and\s+additions?/i.test(body);
+  if (
+    chaseAnchors &&
+    (bankHint.includes('chase') || bankHint.includes('jpmorgan'))
+  ) {
+    const chaseProfile = PROFILES.find((p) => p.id === chaseBusiness.PROFILE_ID);
+    if (chaseProfile) {
+      const boosted = Math.max(bestScore, 0.87);
+      if (boosted > bestScore || best.id !== chaseBusiness.PROFILE_ID) {
+        best = chaseProfile;
+        bestScore = boosted;
+      }
+    }
+  }
+
 
 
   logger.info('[EXTRACTION_PROFILE]', {
@@ -186,5 +228,39 @@ export function listProfiles() {
 
 
 
-export default { resolveProfile, listProfiles, getProfileMeta, PROFILES, PROFILE_META };
+/**
+
+ * @returns {string[]}
+
+ */
+
+export function listTier1ProfileIds() {
+
+  return PROFILES.filter((p) => PROFILE_META[p.id]?.strictProfile).map((p) => p.id);
+
+}
+
+
+
+/**
+
+ * @param {string} profileId
+
+ * @returns {boolean}
+
+ */
+
+export function isTier1CodeProfile(profileId) {
+
+  return Boolean(PROFILE_META[profileId]?.strictProfile);
+
+}
+
+export { getProfileLayoutHooks } from './layoutPipeline/profileLayoutHooks.js';
+
+export { getReconciliationSpec, roleForLineKey } from './reconciliationSpec.js';
+
+
+
+export default { resolveProfile, listProfiles, listTier1ProfileIds, isTier1CodeProfile, getProfileMeta, PROFILES, PROFILE_META };
 

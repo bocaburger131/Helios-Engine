@@ -6,6 +6,7 @@ import { validateReconciliation } from '../templateGraduationService.js';
 import { reconcileStatement } from './statementReconciliation.js';
 import { pdfPlumberEnabled } from './pdfPlumberService.js';
 import { tryRecoverChaseFromPlumber } from './profiles/chaseBusinessCompleteProfile.js';
+import { tryRecoverRegionsFromPlumber } from './profiles/regionsBusinessCheckingProfile.js';
 import { extractDocumentPrintedTotals, mergePrintedWithStitcher } from './printedVitalsService.js';
 import { mergePrintedTotals } from '../statementStitcher.js';
 
@@ -305,6 +306,11 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
     pdfParseResult?.metadata?.extractionProfile === 'chase_business_complete' ||
     pdfParseResult?.metadata?.profileId === 'chase_business_complete';
 
+  const isRegions =
+    pdfParseResult?.metadata?.extractionProfile === 'regions_business_checking' ||
+    pdfParseResult?.metadata?.profileId === 'regions_business_checking' ||
+    /regions/i.test(String(context.bankName || ''));
+
   const isGeneric =
     pdfParseResult?.metadata?.extractionProfile === 'generic_digital' ||
     pdfParseResult?.metadata?.profileId === 'generic_digital';
@@ -333,6 +339,47 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
           closingBalance: pdfParseResult.closingBalance ?? recovered.meta.closingBalance,
           metadata: {
             ...(pdfParseResult.metadata || {}),
+            profileReconciliation: {
+              printedDeposits: recovered.meta.printedDeposits,
+              printedWithdrawals: recovered.meta.printedWithdrawals,
+              openingBalance: recovered.meta.openingBalance,
+              closingBalance: recovered.meta.closingBalance
+            }
+          }
+        };
+      }
+    }
+  }
+
+  if (isRegions && plumberResult?.transactions?.length && context.text) {
+    const recovered = tryRecoverRegionsFromPlumber({
+      plumberTransactions: plumberResult.transactions,
+      text: context.text,
+      defaultYear: context.defaultYear,
+      rtn: context.rtn,
+      accountNumber: context.accountNumber,
+      stitcherPrinted: context.stitcherPrinted,
+      typeAText: context.typeAText
+    });
+    if (
+      (recovered?.checksumOk || recovered?.reconciliation?.checksumRecon?.ok) &&
+      recovered?.transactions?.length
+    ) {
+      plumberForMerge = {
+        ...plumberResult,
+        transactions: recovered.transactions,
+        success: true
+      };
+      crossOptions = { chaseMeta: recovered.meta };
+      if (recovered.meta) {
+        pdfForMerge = {
+          ...pdfParseResult,
+          openingBalance: pdfParseResult.openingBalance ?? recovered.meta.openingBalance,
+          closingBalance: pdfParseResult.closingBalance ?? recovered.meta.closingBalance,
+          metadata: {
+            ...(pdfParseResult.metadata || {}),
+            extractionProfile: 'regions_business_checking',
+            profileId: 'regions_business_checking',
             profileReconciliation: {
               printedDeposits: recovered.meta.printedDeposits,
               printedWithdrawals: recovered.meta.printedWithdrawals,

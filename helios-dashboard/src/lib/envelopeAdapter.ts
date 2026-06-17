@@ -4,8 +4,10 @@
 
 import {
   buildBaseMonthlyRows,
+  effectiveChecksumOk,
   extractDashboardMeta,
   formatCurrency,
+  parseIntegrity,
   type HeliosStatementPayload,
 } from "@/lib/analysisAdapter";
 
@@ -13,6 +15,9 @@ export type VeritasBadge = "Pass" | "Review" | "Decline";
 
 export type EnvelopeViewModel = {
   companyName: string;
+  displayTitle: string;
+  analyzedAt: string | null;
+  monthsAnalyzedLabel: string;
   businessAddress: string;
   bankName: string;
   accountNumber: string;
@@ -24,6 +29,7 @@ export type EnvelopeViewModel = {
   veritasScore: number | null;
   veritasBadge: VeritasBadge;
   bankabilityLabel: string;
+  parseTrusted: boolean;
   metrics: {
     l3mAdb: number | null;
     nsfCount: number | null;
@@ -53,7 +59,9 @@ function veritasBadgeFromScore(score: number | null, decision?: string): Veritas
   return "Review";
 }
 
-function bankabilityLabel(score: number | null): string {
+function bankabilityLabel(score: number | null, decision?: string): string {
+  const d = String(decision || "").toLowerCase();
+  if (d.includes("decline") || d.includes("reject")) return "High risk";
   if (score == null) return "Pending";
   if (score >= 8) return "Strong";
   if (score >= 6) return "Moderate";
@@ -84,10 +92,10 @@ function daysCashOnHand(adb: number | null, avgWithdrawals: number): number | nu
 }
 
 function consistencyFromSummaries(
-  summaries: Array<{ checksumOk?: boolean }>
+  summaries: Array<{ checksumOk?: boolean; reconciliation?: { checksumOk?: boolean | null } | null }>
 ): number | null {
   if (!summaries.length) return null;
-  const ok = summaries.filter((s) => s.checksumOk !== false).length;
+  const ok = summaries.filter((s) => effectiveChecksumOk(s)).length;
   return Math.round((ok / summaries.length) * 100);
 }
 
@@ -101,6 +109,7 @@ export function buildEnvelopeViewModel(
   const vitals = analysis?.underwritingVitals;
   const summaries = statement?.monthlyStatementSummaries ?? [];
   const monthlyRows = buildBaseMonthlyRows(payload);
+  const integrity = parseIntegrity(payload);
 
   const totalDeposits = monthlyRows.reduce((s, r) => s + r.deposits, 0);
   const totalWithdrawals = monthlyRows.reduce((s, r) => s + r.withdrawals, 0);
@@ -108,6 +117,7 @@ export function buildEnvelopeViewModel(
 
   const stated =
     num(statement?.applicationContext?.statedRevenue) ??
+    num((statement?.applicationContext as { statedGAR?: number })?.statedGAR) ??
     num((statement?.applicationContext as { annualRevenue?: number })?.annualRevenue);
 
   const variance = revenueVariance(stated, totalDeposits);
@@ -118,18 +128,30 @@ export function buildEnvelopeViewModel(
     null;
 
   const avgWithdrawals = totalWithdrawals / monthCount;
-  const l3mAdb = meta.l3mAverageAdb ?? vitals?.adb?.l3mAverage ?? null;
 
-  const nsfCount =
-    num((vitals as { nsf?: { count?: number } })?.nsf?.count) ??
-    num((analysis?.financialTotals as { nsfCount?: number })?.nsfCount);
+  const rawL3mAdb = meta.l3mAverageAdb ?? vitals?.adb?.l3mAverage ?? null;
+  const l3mAdb = integrity.trustedForMetrics ? rawL3mAdb : null;
 
-  const dscr =
-    num((vitals as { dscr?: number })?.dscr) ??
-    num((analysis?.financialTotals as { dscr?: number })?.dscr);
+  const nsfAndOd = vitals?.nsfAndOverdraft as
+    | { nsfCount?: number; overdraftCount?: number }
+    | undefined;
+  const rawNsf =
+    num(nsfAndOd?.nsfCount) ??
+    num(nsfAndOd?.overdraftCount) ??
+    num((analysis?.financialTotals as { nsfCount?: number })?.nsfCount) ??
+    num(statement?.analytics?.riskMetrics?.overdraftCount);
+  const nsfCount = integrity.trustedForMetrics ? rawNsf : null;
+
+  const rawDscr =
+    num(analysis?.projections?.projectedDSCR) ??
+    num(analysis?.forensicIntelligence?.prospectiveDSCR);
+  const dscr = integrity.trustedForMetrics ? rawDscr : null;
 
   return {
     companyName: meta.companyName,
+    displayTitle: meta.displayTitle,
+    analyzedAt: meta.analyzedAt,
+    monthsAnalyzedLabel: meta.monthsAnalyzedLabel,
     businessAddress:
       (statement?.applicationContext as { businessAddress?: string })?.businessAddress ||
       "",
@@ -141,13 +163,20 @@ export function buildEnvelopeViewModel(
     revenueVariancePct: variance.pct,
     revenueVarianceLabel: variance.label,
     veritasScore,
-    veritasBadge: veritasBadgeFromScore(veritasScore, vera?.decision),
-    bankabilityLabel: bankabilityLabel(veritasScore),
+    veritasBadge: integrity.trustedForMetrics
+      ? veritasBadgeFromScore(veritasScore, vera?.decision)
+      : "Review",
+    bankabilityLabel: integrity.trustedForMetrics
+      ? bankabilityLabel(veritasScore, vera?.decision)
+      : "Unverified parse",
+    parseTrusted: integrity.trustedForMetrics,
     metrics: {
       l3mAdb,
       nsfCount,
       dscr,
-      daysCashOnHand: daysCashOnHand(l3mAdb, avgWithdrawals),
+      daysCashOnHand: integrity.trustedForMetrics
+        ? daysCashOnHand(l3mAdb, avgWithdrawals)
+        : null,
       consistencyScore: consistencyFromSummaries(summaries),
     },
     veraDecision: vera?.decision ?? null,

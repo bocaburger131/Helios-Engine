@@ -4,18 +4,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
-
+import type { HeliosStatementPayload, ReconciliationLineRow } from "@/lib/analysisAdapter";
 import {
-
+  formatCurrency,
+  getReconciliationLineDeltas,
+  resolveDocumentProvenance,
+} from "@/lib/analysisAdapter";
+import {
   findRegionKeyForCategory,
-
   formatArchiveStats,
-
   regionPageIndex,
-
   regionTypeLabel,
-
 } from "@/lib/provenanceUtils";
 
 
@@ -73,10 +72,9 @@ export default function DocumentProvenance({
 
 
   const analysis = payload.data?.statement?.analysis;
-
-  const documentMap = analysis?.documentMap;
-
-  const contextArchive = analysis?.contextArchive;
+  const provenance = resolveDocumentProvenance(payload);
+  const documentMap = provenance.documentMap;
+  const contextArchive = provenance.contextArchive;
 
 
 
@@ -131,6 +129,17 @@ export default function DocumentProvenance({
 
 
   const archiveStatsLine = formatArchiveStats(contextArchive?.stats ?? null);
+
+  const reconciliationByFile = useMemo(() => {
+    const rows = getReconciliationLineDeltas(payload);
+    const byFile = new Map<string, ReconciliationLineRow[]>();
+    for (const row of rows) {
+      const list = byFile.get(row.fileName) ?? [];
+      list.push(row);
+      byFile.set(row.fileName, list);
+    }
+    return Array.from(byFile.entries());
+  }, [payload]);
 
 
 
@@ -290,7 +299,7 @@ export default function DocumentProvenance({
 
               <p className="text-sm text-slate-500">
 
-                No document map regions on this analysis. Run layout-first pipeline to populate.
+                No document map regions on this analysis. Layout discovery did not produce region boundaries for this statement.
 
               </p>
 
@@ -447,6 +456,62 @@ export default function DocumentProvenance({
         </div>
 
       </div>
+
+      {reconciliationByFile.length > 0 && (
+        <div className="border-t px-4 py-3">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Checksum reconciliation by section
+          </h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Printed summary line vs parsed section total. A mismatched line shows exactly where the
+            statement diverges (credits are inflows; debits are outflows).
+          </p>
+          <div className="mt-3 space-y-4">
+            {reconciliationByFile.map(([fileName, rows]) => (
+              <div key={fileName}>
+                <p className="mb-1 text-xs font-medium text-slate-600">{fileName}</p>
+                <table className="w-full text-left text-xs">
+                  <thead className="text-slate-400">
+                    <tr>
+                      <th className="py-1 pr-2 font-medium">Line</th>
+                      <th className="py-1 pr-2 font-medium">Role</th>
+                      <th className="py-1 pr-2 text-right font-medium">Printed</th>
+                      <th className="py-1 pr-2 text-right font-medium">Parsed</th>
+                      <th className="py-1 pr-2 text-right font-medium">Delta</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr
+                        key={`${fileName}-${row.key}`}
+                        className={row.match ? "" : "bg-rose-50"}
+                      >
+                        <td className="py-1 pr-2 capitalize text-slate-700">
+                          {row.key.replace(/([A-Z])/g, " $1").replace(/_/g, " ")}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-500">{row.role}</td>
+                        <td className="py-1 pr-2 text-right tabular-nums text-slate-700">
+                          {formatCurrency(row.printed)}
+                        </td>
+                        <td className="py-1 pr-2 text-right tabular-nums text-slate-700">
+                          {formatCurrency(row.parsed)}
+                        </td>
+                        <td
+                          className={`py-1 pr-2 text-right tabular-nums ${
+                            row.match ? "text-slate-400" : "font-semibold text-rose-600"
+                          }`}
+                        >
+                          {row.delta == null ? "—" : formatCurrency(row.delta)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
     </section>
 

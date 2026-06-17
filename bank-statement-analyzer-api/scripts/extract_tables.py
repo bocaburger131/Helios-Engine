@@ -34,7 +34,7 @@ CONTINUED_HEADER_RE = re.compile(
 )
 REGIONS_ACTIVITY_RE = re.compile(
     r"electronic\s+deposits|deposits?\s*&\s*credits?|deposits?\s+and\s+additions?|"
-    r"withdrawals?|checks?\s+paid|card\s+purch|recurring\s+",
+    r"withdrawals?|checks?\s+(?:cleared|paid)|card\s+purch|recurring\s+",
     re.I,
 )
 
@@ -225,9 +225,11 @@ def detect_chase_section(text: str, current: str = "deposits") -> str:
 
 def section_id_from_table_header(header: list[str]) -> str | None:
     joined = " ".join(header).lower()
-    if re.search(r"deposits?\s+and\s+additions?|deposits?\s*/\s*credits?", joined):
+    if re.search(r"deposits?\s+and\s+additions?|deposits?\s*/\s*credits?|deposits?\s*&\s*credits?", joined):
         return "deposits"
-    if re.search(r"checks?\s*paid", joined):
+    if re.search(r"electronic\s+deposits?", joined):
+        return "electronic_deposits"
+    if re.search(r"checks?\s*(?:cleared|paid)", joined):
         return "checks"
     if re.search(r"electronic\s+withdrawals?", joined):
         return "electronic_withdrawals"
@@ -235,8 +237,10 @@ def section_id_from_table_header(header: list[str]) -> str | None:
         return "other_withdrawals"
     if re.search(r"atm\s+(?:&|and)\s+debit", joined):
         return "atm_debit"
-    if re.search(r"\bfee?s?\b", joined):
+    if re.search(r"\bfee?s?\b|service\s+charges?", joined):
         return "fees"
+    if re.search(r"withdrawals?\s*(?:\/|and)\s*debits?", joined):
+        return "withdrawals"
     return None
 
 
@@ -660,6 +664,166 @@ def page_in_history_zone(text: str, in_history: bool) -> bool:
     return in_history and bool(re.search(r"\d{1,2}/\d{1,2}", text))
 
 
+def regions_txn_type_for_section(section_id: str) -> str:
+    if section_id in ("deposits", "electronic_deposits", "credits"):
+        return "CREDIT"
+    return "DEBIT"
+
+
+def detect_regions_section(text: str, current: str = "electronic_deposits") -> str:
+    line = str(text or "").strip()
+    if re.search(r"electronic\s+deposits?", line, re.I):
+        return "electronic_deposits"
+    if re.search(r"deposits?\s*(?:&|and)\s*credits?", line, re.I):
+        return "deposits"
+    if re.search(r"electronic\s+withdrawals?", line, re.I):
+        return "electronic_withdrawals"
+    if re.search(r"checks?\s+cleared", line, re.I):
+        return "checks"
+    if re.search(r"card\s+purch|recurring\s+", line, re.I):
+        return "card"
+    if re.search(r"bank\s+fees?|service\s+charges?", line, re.I):
+        return "fees"
+    if re.search(r"withdrawals?\s*(?:\/|and)\s*debits?", line, re.I):
+        return "withdrawals"
+    return current
+
+
+def rows_from_table_regions(
+    table: list[list[str | None]], section_id: str
+) -> list[dict[str, Any]]:
+    if not table or len(table) < 2:
+        return []
+    header = [str(c or "").strip() for c in table[0]]
+    header_section = section_id_from_table_header(header)
+    if header_section:
+        section_id = header_section
+    roles = column_roles(header)
+    txns: list[dict[str, Any]] = []
+    last_date = ""
+
+    for raw_row in table[1:]:
+        cells = [str(c or "").strip() for c in raw_row]
+        if not any(cells):
+            continue
+        if is_summary_row(cells):
+            continue
+
+        row_line = " ".join(cells)
+        row_section = detect_regions_section(row_line, section_id)
+        txn_type = regions_txn_type_for_section(row_section)
+
+        date_idx = roles["date"]
+        date_cell = cells[date_idx] if date_idx is not None and date_idx < len(cells) else ""
+        date = ""
+        date_tail = ""
+        if date_cell and DATE_RE.match(date_cell.strip()):
+            date = date_cell.strip()
+            last_date = date
+        elif date_cell:
+            date, date_tail = split_leading_date(date_cell)
+            if date:
+                last_date = date
+        if not date and last_date:
+            date = last_date
+        if not date:
+            for cell in cells:
+                d, tail = split_leading_date(cell)
+                if d:
+                    date = d
+                    date_tail = tail or date_tail
+                    last_date = d
+                    break
+        if not date:
+            continue
+
+        desc_idx = roles["description"]
+        description = cells[desc_idx] if desc_idx is not None and desc_idx < len(cells) else ""
+        if date_tail:
+            description = f"{date_tail} {description}".strip()
+        if not description:
+            parts = []
+            for i, c in enumerate(cells):
+                if i == date_idx:
+                    continue
+                if roles["deposits"] == i or roles["withdrawals"] == i or roles["amount"] == i:
+                    continue
+                if c and not MONEY_RE.match(c) and not DATE_RE.match(c):
+                    parts.append(c)
+            description = " ".join(parts)
+
+        dep_amt = None
+        wd_amt = None
+        if roles["deposits"] is not None and roles["deposits"] < len(cells):
+            dep_amt = parse_money(cells[roles["deposits"]])
+        if roles["withdrawals"] is not None and roles["withdrawals"] < len(cells):
+            wd_amt = parse_money(cells[roles["withdrawals"]])
+        if dep_amt is None and wd_amt is None and roles["amount"] is not None:
+            amt = parse_money(cells[roles["amount"]])
+            if amt is not None:
+                emit_wells_row(date, description, amt, txn_type, txns, row_section)
+            continue
+
+        if dep_amt is None and wd_amt is None:
+            for i, cell in enumerate(cells):
+                if i == date_idx:
+                    continue
+                amt = parse_money(cell)
+                if amt is not None:
+                    emit_wells_row(date, description or row_line, amt, txn_type, txns, row_section)
+                    break
+            continue
+
+        if dep_amt is not None:
+            emit_wells_row(date, description, dep_amt, "CREDIT", txns, row_section or "deposits")
+        if wd_amt is not None:
+            emit_wells_row(date, description, wd_amt, "DEBIT", txns, row_section or section_id)
+
+    return txns
+
+
+def extract_regions_page_rows(
+    page: Any, page_index: int, section_id: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    page_text = page.extract_text() or ""
+    section_id = detect_regions_section(page_text, section_id)
+    txns: list[dict[str, Any]] = []
+    tables_text = extract_tables_from_page(page, TABLE_SETTINGS_TEXT)
+    raw_rows = count_data_rows(tables_text)
+    strategy = "text"
+    table_count = len(tables_text)
+
+    for table in tables_text:
+        if table:
+            txns.extend(rows_from_table_regions(table, section_id))
+
+    if raw_rows > 0 and not txns:
+        word_table = table_from_words(page, bank="regions")
+        if word_table:
+            strategy = "words_retry"
+            table_count = max(table_count, 1)
+            txns.extend(rows_from_table_regions(word_table, section_id))
+
+    if raw_rows == 0 and not txns:
+        word_table = table_from_words(page, bank="regions")
+        if word_table:
+            strategy = "words"
+            table_count = 1
+            raw_rows = max(0, len(word_table) - 1)
+            txns.extend(rows_from_table_regions(word_table, section_id))
+
+    debug_page(page_index, raw_rows, strategy, table_count)
+    telemetry = {
+        "page": page_index,
+        "rawRows": raw_rows,
+        "strategy": strategy,
+        "tables": table_count,
+        "txnRows": len(txns),
+        "sectionId": section_id,
+    }
+    return txns, telemetry
+
+
 def page_in_regions_zone(text: str, in_zone: bool) -> bool:
     if REGIONS_ACTIVITY_RE.search(text):
         return True
@@ -672,6 +836,7 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
     transactions: list[dict[str, Any]] = []
     tables_extracted = 0
     in_zone = False
+    section_id = "electronic_deposits"
     full_text_parts: list[str] = []
     page_count = 0
     page_telemetry: list[dict[str, Any]] = []
@@ -692,6 +857,8 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
             ):
                 in_zone = True
 
+            section_id = detect_regions_section(text, section_id)
+
             if not page_in_regions_zone(text, in_zone):
                 debug_page(page_index, 0, "skipped", 0)
                 page_telemetry.append(
@@ -699,7 +866,7 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
                 )
                 continue
 
-            page_txns, telemetry = extract_page_rows(page, page_index)
+            page_txns, telemetry = extract_regions_page_rows(page, page_index, section_id)
             page_telemetry.append(telemetry)
             strategies_used.add(telemetry["strategy"])
             tables_extracted += telemetry.get("tables", 0)
@@ -972,7 +1139,7 @@ def page_in_generic_zone(text: str, in_zone: bool) -> bool:
     return in_zone and bool(re.search(r"\d{1,2}/\d{1,2}", text))
 
 
-def extract_generic(pdf_path: str) -> dict[str, Any]:
+def extract_generic(pdf_path: str, column_hints: dict[str, Any] | None = None) -> dict[str, Any]:
     """Universal digital PDF: full extract_page_rows cascade per activity page."""
     transactions: list[dict[str, Any]] = []
     tables_extracted = 0
@@ -1031,6 +1198,7 @@ def extract_generic(pdf_path: str) -> dict[str, Any]:
             "bank": "generic",
             "pageTelemetry": page_telemetry,
             "extractionStrategy": extraction_strategy,
+            **({"columnHints": column_hints} if column_hints else {}),
         },
     }
 
@@ -1098,7 +1266,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract statement tables to JSON")
     parser.add_argument("pdf_path", help="Path to PDF file")
     parser.add_argument("--bank", default="wells", help="Bank profile (wells)")
+    parser.add_argument(
+        "--column-hints",
+        default="",
+        help="JSON column index hints from vision layout (dateIdx, descIdx, amountIdx, ...)",
+    )
     args = parser.parse_args()
+
+    column_hints = None
+    if args.column_hints:
+        try:
+            column_hints = json.loads(args.column_hints)
+        except json.JSONDecodeError:
+            column_hints = None
 
     bank = (args.bank or "wells").lower()
     if bank in ("wells", "wells_fargo", "wellsfargo"):
@@ -1108,9 +1288,12 @@ def main() -> None:
     elif bank in ("chase", "chase_business", "jpmorgan", "jpmorgan_chase"):
         result = extract_chase(args.pdf_path)
     elif bank in ("generic", "default", "unknown"):
-        result = extract_generic(args.pdf_path)
+        result = extract_generic(args.pdf_path, column_hints=column_hints)
     else:
-        result = extract_generic(args.pdf_path)
+        result = extract_generic(args.pdf_path, column_hints=column_hints)
+
+    if column_hints and isinstance(result.get("metadata"), dict):
+        result["metadata"]["columnHints"] = column_hints
 
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")

@@ -166,3 +166,82 @@ body.helios-app {
   right: 1.5rem;
   z-index: 40;
 }
+
+.helios-vera-dock {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: min(380px, calc(100vw - 40px));
+  max-height: min(520px, calc(100vh - 100px));
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 12px 48px rgba(15, 23, 42, 0.2);
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  overflow: hidden;
+}
+
+.helios-vera-header {
+  background: var(--helios-blue, #2563eb);
+  color: #fff;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.helios-vera-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.helios-vera-status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+}
+
+.helios-vera-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.helios-vera-input-row {
+  display: flex;
+  border-top: 1px solid #e2e8f0;
+  padding: 10px;
+  gap: 8px;
+}
+
+.helios-vera-input-row input {
+  flex: 1;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.helios-vera-input-row button {
+  background: var(--helios-blue, #2563eb);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.helios-vera-input-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

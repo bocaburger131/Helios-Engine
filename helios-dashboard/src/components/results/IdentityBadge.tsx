@@ -3,6 +3,8 @@
 type IdentityCrossCheck = {
   status?: string;
   confidence?: number;
+  bankBleedSkipped?: boolean;
+  displayName?: string;
   mismatches?: Array<{ field?: string; expected?: string; observed?: string }>;
 };
 
@@ -21,11 +23,20 @@ export default function IdentityBadge({ crossCheck }: Props) {
 
   const status = crossCheck.status.toLowerCase();
   const label =
-    status === "pass" ? "Verified" : status === "mismatch" ? "Mismatch" : "Review";
+    status === "pass"
+      ? crossCheck.bankBleedSkipped
+        ? "Verified (app)"
+        : "Verified"
+      : status === "mismatch"
+        ? "Mismatch"
+        : "Review";
 
   return (
     <div className="helios-card inline-flex flex-col gap-1 p-3">
       <p className="text-xs font-semibold uppercase text-slate-500">Identity</p>
+      {crossCheck.displayName && (
+        <p className="text-sm font-medium text-slate-800">{crossCheck.displayName}</p>
+      )}
       <span className={`helios-chip ${STATUS_STYLE[status] ?? STATUS_STYLE.review}`}>
         {label}
         {crossCheck.confidence != null ? ` · ${Math.round(crossCheck.confidence * 100)}%` : ""}

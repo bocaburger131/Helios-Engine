@@ -4,8 +4,9 @@
 
 import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
 import { l3mMovingAverageNet } from "@/lib/ProjectionsEngine";
+import { parseIntegrity } from "@/lib/analysisAdapter";
 
-export type EligibilityBand = "Strong" | "Moderate" | "Weak" | "Ineligible";
+export type EligibilityBand = "Strong" | "Moderate" | "Weak" | "Ineligible" | "Unreliable";
 
 export type EligibilityResult = {
   dscr: number | null;
@@ -24,7 +25,9 @@ export function calculateDSCR(
   }
   const payment = requestedLoanAmount * factor;
   if (payment <= 0) return null;
-  return Number((monthlyNetCashFlow / payment).toFixed(2));
+  const ratio = monthlyNetCashFlow / payment;
+  if (!Number.isFinite(ratio) || ratio > 50) return null;
+  return Number(ratio.toFixed(2));
 }
 
 export function eligibilityBandFromDSCR(dscr: number | null): EligibilityBand {
@@ -39,7 +42,23 @@ export function computeEligibility(
   payload: HeliosStatementPayload,
   loanAmountOverride?: number | null
 ): EligibilityResult {
+  const integrity = parseIntegrity(payload);
   const statement = payload.data?.statement;
+  const veraDecision = String(statement?.analysis?.vera?.decision || "").toLowerCase();
+
+  if (
+    !integrity.trustedForMetrics ||
+    veraDecision.includes("decline") ||
+    veraDecision.includes("reject")
+  ) {
+    return {
+      dscr: null,
+      proposedMonthlyPayment: null,
+      monthlyNetCashFlow: null,
+      band: "Unreliable",
+    };
+  }
+
   const forensic = statement?.analysis?.forensicIntelligence;
   const requested =
     loanAmountOverride ??

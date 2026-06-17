@@ -166,6 +166,14 @@ const statementSchema = new mongoose.Schema({
     default: null,
     index: true
   },
+  layoutDiscovery: {
+    documentMap: { type: Schema.Types.Mixed, default: null },
+    contextArchive: { type: Schema.Types.Mixed, default: null },
+    fingerprint: { type: String, trim: true, default: null },
+    mappingSource: { type: String, trim: true, default: null },
+    templateVersion: { type: Number, default: null },
+    parsedAt: { type: Date, default: null }
+  },
   statementDate: {
     type: Date,
     required: [true, 'Statement date is required'],

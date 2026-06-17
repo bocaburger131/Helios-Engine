@@ -4,6 +4,7 @@
 
 import { tryRecoverWellsNearMiss } from '../profiles/wellsFargoInitiateProfile.js';
 import { tryRecoverChaseFromPlumber } from '../profiles/chaseBusinessCompleteProfile.js';
+import { tryRecoverRegionsFromPlumber } from '../profiles/regionsBusinessCheckingProfile.js';
 import { mapProfileResultToRawBundle } from './dumbExtractorService.js';
 import logger from '../../../utils/logger.js';
 
@@ -43,6 +44,17 @@ export function tryProfileNearMissRecovery(params = {}) {
       plumberTransactions: ctx.plumberTransactions,
       meta: profileResult?.meta,
       stitcherPrinted: ctx.stitcherPrinted
+    });
+  }
+  if (profile?.id === 'regions_business_checking' && ctx?.plumberTransactions?.length) {
+    return tryRecoverRegionsFromPlumber({
+      plumberTransactions: ctx.plumberTransactions,
+      text: ctx.text,
+      defaultYear: ctx.defaultYear,
+      rtn: ctx.rtn,
+      accountNumber: ctx.accountNumber,
+      stitcherPrinted: ctx.stitcherPrinted,
+      typeAText: ctx.typeAText
     });
   }
   return null;

@@ -27,6 +27,7 @@ import { resolveProfile } from './extraction/bankProfileRegistry.js';
 import { runStatementExtractionPipeline } from './extraction/statementExtractionPipeline.js';
 import { reconcileStatement } from './extraction/statementReconciliation.js';
 import { tryRecoverChaseFromPlumber } from './extraction/profiles/chaseBusinessCompleteProfile.js';
+import { tryRecoverRegionsFromPlumber } from './extraction/profiles/regionsBusinessCheckingProfile.js';
 import {
   extractSummary,
   normalizeSpaces,
@@ -39,13 +40,12 @@ import {
 import { setBatchProgress } from './batchProgressStore.js';
 import { resolveRequiresBankConfirmation } from '../utils/bankConfirmationGate.js';
 import { dedupeExactFingerprints } from '../utils/parseDiagnosticReport.js';
-import { runLayoutFirstPipeline } from './extraction/layoutPipeline/layoutFirstOrchestrator.js';
-import { comparePipelineShadow } from './extraction/layoutPipeline/pipelineShadowComparator.js';
+import { layoutFirstPrimaryEnabled } from './extraction/layoutPipeline/pipelineConfig.js';
 import {
-  layoutFirstShadowEnabled,
-  layoutFirstPrimaryEnabled,
-  layoutFirstVeraFallbackEnabled
-} from './extraction/layoutPipeline/pipelineConfig.js';
+  runLayoutDiscoveryForParse,
+  compareLayoutDiscoveryShadow,
+  buildLayoutDiscoveryPayload
+} from './extraction/layoutPipeline/layoutDiscoveryHelper.js';
 import {
   shouldBlockLegacyExtract,
   logToxicFallbackBlocked
@@ -393,7 +393,9 @@ export class PDFParserService {
       const plumberOptions = {
         fileName: options?.fileName,
         bankName: bankNameFromTriage || accountInfo.bankName || options?.bankName,
-        defaultYear
+        defaultYear,
+        rtn: waterfallResult.rtn ?? null,
+        layoutTemplate: options?.layoutTemplate ?? null
       };
       let plumberResult = null;
       let plumberTransactions = null;
@@ -409,17 +411,73 @@ export class PDFParserService {
       let wellsReconciliation = null;
       let balances = await this._extractBalances(data.text, resolvedBankType);
 
+      const stitcherPrintedEarly = mergePrintedTotals(
+        stitcher.typeA?.printed ?? null,
+        stitcher.typeA?.text || data.text
+      );
+
+      const layoutDiscovery = await runLayoutDiscoveryForParse({
+        buffer,
+        data,
+        stitcher,
+        profile,
+        options,
+        waterfallResult,
+        accountInfo,
+        indicators,
+        parserService: this,
+        resolvedBankType,
+        defaultYear,
+        plumberTransactions,
+        bankNameFromTriage,
+        stitcherPrinted: stitcherPrintedEarly
+      });
+
+      let layoutPipelineShadow = layoutDiscovery.layoutPipelineShadow;
+      let layoutPipelineResult = layoutDiscovery.layoutPipelineResult;
+      let layoutPrimaryUsed = layoutDiscovery.layoutPrimaryUsed;
+      const resolvedLayoutTemplate =
+        layoutDiscovery.layoutTemplate ?? options?.layoutTemplate ?? null;
+      const templateHintMeta = layoutDiscovery.templateHintMeta ?? options?.templateHintMeta ?? null;
+
+      if (layoutPrimaryUsed && layoutPipelineResult) {
+        transactions = layoutPipelineResult.transactions || [];
+        const layoutRecon =
+          layoutDiscovery.layoutRecon ??
+          layoutPipelineResult.reconciliation?.reconciliationBreakdown ??
+          layoutPipelineResult.reconciliation;
+        pipelineResult = {
+          profileId: layoutPipelineResult.profileId ?? profile.id,
+          extractionTier: layoutPipelineResult.extractionTier ?? 1,
+          reconciliation: layoutRecon,
+          meta: layoutPipelineResult.meta,
+          dailyBalanceRule: { valid: true, violations: 0 }
+        };
+        wellsReconciliation = layoutRecon;
+        if (layoutPipelineResult.meta?.openingBalance != null) {
+          balances.opening = layoutPipelineResult.meta.openingBalance;
+        }
+        if (layoutPipelineResult.meta?.closingBalance != null) {
+          balances.closing = layoutPipelineResult.meta.closingBalance;
+        }
+        logger.info('[PDF_PARSER] Layout-first primary path applied (discovery-first)', {
+          txnCount: transactions.length,
+          checksumOk: layoutRecon?.checksumOk ?? false
+        });
+      }
+
+      if (!layoutPrimaryUsed) {
       try {
-        const stitcherPrinted = mergePrintedTotals(
-          stitcher.typeA?.printed ?? null,
-          stitcher.typeA?.text || data.text
-        );
+        const stitcherPrinted = stitcherPrintedEarly;
         pipelineResult = await runStatementExtractionPipeline({
           text: data.text,
           altText: stitcher.typeB?.combinedText,
           profile,
           parserService: this,
-          options,
+          options: {
+            ...options,
+            layoutTemplate: resolvedLayoutTemplate ?? options?.layoutTemplate ?? null
+          },
           resolvedBankType,
           defaultYear,
           rtn: waterfallResult.rtn ?? null,
@@ -453,7 +511,11 @@ export class PDFParserService {
         if (pipelineResult.stitcher) {
           Object.assign(stitcher, pipelineResult.stitcher);
         }
-        const strictProfileIds = new Set(['wells_initiate_checking', 'chase_business_complete']);
+        const strictProfileIds = new Set([
+          'wells_initiate_checking',
+          'chase_business_complete',
+          'regions_business_checking'
+        ]);
         const profileAccepted =
           !strictProfileIds.has(profile.id) ||
           (pipelineResult.extractionTier === 1 &&
@@ -526,6 +588,18 @@ export class PDFParserService {
         ) {
           wellsReconciliation = pipelineErr.reconciliation ?? null;
           logger.warn('[CHASE_BUSINESS] rejected — reconciliation failed', {
+            parsedDeposits: wellsReconciliation?.parsedDeposits,
+            printedDeposits: wellsReconciliation?.printedDeposits,
+            parsedWithdrawals: wellsReconciliation?.parsedWithdrawals,
+            printedWithdrawals: wellsReconciliation?.printedWithdrawals
+          });
+        }
+        if (
+          profile.id === 'regions_business_checking' &&
+          pipelineErr?.name === 'RegionsParseReconciliationError'
+        ) {
+          wellsReconciliation = pipelineErr.reconciliation ?? null;
+          logger.warn('[REGIONS_BUSINESS] rejected — reconciliation failed', {
             parsedDeposits: wellsReconciliation?.parsedDeposits,
             printedDeposits: wellsReconciliation?.printedDeposits,
             parsedWithdrawals: wellsReconciliation?.parsedWithdrawals,
@@ -639,6 +713,60 @@ export class PDFParserService {
                 plumberTxnCount: plumberRaw?.length ?? 0
               });
             }
+          } else if (profile.id === 'regions_business_checking') {
+            const plumberRaw =
+              plumberResult?.transactions ??
+              pipelineErr?.regionsPlumberTransactions ??
+              plumberTransactions;
+            const recovered = tryRecoverRegionsFromPlumber({
+              plumberTransactions: plumberRaw,
+              text: data.text,
+              defaultYear,
+              rtn: waterfallResult.rtn ?? null,
+              accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
+              stitcherPrinted: mergePrintedTotals(
+                stitcher.typeA?.printed ?? null,
+                stitcher.typeA?.text || data.text
+              ),
+              typeAText: stitcher.typeA?.text ?? null
+            });
+            if (recovered?.transactions?.length) {
+              transactions = recovered.transactions;
+              wellsReconciliation = recovered.reconciliation;
+              pipelineResult = {
+                profileId: profile.id,
+                extractionTier: recovered.checksumOk ? 1 : 2,
+                reconciliation: recovered.reconciliation,
+                dailyBalanceRule: { valid: true, violations: 0 },
+                meta: { ...recovered.meta, extractionProfile: profile.id },
+                regionsPlumberTransactions: recovered.transactions
+              };
+              if (recovered.meta.openingBalance != null) {
+                balances.opening = recovered.meta.openingBalance;
+              }
+              if (recovered.meta.closingBalance != null) {
+                balances.closing = recovered.meta.closingBalance;
+              }
+              if (recovered.checksumOk) {
+                logger.info('[PDF_PARSER] Regions pdfplumber recovery accepted', {
+                  txnCount: transactions.length,
+                  checksumOk: true
+                });
+              } else {
+                logger.warn('[PDF_PARSER] Regions pdfplumber best-effort (checksum failed)', {
+                  txnCount: transactions.length,
+                  checksumOk: false,
+                  plumberTxnCount: plumberRaw?.length ?? 0
+                });
+              }
+            } else {
+              transactions = [];
+              logger.warn('[PDF_PARSER] Regions profile failed — no usable plumber rows', {
+                error: pipelineErr.message,
+                checksumOk: recovered?.reconciliation?.checksumOk ?? false,
+                plumberTxnCount: plumberRaw?.length ?? 0
+              });
+            }
           } else if (profile.id === 'wells_initiate_checking' && transactions.length > 0) {
             logger.info('[PDF_PARSER] Wells profile extract retained — skipping legacy extract', {
               txnCount: transactions.length,
@@ -687,93 +815,59 @@ export class PDFParserService {
           }
         }
       }
+      }
+
+      if (
+        layoutDiscovery.run &&
+        layoutPipelineResult &&
+        !layoutPrimaryUsed &&
+        transactions.length > 0
+      ) {
+        layoutPipelineShadow = compareLayoutDiscoveryShadow(
+          {
+            transactions,
+            reconciliation: pipelineResult?.reconciliation ?? wellsReconciliation,
+            profileId: profile.id,
+            metadata: { extractionProfile: pipelineResult?.profileId ?? profile.id }
+          },
+          layoutDiscovery
+        );
+        const layoutRecon =
+          layoutPipelineResult.reconciliation?.reconciliationBreakdown ??
+          layoutPipelineResult.reconciliation;
+        if (
+          (layoutDiscovery.usePrimary ?? layoutFirstPrimaryEnabled()) &&
+          layoutPipelineResult.transactions?.length > 0 &&
+          layoutRecon?.checksumOk &&
+          !(pipelineResult?.reconciliation?.checksumOk)
+        ) {
+          transactions = layoutPipelineResult.transactions;
+          pipelineResult = {
+            ...(pipelineResult ?? {}),
+            profileId: layoutPipelineResult.profileId,
+            extractionTier: layoutPipelineResult.extractionTier,
+            reconciliation: layoutRecon,
+            meta: layoutPipelineResult.meta
+          };
+          wellsReconciliation = layoutRecon;
+          if (layoutPipelineResult.meta?.openingBalance != null) {
+            balances.opening = layoutPipelineResult.meta.openingBalance;
+          }
+          if (layoutPipelineResult.meta?.closingBalance != null) {
+            balances.closing = layoutPipelineResult.meta.closingBalance;
+          }
+          logger.info('[PDF_PARSER] Layout-first preferred over profile fallback', {
+            txnCount: transactions.length,
+            checksumOk: true
+          });
+        }
+      }
 
       if (stitcher.typeA.printed.opening != null && balances.opening == null) {
         balances.opening = stitcher.typeA.printed.opening;
       }
       if (stitcher.typeA.printed.closing != null && balances.closing == null) {
         balances.closing = stitcher.typeA.printed.closing;
-      }
-
-      let layoutPipelineShadow = null;
-      let layoutPipelineResult = null;
-      const runLayoutPipeline =
-        options.forceLayoutFirstShadow ||
-        options.forceLayoutFirstPrimary ||
-        layoutFirstShadowEnabled() ||
-        layoutFirstPrimaryEnabled();
-
-      if (runLayoutPipeline) {
-        try {
-          const usePrimary =
-            options.forceLayoutFirstPrimary ?? layoutFirstPrimaryEnabled();
-          const layoutResult = await runLayoutFirstPipeline(buffer, {
-            text: data.text,
-            altText: stitcher.typeB?.combinedText,
-            rtn: waterfallResult.rtn ?? null,
-            bankName: bankNameFromTriage || accountInfo.bankName,
-            profileId: profile.id,
-            fileName: options?.fileName,
-            defaultYear,
-            pageCount: data.numpages,
-            stitcher,
-            layoutTemplate: options?.layoutTemplate,
-            parserService: this,
-            resolvedBankType,
-            plumberTransactions,
-            stitcherPrinted: mergePrintedTotals(
-              stitcher.typeA?.printed ?? null,
-              stitcher.typeA?.text || data.text
-            ),
-            typeAText: stitcher.typeA?.text ?? null,
-            accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
-            applicationContext: this._resolveAnchorOptions(options),
-            anchorData: this._resolveAnchorOptions(options),
-            enableVeraFallback:
-              options.enableVeraFallback ??
-              (usePrimary && layoutFirstVeraFallbackEnabled())
-          });
-
-          layoutPipelineShadow = comparePipelineShadow(
-            {
-              transactions,
-              reconciliation: pipelineResult?.reconciliation ?? wellsReconciliation,
-              profileId: profile.id,
-              metadata: { extractionProfile: pipelineResult?.profileId ?? profile.id }
-            },
-            layoutResult
-          );
-          layoutPipelineResult = layoutResult;
-
-          if (usePrimary && layoutResult.transactions?.length > 0) {
-            transactions = layoutResult.transactions;
-            const layoutRecon =
-              layoutResult.reconciliation?.reconciliationBreakdown ?? layoutResult.reconciliation;
-            pipelineResult = {
-              ...(pipelineResult ?? {}),
-              profileId: layoutResult.profileId,
-              extractionTier: layoutResult.extractionTier,
-              reconciliation: layoutRecon,
-              meta: layoutResult.meta
-            };
-            wellsReconciliation = layoutRecon;
-            if (layoutResult.meta?.openingBalance != null) {
-              balances.opening = layoutResult.meta.openingBalance;
-            }
-            if (layoutResult.meta?.closingBalance != null) {
-              balances.closing = layoutResult.meta.closingBalance;
-            }
-            logger.info('[PDF_PARSER] Layout-first primary path applied', {
-              txnCount: transactions.length,
-              checksumOk: layoutRecon?.checksumOk ?? false
-            });
-          }
-        } catch (layoutErr) {
-          logger.warn('[LAYOUT_PIPELINE_SHADOW] layout-first run failed', {
-            error: layoutErr.message,
-            profileId: profile.id
-          });
-        }
       }
 
       logger.info('[PDF_PARSER] Extracted balances.');
@@ -805,6 +899,10 @@ export class PDFParserService {
 
       logger.info('[PDF_PARSER] Successfully parsed statement.');
       const resolvedBankName = bankNameFromTriage || accountInfo.bankName;
+      const layoutDiscoveryPayload = buildLayoutDiscoveryPayload(
+        layoutPipelineResult,
+        templateHintMeta
+      );
       const baseResult = {
         success: true,
         metadata: {
@@ -814,7 +912,11 @@ export class PDFParserService {
           identityMethod,
           rtn: waterfallResult.rtn ?? null,
           fdicCert: waterfallResult.fdicCert ?? null,
-          usedLayoutTemplate: Boolean(options?.layoutTemplate),
+          usedLayoutTemplate: Boolean(resolvedLayoutTemplate),
+          templateUsedAsHint: Boolean(templateHintMeta?.templateUsedAsHint),
+          templateVersion: templateHintMeta?.templateVersion ?? null,
+          templateStatus: templateHintMeta?.templateStatus ?? null,
+          layoutDiscovery: layoutDiscoveryPayload,
           stitcher: {
             pageCount: stitcher.pageCount,
             printedSummary: stitcher.typeA.printed,

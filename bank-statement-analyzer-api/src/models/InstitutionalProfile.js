@@ -22,7 +22,10 @@ const templateSchema = new Schema(
     totalProcessed: { type: Number, default: 0, min: 0 },
     lastError: { type: String, trim: true },
     layoutConfidence: { type: Number, min: 0, max: 1, default: null },
-    mapping: { type: Schema.Types.Mixed, default: {} }
+    mapping: { type: Schema.Types.Mixed, default: {} },
+    /** Redacted Pass 1 region boundaries + anchor keys for variant matching */
+    documentMapSnapshot: { type: Schema.Types.Mixed, default: null },
+    fingerprint: { type: String, trim: true, default: null }
   },
   { _id: true }
 );

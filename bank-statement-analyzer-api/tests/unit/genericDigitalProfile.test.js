@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { extract, PROFILE_ID } from '../../src/services/extraction/profiles/genericDigitalProfile.js';
+import {
+  extract,
+  extractRaw,
+  PROFILE_ID
+} from '../../src/services/extraction/profiles/genericDigitalProfile.js';
 import { extractDocumentPrintedTotals } from '../../src/services/extraction/printedVitalsService.js';
 
 describe('genericDigitalProfile', () => {
@@ -49,5 +53,26 @@ Ending Balance $1,100.00
     });
     expect(result.transactions.length).toBeGreaterThan(0);
     expect(result.reconciliation).toBeDefined();
+  });
+
+  it('extractRaw uses section text and parserService without throwing', async () => {
+    const parserService = {
+      _extractTransactions: vi.fn().mockResolvedValue([
+        { date: '2025-01-15', description: 'Deposit', amount: 100, type: 'credit' }
+      ]),
+      _extractBalances: vi.fn().mockResolvedValue({ opening: 1000, closing: 1100 }),
+      bankParsers: new Map([['DEFAULT', {}]])
+    };
+    const text = 'Beginning Balance $1,000.00\nTotal Deposits $100.00\nEnding Balance $1,100.00';
+    const raw = await extractRaw({
+      text,
+      sectionChunks: { transactionHistory: '01/15 Deposit 100.00', summary: text },
+      parserService,
+      resolvedBankType: 'DEFAULT',
+      defaultYear: 2025
+    });
+    expect(raw.transactions.length).toBeGreaterThan(0);
+    expect(raw.meta.extractionProfile).toBe('generic_digital');
+    expect(parserService._extractTransactions).toHaveBeenCalled();
   });
 });

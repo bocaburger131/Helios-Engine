@@ -1,0 +1,66 @@
+{
+  "success": true,
+  "data": {
+    "statement": {
+      "_id": "6a2da24db03a729ce983e5bc",
+      "bankName": "Regions Bank",
+      "accountNumber": "0241929470",
+      "closingBalance": 3961.42,
+      "applicationContext": {
+        "companyName": "Premier Fitness, LLC",
+        "requestedLoanAmount": 240000,
+        "statedRevenue": 2400000,
+        "businessAddress": "Hoover, AL"
+      },
+      "monthlyStatementSummaries": [
+        {
+          "fileName": "stmt-01.pdf",
+          "totalDeposits": 805000,
+          "totalWithdrawals": 3,
+          "openingBalance": 3500,
+          "closingBalance": 3961.42,
+          "checksumOk": false,
+          "parseQuality": "FAILED_CHECKSUM"
+        },
+        {
+          "fileName": "stmt-02.pdf",
+          "totalDeposits": 237000,
+          "totalWithdrawals": 0,
+          "openingBalance": 3200,
+          "closingBalance": 3800,
+          "checksumOk": false,
+          "parseQuality": "FAILED_CHECKSUM"
+        }
+      ],
+      "analysis": {
+        "metadata": {
+          "parseOutcome": "DEGRADED",
+          "checksumPassRatio": 0,
+          "institutionProfileGate": {
+            "step1Required": true,
+            "productionReady": false,
+            "profileStatus": "LEARNING",
+            "codeProfileId": "generic_digital"
+          },
+          "parseQualityByFile": [
+            { "fileName": "stmt-01.pdf", "checksumOk": false },
+            { "fileName": "stmt-02.pdf", "checksumOk": false }
+          ]
+        },
+        "underwritingVitals": {
+          "adb": { "l3mAverage": 6686760 },
+          "nsfAndOverdraft": { "nsfCount": 0, "overdraftCount": 0 }
+        },
+        "projections": { "projectedDSCR": 100.68, "eligibilityBand": "strong" },
+        "forensicIntelligence": { "prospectiveDSCR": 100.68 },
+        "vera": {
+          "decision": "DECLINE",
+          "bankabilityScore": 2,
+          "briefingMarkdown": "Parse integrity failed — 0/12 checksum pass."
+        }
+      },
+      "transactions": []
+    },
+    "transactions": []
+  }
+}

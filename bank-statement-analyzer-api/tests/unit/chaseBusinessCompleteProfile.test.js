@@ -264,4 +264,80 @@ Total Deposits and Additions $1,262.06
     expect(rows.length).toBeGreaterThanOrEqual(3);
     expect(injectChaseRowBreaks(glued).split('\n').filter((l) => /^\d{1,2}\/\d{1,2}/.test(l.trim())).length).toBeGreaterThanOrEqual(3);
   });
+
+  it('detect scores JPMorgan + deposits anchors at or above threshold', () => {
+    const capriHeader = normalizeSpaces(`
+JPMorgan Chase Bank, N.A.
+Deposits and Additions DATE DESCRIPTION AMOUNT
+`);
+    expect(detect(capriHeader)).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it('resolveProfile locks chase_business_complete for JPMorgan Capri text with bankName hint', () => {
+    const capri = normalizeSpaces(`
+JPMorgan Chase Bank, N.A.
+Deposits and Additions DATE DESCRIPTION AMOUNT
+02/01 Zelle 500.00
+`);
+    const profile = resolveProfile({ text: capri, bankName: 'Chase' });
+    expect(profile.id).toBe('chase_business_complete');
+    expect(profile.confidence).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it('extract reconciles Capri-style *start* multi-section detail', () => {
+    const capri = normalizeSpaces(`
+JPMorgan Chase Bank, N.A.
+Chase Business Complete Checking
+INSTANCES AMOUNT
+Beginning Balance $1,000.00
+Deposits and Additions 2 $1,262.06
+Checks Paid 1 $100.00
+Ending Balance $2,162.06
+Total Deposits and Additions $1,262.06
+Total Checks Paid $100.00
+*start*deposits
+DEPOSITS AND ADDITIONS DATE DESCRIPTION AMOUNT
+02/01 Zelle Payment From Vendor ABC 500.00
+02/02 Orig CO Name:Capri Trn: 0597656388Tc 762.06
+Total Deposits and Additions $1,262.06
+*start*checks
+CHECKS PAID DATE CHECK NO DESCRIPTION AMOUNT
+02/03 1001 Rent Check 100.00
+Total Checks Paid $100.00
+`);
+    const result = extract({ text: capri, defaultYear: 2025 });
+    expect(result.reconciliation.checksumOk).toBe(true);
+    expect(result.transactions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('extract handles withdrawals-only month with *start*electronic sections', () => {
+    const feb = normalizeSpaces(`
+JPMorgan Chase Bank, N.A.
+Chase Business Complete Checking
+INSTANCES AMOUNT
+Beginning Balance $5,000.00
+Deposits and Additions 0 $0.00
+Checks Paid 2 $700.00
+Electronic Withdrawals 2 $1,300.00
+Ending Balance $3,000.00
+Total Deposits and Additions $0.00
+Total Checks Paid $700.00
+Total Electronic Withdrawals $1,300.00
+*start*deposits
+Total Deposits and Additions $0.00
+*start*checks
+02/01 1001 Vendor A 400.00
+02/02 1002 Vendor B 300.00
+Total Checks Paid $700.00
+*start*electronic
+02/03 ACH Payroll 800.00
+02/04 Wire Out 500.00
+Total Electronic Withdrawals $1,300.00
+`);
+    const result = extract({ text: feb, defaultYear: 2025 });
+    expect(result.reconciliation.checksumOk).toBe(true);
+    expect(result.reconciliation.parsedDeposits).toBe(0);
+    expect(result.reconciliation.parsedWithdrawals).toBeGreaterThan(0);
+    expect(result.transactions.some((t) => t.amount > 0)).toBe(false);
+  });
 });

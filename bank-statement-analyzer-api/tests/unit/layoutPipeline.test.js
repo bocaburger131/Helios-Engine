@@ -149,6 +149,11 @@ describe('identityParser', () => {
     expect(id.legalName).toMatch(/MAAS TREATS/i);
     expect(id.anchorStatus).toBe(ANCHOR_STATUSES.FOUND);
   });
+
+  it('rejects bank letterhead as legal name', () => {
+    const id = parseIdentityFromHeader('JPMorgan Chase Bank, N.A.\nAccount number: 123');
+    expect(id.legalName).toBeNull();
+  });
 });
 
 describe('feeLedgerParser', () => {
@@ -233,6 +238,19 @@ describe('veraReconciliationFallback', () => {
     );
     expect(r.status).not.toBe('pass');
     expect(r.mismatches.length).toBeGreaterThan(0);
+  });
+
+  it('crossCheckIdentity skips mismatch when observed name is bank letterhead', () => {
+    const r = crossCheckIdentity(
+      {
+        identity: normalizeIdentityMap({ legalName: 'JPMorgan Chase Bank, N.A.' })
+      },
+      { companyName: 'SZ Hospitality LLP' }
+    );
+    expect(r.status).toBe('pass');
+    expect(r.bankBleedSkipped).toBe(true);
+    expect(r.displayName).toBe('SZ Hospitality LLP');
+    expect(r.mismatches).toHaveLength(0);
   });
 
   it('reconcileWithVera skips when checksum ok', async () => {

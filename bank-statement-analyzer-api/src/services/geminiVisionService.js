@@ -42,6 +42,11 @@ const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backt
   "mathPattern": "MINUS_PREFIX",
   "confidenceScore": 0.85,
   "vitals": { "currency": "USD", "dateFormat": "MM/DD/YYYY", "openingBalance": 1234.56, "closingBalance": 5678.90 },
+  "summaryLineLabels": [
+    { "key": "deposits", "label": "Deposits and Credits", "role": "credit" },
+    { "key": "withdrawals", "label": "Withdrawals and Debits", "role": "debit" },
+    { "key": "fees", "label": "Fees", "role": "debit", "optional": true }
+  ],
   "transactionSections": [
     { "label": "Transaction history (all activity)", "start": "Transaction history", "end": "Daily balance summary" },
     { "label": "Electronic Deposits", "start": "ELECTRONIC DEPOSITS", "end": "Total deposits" },
@@ -58,7 +63,8 @@ Rules:
 - For DEBIT_CREDIT_SEPARATE, debitIdx and creditIdx are required in columnMapping.
 - columnMapping indices are 0-based from splitting each transaction row on 2+ spaces or tabs.
 - confidenceScore must be a number from 0.0 to 1.0.
-- vitals.openingBalance and vitals.closingBalance are numbers from the printed statement summary (not calculated from transactions).`;
+- vitals.openingBalance and vitals.closingBalance are numbers from the printed statement summary (not calculated from transactions).
+- summaryLineLabels: copy exact printed SUMMARY line labels for deposits/credits (role credit), withdrawals/debits (role debit), and optional fees (role debit).`;
 
 let lastVisionCallMs = 0;
 
@@ -104,6 +110,19 @@ const LAYOUT_JSON_SCHEMA = {
           end: { type: 'string' }
         },
         required: ['start']
+      }
+    },
+    summaryLineLabels: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          role: { type: 'string' },
+          optional: { type: 'boolean' }
+        },
+        required: ['key', 'label', 'role']
       }
     }
   },
@@ -564,12 +583,31 @@ export function coerceLayoutMapping(parsed) {
         .filter(Boolean)
     : null;
 
+  const summaryLineLabels = Array.isArray(parsed.summaryLineLabels)
+    ? parsed.summaryLineLabels
+        .map((line) => {
+          if (!line || typeof line !== 'object') return null;
+          const key = String(line.key ?? '').trim();
+          const label = String(line.label ?? line.text ?? '').trim();
+          const role = String(line.role ?? '').toLowerCase();
+          if (!key || !label || (role !== 'credit' && role !== 'debit')) return null;
+          return {
+            key,
+            label,
+            role,
+            optional: Boolean(line.optional)
+          };
+        })
+        .filter(Boolean)
+    : null;
+
   return {
     headerAnchors,
     columnMapping,
     mathPattern,
     balanceReconciliationHint,
     ...(transactionSections?.length ? { transactionSections } : {}),
+    ...(summaryLineLabels?.length ? { summaryLineLabels } : {}),
     ...(layoutConfidence !== undefined ? { layoutConfidence } : {})
   };
 }

@@ -4,6 +4,13 @@
 
 import { ANCHOR_STATUSES, normalizeIdentityMap } from './documentMapContract.js';
 
+const INSTITUTION_BLEED_RE =
+  /jpmorgan|chase\s+bank|wells\s+fargo|regions\s+bank|bank\s*,?\s*n\.?a\.?/i;
+
+export function isInstitutionBleedName(name) {
+  return INSTITUTION_BLEED_RE.test(String(name || '').trim());
+}
+
 export const IDENTITY_ANCHOR_PATTERNS = {
   legalName: [
     /(?:account\s+(?:holder|name)|business\s+name)[:\s]+(.+?)(?:\n|$)/i,
@@ -38,7 +45,9 @@ export function parseIdentityFromHeader(text) {
     return normalizeIdentityMap({});
   }
 
-  const legalName = firstMatch(src, IDENTITY_ANCHOR_PATTERNS.legalName);
+  const legalNameRaw = firstMatch(src, IDENTITY_ANCHOR_PATTERNS.legalName);
+  const legalName =
+    legalNameRaw && isInstitutionBleedName(legalNameRaw) ? null : legalNameRaw;
   const dba = firstMatch(src, IDENTITY_ANCHOR_PATTERNS.dba);
   const einRaw = firstMatch(src, IDENTITY_ANCHOR_PATTERNS.ein);
   const ein = einRaw ? einRaw.replace(/\D/g, '').replace(/^(\d{2})(\d{7})$/, '$1-$2') : null;
@@ -54,4 +63,4 @@ export function parseIdentityFromHeader(text) {
   });
 }
 
-export default { parseIdentityFromHeader, IDENTITY_ANCHOR_PATTERNS };
+export default { parseIdentityFromHeader, IDENTITY_ANCHOR_PATTERNS, isInstitutionBleedName };

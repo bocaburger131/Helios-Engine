@@ -124,6 +124,10 @@ export type StatementListItem = {
   id?: string;
   _id?: string;
   fileName?: string;
+  analysisTitle?: string;
+  analyzedAt?: string;
+  monthsAnalyzedLabel?: string;
+  applicationContext?: { companyName?: string };
   bankName?: string;
   status?: string;
   uploadDate?: string;

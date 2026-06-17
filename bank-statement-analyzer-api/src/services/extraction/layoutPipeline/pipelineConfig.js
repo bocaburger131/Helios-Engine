@@ -10,7 +10,14 @@ export function layoutFirstShadowEnabled() {
 
 export function layoutFirstPrimaryEnabled() {
   const v = process.env.LAYOUT_FIRST_PRIMARY;
-  return v === 'true' || v === '1';
+  if (v === 'false' || v === '0') return false;
+  return v === 'true' || v === '1' || v === undefined;
+}
+
+export function layoutDiscoveryRequired() {
+  const v = process.env.LAYOUT_DISCOVERY_REQUIRED;
+  if (v === 'false' || v === '0') return false;
+  return v === 'true' || v === '1' || v === undefined;
 }
 
 export function layoutFirstVeraFallbackEnabled() {
@@ -22,5 +29,6 @@ export function layoutFirstVeraFallbackEnabled() {
 export default {
   layoutFirstShadowEnabled,
   layoutFirstPrimaryEnabled,
-  layoutFirstVeraFallbackEnabled
+  layoutFirstVeraFallbackEnabled,
+  layoutDiscoveryRequired
 };

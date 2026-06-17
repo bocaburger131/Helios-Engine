@@ -59,7 +59,7 @@ const DETAIL_HEADER_RE =
   /(?:deposits?\s+and\s+additions?\s+date\s+(?:description|check)|\*start\*deposits)/i;
 
 const DETAIL_SECTION_END_RE =
-  /\*start\*checks|\*start\*electronic|the\s+monthly\s+service\s+fee|important\s+information/i;
+  /(?:the\s+monthly\s+service\s+fee|important\s+information|\*end\*statement|\*end\*detail)/i;
 
 const CHASE_ROW_AMOUNT_CAP = 250_000;
 
@@ -91,7 +91,7 @@ export function detect(text) {
 
     if (/jpmorgan\s+chase/i.test(t) && /deposits?\s+and\s+additions?/i.test(t)) {
 
-      return 0.75;
+      return 0.86;
 
     }
 
@@ -246,13 +246,18 @@ export function pickLastReasonableAmount(
 
 export function findChaseDetailStartIndex(text) {
   const t = normalizeSpaces(text);
-  const startDep = t.search(/\*start\*deposits/i);
-  if (startDep >= 0) return startDep;
+  const candidates = [
+    t.search(/\*start\*deposits/i),
+    t.search(/deposits?\s+and\s+additions?\s+date\s+(?:description|check)/i),
+    t.search(/\*start\*checks/i),
+    t.search(/\*start\*electronic/i),
+    t.search(/checks?\s*paid\s+date/i),
+    t.search(/electronic\s+withdrawals?\s+date/i)
+  ].filter((i) => i >= 0);
+  if (candidates.length) return Math.min(...candidates);
 
   const header = t.match(DETAIL_HEADER_RE);
   if (header?.index != null) return header.index;
-  const startChecks = t.search(/\*start\*checks/i);
-  if (startChecks >= 0) return startChecks;
 
   let lastDep = -1;
   const depRe = /deposits?\s+and\s+additions?/gi;
@@ -313,6 +318,11 @@ export function injectChaseRowBreaks(text) {
   );
 
   s = s.replace(/(checks?\s*paid\s+date\s+check)/gi, '\n$1\n');
+
+  s = s.replace(
+    /(electronic\s+withdrawals?\s+date\s+description)/gi,
+    '\n$1\n'
+  );
 
   for (const sec of SECTION_HEADERS) {
 
@@ -441,6 +451,29 @@ function sumChaseWithdrawalSections(t) {
   return any ? sum : null;
 }
 
+/** Sum printed "Total …" withdrawal lines (checks, electronic, fees, etc.). */
+function sumChasePrintedWithdrawalTotals(t) {
+  const labels = [
+    /total\s+checks?\s*paid\s+\$?\s*([\d,]+\.\d{2})/gi,
+    /total\s+electronic\s+withdrawals?\s+\$?\s*([\d,]+\.\d{2})/gi,
+    /total\s+atm\s+(?:&|and)\s+debit\s+\$?\s*([\d,]+\.\d{2})/gi,
+    /total\s+other\s+withdrawals?\s+\$?\s*([\d,]+\.\d{2})/gi,
+    /total\s+fees?\s+\$?\s*([\d,]+\.\d{2})/gi
+  ];
+  let sum = 0;
+  let any = false;
+  for (const re of labels) {
+    for (const m of t.matchAll(re)) {
+      const n = moneyToNumber(m[1]);
+      if (n != null) {
+        sum += Math.abs(n);
+        any = true;
+      }
+    }
+  }
+  return any ? sum : null;
+}
+
 /** Fill only null vitals from stitcher — never override document totals. */
 export function mergeChaseSummaryWithStitcher(summary, stitcherPrinted) {
   return mergePrintedWithStitcherShared(summary, stitcherPrinted);
@@ -452,16 +485,21 @@ function extractSummaryFromSlice(text) {
   const totalDepMatch = t.match(
     /Total\s+Deposits?\s+and\s+Additions?\s+\$?\s*([\d,]+\.\d{2})/i
   );
-  const totalWdMatch = t.match(
-    /Total\s+(?:Electronic\s+)?Withdrawals?\s+\$?\s*-?\s*\$?\s*([\d,]+\.\d{2})/i
-  );
 
   let printedDeposits = totalDepMatch ? moneyToNumber(totalDepMatch[1]) : null;
   if (printedDeposits == null) {
     printedDeposits = amountAfterSectionLabel(t, /deposits?\s+and\s+additions?/i);
   }
 
-  let printedWithdrawals = totalWdMatch ? moneyToNumber(totalWdMatch[1]) : null;
+  let printedWithdrawals = sumChasePrintedWithdrawalTotals(t);
+  if (printedWithdrawals == null) {
+    const totalWdMatch = t.match(
+      /Total\s+Withdrawals?\s+\$?\s*-?\s*\$?\s*([\d,]+\.\d{2})/i
+    );
+    if (totalWdMatch && !/electronic|checks/i.test(totalWdMatch[0])) {
+      printedWithdrawals = moneyToNumber(totalWdMatch[1]);
+    }
+  }
   if (printedWithdrawals == null) {
     printedWithdrawals = sumChaseWithdrawalSections(t);
   }
@@ -548,6 +586,29 @@ function isSectionHeader(line) {
   if (!trimmed || trimmed.length > 120) return null;
 
   if (/^\d{1,2}\/\d{1,2}/.test(trimmed)) return null;
+
+  const startMarker = trimmed.match(/^\*start\*(\w+)/i);
+  if (startMarker) {
+    const marker = startMarker[1].toLowerCase();
+    if (marker.includes('deposit')) {
+      return SECTION_HEADERS.find((s) => s.id === 'deposits') ?? null;
+    }
+    if (marker.includes('check')) {
+      return SECTION_HEADERS.find((s) => s.id === 'checks') ?? null;
+    }
+    if (marker.includes('electronic')) {
+      return SECTION_HEADERS.find((s) => s.id === 'electronic_withdrawals') ?? null;
+    }
+    if (marker.includes('atm')) {
+      return SECTION_HEADERS.find((s) => s.id === 'atm_debit') ?? null;
+    }
+    if (marker.includes('fee')) {
+      return SECTION_HEADERS.find((s) => s.id === 'fees') ?? null;
+    }
+    if (marker.includes('withdraw')) {
+      return SECTION_HEADERS.find((s) => s.id === 'other_withdrawals') ?? null;
+    }
+  }
 
   for (const sec of SECTION_HEADERS) {
 

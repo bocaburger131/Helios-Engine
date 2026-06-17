@@ -6,6 +6,32 @@ import logger from '../utils/logger.js';
 import { withLayoutFingerprint } from './extraction/layoutFingerprintService.js';
 
 /**
+ * Best learnable template mapping for every parse (no manuallyVerified gate).
+ * @param {string} [rtn]
+ * @param {object | null} [institutionalProfile] — lean doc if already loaded
+ * @returns {Promise<{ mapping: object, templateVersion: number, templateStatus: string, templateUsedAsHint: true } | null>}
+ */
+export async function resolveLayoutTemplateForParse(rtn, institutionalProfile = null) {
+  const cleanedRtn = String(rtn || '').replace(/\D/g, '');
+  if (cleanedRtn.length !== 9) return null;
+
+  const profile =
+    institutionalProfile ??
+    (await InstitutionalProfile.findOne({ routingNumber: cleanedRtn }).lean());
+  if (!profile) return null;
+
+  const tpl = getLatestLearnableTemplate(profile);
+  if (!tpl?.mapping) return null;
+
+  return {
+    mapping: tpl.mapping,
+    templateVersion: tpl.version,
+    templateStatus: tpl.status,
+    templateUsedAsHint: true
+  };
+}
+
+/**
  * @param {import('mongoose').Types.ObjectId | string} profileId
  * @param {object} mapping — layout mapping (headerAnchors, etc.)
  * @param {{ layoutConfidence?: number | null }} [opts]
@@ -72,4 +98,8 @@ export function getLatestLearnableTemplate(profile) {
   return null;
 }
 
-export default { persistLearningTemplate, getLatestLearnableTemplate };
+export default {
+  persistLearningTemplate,
+  getLatestLearnableTemplate,
+  resolveLayoutTemplateForParse
+};

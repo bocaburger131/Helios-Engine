@@ -37,6 +37,12 @@ import {
 } from '../utils/macroAccountGrouping.js';
 import { buildUserOwnershipQuery } from '../utils/userQuery.js';
 import { ensureInstitutionalProfileForRtn } from '../services/bankEnrichmentService.js';
+import {
+  assessInstitutionProfileGate,
+  scanRtnFromText,
+  isProbeAnalysisAllowed
+} from '../services/institutionProfileGateService.js';
+import { RTN_BANK_MAP } from '../config/bankIdentifiers.js';
 import { logStructured } from '../utils/structuredLog.js';
 import {
   crossCheckIdentityAgainstApplication,
@@ -65,6 +71,9 @@ import {
 import { resolveBankIdFromName } from '../utils/bankConfirmationGate.js';
 import { buildMacroResponseEnvelope } from '../services/macroResponseEnvelope.js';
 import { buildAnalysisListFields } from '../utils/analysisListMeta.js';
+import { resolveMonthlyChecksumOk } from '../utils/monthlyChecksumTrust.js';
+import { buildChartActivityRollup } from '../utils/chartActivityRollup.js';
+import { persistMacroTransactions } from '../utils/macroTransactionPersist.js';
 import { reconcileMacroFinancialTotals } from '../utils/macroLedgerTotals.js';
 import { syncDealAnalysis } from '../services/crm/heliosZohoPipeline.js';
 import {
@@ -98,7 +107,10 @@ import {
   getStatementJobStatus,
   isStatementQueueAvailable
 } from '../services/statementProcessingQueue.js';
-import { persistLearningTemplate } from '../services/institutionalTemplatePersist.js';
+import {
+  persistLearningTemplate,
+  resolveLayoutTemplateForParse
+} from '../services/institutionalTemplatePersist.js';
 import { sanitizeTransactionsForMacro, buildDealIdentity } from '../utils/amountSanityGuardrails.js';
 import {
   buildChecksumGateBestEffortAlert,
@@ -1850,7 +1862,25 @@ class StatementController {
         companyName: applicationData.companyName || applicationData.dbaName
       } : {};
       
-      const parseResult = await parserService.parseStatement(buffer, { ...anchorData, correlationId });
+      let uploadTemplateHint = null;
+      const earlyRtn =
+        anchorData?.rtn ??
+        (typeof req.body?.routingNumber === 'string' ? req.body.routingNumber : null);
+      if (earlyRtn) {
+        try {
+          uploadTemplateHint = await resolveLayoutTemplateForParse(earlyRtn);
+        } catch (hintErr) {
+          logger.warn('[UPLOAD] layout template hint failed', { error: hintErr.message });
+        }
+      }
+
+      const parseResult = await parserService.parseStatement(buffer, {
+        ...anchorData,
+        correlationId,
+        forceLayoutFirstPrimary: true,
+        layoutTemplate: uploadTemplateHint?.mapping ?? null,
+        templateHintMeta: uploadTemplateHint
+      });
 
       // ── Bank name confirmation override (re-submission after frontend modal) ──
       if (req.body.confirmedBankName && typeof req.body.confirmedBankName === 'string') {
@@ -2038,7 +2068,6 @@ class StatementController {
             if (!learningHandledAsync) {
               const refreshed = await InstitutionalProfile.findById(profileDoc._id).lean();
               const templates = refreshed?.templates || [];
-              const manuallyVerified = Boolean(refreshed?.manuallyVerified);
               const verifiedTpl = templates.find((t) => t.status === 'VERIFIED');
               const learningSorted = templates
                 .filter((t) => t.status === 'LEARNING')
@@ -2048,9 +2077,7 @@ class StatementController {
                 topLearn?.layoutConfidence ??
                 topLearn?.mapping?.layoutConfidence ??
                 layoutGeminiConfidence;
-              const layoutTemplate = manuallyVerified
-                ? (verifiedTpl?.mapping || topLearn?.mapping || null)
-                : null;
+              const layoutTemplate = verifiedTpl?.mapping || topLearn?.mapping || null;
 
               if (layoutTemplate && typeof layoutTemplate === 'object') {
                 try {
@@ -2151,12 +2178,17 @@ class StatementController {
       }
 
       const cleanedRtnForGrad = rtn ? String(rtn).replace(/\D/g, '') : '';
-      if (cleanedRtnForGrad.length === 9 && parseResult.metadata?.usedLayoutTemplate) {
+      if (
+        cleanedRtnForGrad.length === 9 &&
+        (parseResult.metadata?.usedLayoutTemplate || parseResult.metadata?.templateUsedAsHint)
+      ) {
         try {
           const freshProfile = await InstitutionalProfile.findOne({
             routingNumber: cleanedRtnForGrad
           }).lean();
-          const gradVersion = resolveGraduationTemplateVersion(freshProfile?.templates);
+          const gradVersion =
+            parseResult.metadata?.templateVersion ??
+            resolveGraduationTemplateVersion(freshProfile?.templates);
           if (gradVersion != null) {
             await processTemplateOutcome(cleanedRtnForGrad, gradVersion, checksumRecon.ok, {
               lastError: checksumRecon.reason
@@ -2378,6 +2410,7 @@ class StatementController {
         fileName: req.file.originalname,
         fileUrl: req.file.path || `uploads/${req.file.originalname}`,
         institutionalProfileId: institutionalProfileId ?? null,
+        layoutDiscovery: parseResult.metadata?.layoutDiscovery ?? null,
         bankName: statementMetadata?.bankName || parseResult?.bankName || 'Unknown Bank',
         uploadDate: new Date(),
         processedDate: new Date(),
@@ -2772,15 +2805,23 @@ class StatementController {
       const transactions = await Transaction.find({ statementId: id }).sort({ date: 1 }).lean();
 
       const ex = macroListExtras(statementDoc);
+      const listMeta = buildAnalysisListFields(statementDoc, ex);
+      const hasRollup = (statementDoc.analysis?.chartActivity?.daily?.length ?? 0) > 0;
+      const transactionDataSource =
+        transactions.length > 0 ? 'collection' : hasRollup ? 'rollup' : 'none';
 
       const masterStatement = {
         ...statementDoc,
         id: statementDoc._id,
         transactions,
+        transactionDataSource,
         coveragePeriod: ex.coveragePeriod,
         monthlyStatementSummaries: ex.monthlyStatementSummaries,
         statementFiles: ex.statementFiles,
-        statementCount: ex.statementCount
+        statementCount: ex.statementCount,
+        analysisTitle: listMeta.analysisTitle,
+        analyzedAt: listMeta.analyzedAt,
+        monthsAnalyzedLabel: listMeta.monthsAnalyzedLabel,
       };
 
       let vera = null;
@@ -3377,7 +3418,8 @@ Vera's Underwriting Report:`;
         success: true,
         data: {
           query: message,
-          response: aiResponse
+          response: aiResponse,
+          answer: aiResponse
         }
       });
 
@@ -3820,6 +3862,47 @@ Vera's Underwriting Report:`;
         });
       }
 
+      let institutionProfileGate = null;
+      if (statements.length > 0) {
+        try {
+          const firstStatementFile = req.files.find(
+            (f) =>
+              f.mimetype === 'application/pdf' &&
+              statements.some((s) => s.name === f.originalname)
+          );
+          if (firstStatementFile) {
+            const buf =
+              firstStatementFile.buffer ??
+              (firstStatementFile.path ? fs.readFileSync(firstStatementFile.path) : null);
+            if (buf) {
+              const pdfData = await pdfParse(buf);
+              const text = pdfData.text || '';
+              const rtn = scanRtnFromText(text);
+              let profileDoc = null;
+              if (rtn && mongoose.connection.readyState === 1) {
+                try {
+                  profileDoc = await ensureInstitutionalProfileForRtn(rtn, {
+                    correlationId: `triage_${uploadSessionId}`,
+                    waterfallContext: { bankName: RTN_BANK_MAP?.[rtn] }
+                  });
+                } catch (profileErr) {
+                  logger.warn(`[TRIAGE] InstitutionalProfile upsert failed: ${profileErr.message}`);
+                }
+              }
+              institutionProfileGate = assessInstitutionProfileGate({
+                text,
+                rtn,
+                bankName: rtn ? RTN_BANK_MAP[rtn] : null,
+                institutionalProfile: profileDoc
+              });
+              updateTriageSessionMeta(uploadSessionId, { institutionProfileGate });
+            }
+          }
+        } catch (gateErr) {
+          logger.warn(`[TRIAGE] institution profile gate skipped: ${gateErr.message}`);
+        }
+      }
+
       return res.status(200).json({
         success: true,
         uploadSessionId,
@@ -3830,7 +3913,10 @@ Vera's Underwriting Report:`;
           totalFiles: req.files.length
         },
         extractedAnchorData,
-        message: `Triage complete: ${statements.length} statement(s), ${applications.length} application(s).`
+        institutionProfileGate,
+        message: institutionProfileGate?.step1Required
+          ? `Triage complete. Step 1 required: ${institutionProfileGate.bankName || 'Institution'} profile status ${institutionProfileGate.profileStatus}.`
+          : `Triage complete: ${statements.length} statement(s), ${applications.length} application(s).`
       });
     } catch (error) {
       logger.error('[TRIAGE API] error:', error);
@@ -4680,6 +4766,106 @@ Vera's Underwriting Report:`;
         });
       }
 
+      const usingGenericProfile = parsedStatements.some((s) => {
+        const profileId =
+          s.parseResult?.metadata?.extractionProfile ||
+          s.parseResult?.metadata?.profileId ||
+          'generic_digital';
+        return profileId === 'generic_digital';
+      });
+      if (usingGenericProfile) {
+        batchParseAlerts.push({
+          code: 'INSTITUTION_PROFILE_REQUIRED',
+          type: 'COMPLIANCE',
+          severity: 'HIGH',
+          title: 'Institution profile required (Step 1)',
+          message:
+            'One or more statements parsed with generic_digital. Create and verify a Tier-1 institution profile before trusting underwriting metrics.',
+          recommendation:
+            'Complete institution profile onboarding (RTN → scaffold → checksum golden tests → VERIFIED) before production underwriting.',
+          data: {
+            step: 1,
+            profilesSeen: [
+              ...new Set(
+                parsedStatements.map(
+                  (s) =>
+                    s.parseResult?.metadata?.extractionProfile ||
+                    s.parseResult?.metadata?.profileId ||
+                    'generic_digital'
+                )
+              )
+            ]
+          }
+        });
+      }
+
+      const macroParseDegraded = batchChecksumStats.ratio < MACRO_CHECKSUM_MIN_OK_RATIO;
+
+      let institutionProfileGate = triageSessionMeta?.institutionProfileGate ?? null;
+      if (!institutionProfileGate && parsedStatements.length > 0) {
+        const exemplar = parsedStatements[0];
+        const rtn =
+          exemplar.parseResult?.rtn ??
+          exemplar.parseResult?.metadata?.rtn ??
+          scanRtnFromText(exemplar.parseResult?.text || '');
+        let profileDoc = null;
+        if (rtn && mongoose.connection.readyState === 1) {
+          try {
+            profileDoc = await InstitutionalProfile.findOne({ routingNumber: rtn }).lean();
+          } catch {
+            /* ignore */
+          }
+        }
+        institutionProfileGate = assessInstitutionProfileGate({
+          text: exemplar.parseResult?.text || '',
+          rtn,
+          bankName: exemplar.bankName,
+          institutionalProfile: profileDoc,
+          layoutDiscoveryPresent: parsedStatements.some(
+            (s) =>
+              s.layoutDiscovery?.documentMap ??
+              s.parseResult?.metadata?.layoutPipelineDocumentMap
+          ),
+          checksumPassRatio: batchChecksumStats.ratio
+        });
+      }
+
+      const productionGateBlocked =
+        !isDemoMode() &&
+        institutionProfileGate?.step1Required &&
+        !institutionProfileGate?.productionReady &&
+        !isProbeAnalysisAllowed(req);
+
+      if (productionGateBlocked) {
+        clearBatchProgress(correlationId);
+        return res.status(202).json({
+          success: false,
+          error: 'INSTITUTION_PROFILE_STEP1_REQUIRED',
+          message:
+            institutionProfileGate.recommendation ||
+            'Complete institution profile Step 1 before production macro analysis.',
+          institutionProfileGate,
+          parseQualityByFile: buildParseQualityByFile(),
+          recommendation:
+            'Scaffold Tier-1 profile, run golden checksum tests, graduate to VERIFIED — or pass allowProbeAnalysis=true for probe-only run.'
+        });
+      }
+
+      if (institutionProfileGate?.step1Required) {
+        batchParseAlerts.push({
+          code: 'INSTITUTION_PROFILE_STEP1',
+          type: 'COMPLIANCE',
+          severity: 'HIGH',
+          title: 'Institution profile Step 1 incomplete',
+          message:
+            institutionProfileGate.recommendation ||
+            'Production underwriting requires VERIFIED institution profile.',
+          recommendation:
+            'Complete profile scaffold and template graduation, or run with allowProbeAnalysis for degraded probe output.',
+          data: institutionProfileGate
+        });
+      }
+
       const runMacroStages = async () => {
       // ────────────────────────────────────────────────────────────────────
       // STAGE 3 — Group by Account (bankName-accountNumber)
@@ -4789,6 +4975,22 @@ Vera's Underwriting Report:`;
           const txs = (s.transactions || []).filter((t) => t.parseExcluded !== true);
           const totals = riskAnalysisService.calculateTotalDepositsAndWithdrawals(txs);
           const coveragePeriod = resolveMacroMonthlyCoverage(s, s.transactions || []);
+          const recon =
+            s.parseResult?.metadata?.profileReconciliation ||
+            s.layoutPipelineResult?.reconciliation ||
+            null;
+          const reconciliation = recon
+            ? {
+                checksumOk: recon.checksumOk ?? null,
+                printedLines: recon.printedLines ?? null,
+                sectionTotals: recon.sectionTotals ?? null,
+                lineDeltas: recon.lineDeltas ?? null,
+                printedComputedClosing: recon.printedComputedClosing ?? null,
+                printedClosingMatch: recon.printedClosingMatch ?? null,
+                sectionReconciled: recon.sectionReconciled ?? null
+              }
+            : null;
+          const checksumOk = resolveMonthlyChecksumOk(reconciliation, s.parseQuality);
           return {
             fileName: s.fileName,
             openingBalance: s.openingBalance,
@@ -4799,7 +5001,8 @@ Vera's Underwriting Report:`;
             netChange: Math.round((totals.totalDeposits - totals.totalWithdrawals) * 100) / 100,
             coveragePeriod,
             parseQuality: s.parseQuality || 'UNKNOWN',
-            checksumOk: s.parseQuality === 'OK',
+            checksumOk,
+            reconciliation,
             layoutPipelineShadow:
               s.layoutPipelineShadow ||
               s.parseResult?.metadata?.layoutPipelineShadow ||
@@ -4815,7 +5018,20 @@ Vera's Underwriting Report:`;
               s.parseResult?.metadata?.layoutPipelineIdentityMap ||
               s.parseResult?.metadata?.identityMap ||
               s.layoutPipelineResult?.identityMap ||
-              null
+              null,
+            layoutDiscovery:
+              s.layoutDiscovery ||
+              s.parseResult?.metadata?.layoutDiscovery ||
+              (s.parseResult?.metadata?.layoutPipelineDocumentMap
+                ? {
+                    documentMap: s.parseResult.metadata.layoutPipelineDocumentMap,
+                    contextArchive: s.parseResult.metadata.layoutPipelineContextArchive ?? null,
+                    fingerprint: s.parseResult.metadata.layoutPipelineDocumentMap?.fingerprint ?? null,
+                    mappingSource:
+                      s.parseResult.metadata.layoutPipelineDocumentMap?.mappingSource ?? 'heuristic',
+                    parsedAt: s.parseResult.metadata.parsed ?? null
+                  }
+                : null)
           };
         });
 
@@ -5043,6 +5259,7 @@ Vera's Underwriting Report:`;
       const tamperingSummary = buildTamperingSummary(allAlerts);
 
       let forensicIntelligence = null;
+      if (!macroParseDegraded) {
       try {
         const daysCovered = macroAgg?.dateRange?.daysCovered || 90;
         const validatorRiskFlags = [];
@@ -5093,8 +5310,14 @@ Vera's Underwriting Report:`;
       } catch (forensicErr) {
         logger.warn(`[BATCH] Forensic intelligence failed: ${forensicErr.message}`);
       }
+      } else {
+        logger.warn(
+          `[MACRO] Skipping forensic intelligence — checksum pass ratio ${(batchChecksumStats.ratio * 100).toFixed(0)}% below threshold`
+        );
+      }
 
       let underwritingVitals = null;
+      if (!macroParseDegraded) {
       try {
         underwritingVitals = computeUnderwritingVitals({
           transactions: allMacroTransactionsForForensics,
@@ -5111,6 +5334,11 @@ Vera's Underwriting Report:`;
       } catch (vitalsErr) {
         logger.warn(`[BATCH] Underwriting vitals failed: ${vitalsErr.message}`);
       }
+      } else {
+        logger.warn(
+          `[MACRO] Skipping underwriting vitals — checksum pass ratio ${(batchChecksumStats.ratio * 100).toFixed(0)}% below threshold`
+        );
+      }
 
       const parseQualityByFile = parsedStatements.map((s) => ({
         fileName: s.fileName,
@@ -5126,13 +5354,33 @@ Vera's Underwriting Report:`;
 
       const layoutDocumentMap =
         parsedStatements
-          .map((s) => s.parseResult?.metadata?.layoutPipelineDocumentMap)
+          .map(
+            (s) =>
+              s.layoutDiscovery?.documentMap ??
+              s.parseResult?.metadata?.layoutPipelineDocumentMap
+          )
           .find(Boolean) || null;
 
       const layoutContextArchive =
         parsedStatements
-          .map((s) => s.parseResult?.metadata?.layoutPipelineContextArchive)
+          .map(
+            (s) =>
+              s.layoutDiscovery?.contextArchive ??
+              s.parseResult?.metadata?.layoutPipelineContextArchive
+          )
           .find(Boolean) || null;
+
+      const layoutDiscoveryByFile = parsedStatements.map((s) => ({
+        fileName: s.fileName,
+        layoutDiscovery:
+          s.layoutDiscovery ||
+          s.parseResult?.metadata?.layoutDiscovery ||
+          null,
+        hasDocumentMap: Boolean(
+          s.layoutDiscovery?.documentMap ??
+            s.parseResult?.metadata?.layoutPipelineDocumentMap
+        )
+      }));
 
       let portfolioIdentityCrossCheck = { status: 'pass', mismatches: [], confidence: 1 };
       for (const stmt of parsedStatements) {
@@ -5175,6 +5423,14 @@ Vera's Underwriting Report:`;
         };
       })();
 
+      const chartActivity =
+        allMacroTransactionsForForensics.length > 0
+          ? buildChartActivityRollup(
+              allMacroTransactionsForForensics,
+              financialTotals.openingBalance ?? macroAgg?.openingBalance ?? 0
+            )
+          : null;
+
       const consolidatedMacroAnalysis = {
         summary: {
           totalFiles: req.files.length,
@@ -5197,6 +5453,7 @@ Vera's Underwriting Report:`;
         expensesByCategory,
         forensicIntelligence,
         underwritingVitals,
+        chartActivity,
         tamperingSummary,
         documentMap: layoutDocumentMap,
         contextArchive: layoutContextArchive,
@@ -5220,6 +5477,12 @@ Vera's Underwriting Report:`;
           processedAt: new Date().toISOString(),
           processingDuration: Date.now() - startTime,
           version: '3.0.0',
+          parseOutcome: macroParseDegraded ? 'DEGRADED' : 'OK',
+          checksumPassRatio: batchChecksumStats.ratio,
+          checksumMinRatio: MACRO_CHECKSUM_MIN_OK_RATIO,
+          institutionProfileStep1Required: usingGenericProfile,
+          institutionProfileGate,
+          layoutDiscoveryByFile,
           parseQualityByFile,
           llmCostTracking: {
             totalCost: totalLLMCost,
@@ -5454,6 +5717,37 @@ Vera's Underwriting Report:`;
         }
       });
 
+      if (allMacroTransactionsForForensics.length > 0) {
+        const ownerId =
+          userId !== 'anonymous' && mongoose.Types.ObjectId.isValid(userId)
+            ? userId
+            : savedStatement.user;
+        const persistResult = await persistMacroTransactions(
+          Transaction,
+          allMacroTransactionsForForensics,
+          { statementId: savedStatement._id, userId: ownerId }
+        );
+        if (persistResult.persisted > 0) {
+          logger.info(`[MACRO] Persisted ${persistResult.persisted} transactions for chart drill-down`, {
+            statementId: String(savedStatement._id),
+            attempted: persistResult.attempted,
+            skipped: persistResult.skipped
+          });
+        } else if (persistResult.attempted > 0) {
+          logger.error('[MACRO] Transaction persist produced zero rows', {
+            statementId: String(savedStatement._id),
+            ...persistResult
+          });
+        }
+        try {
+          await Statement.findByIdAndUpdate(savedStatement._id, {
+            $set: { 'analysis.metadata.transactionPersist': persistResult }
+          });
+        } catch (metaErr) {
+          logger.warn(`[MACRO] Could not save transactionPersist metadata: ${metaErr.message}`);
+        }
+      }
+
       // Log saved applicationContext
       logger.info('✅ [STATEMENT_SAVED] applicationContext in saved document:', {
         hasContext: !!savedStatement.applicationContext,
@@ -5527,6 +5821,40 @@ Vera's Underwriting Report:`;
           );
         } catch (veraV2Err) {
           logger.warn(`[PHASE7] Vera v2 failed, falling back to Perplexity: ${veraV2Err.message}`);
+        }
+      }
+
+      if (process.env.VERA_DELTA_ENABLED === 'true' && veraPayload) {
+        try {
+          const { runVeraDeltaAnalysis } = await import('../services/veraDeltaService.js');
+          const feeSample = parsedStatements.flatMap(
+            (s) =>
+              s.feeTransactions ||
+              s.parseResult?.metadata?.layoutPipelineFeeTransactions ||
+              []
+          );
+          const deltaResult = await runVeraDeltaAnalysis({
+            feeTransactions: feeSample,
+            checksumDelta: checksumRecoveryMeta || { ratio: batchChecksumStats.ratio },
+            sectionText: '',
+            llmFn: null
+          });
+          if (deltaResult?.deltaFixes?.length) {
+            veraPayload.deltaFixes = [
+              ...(veraPayload.deltaFixes || []),
+              ...deltaResult.deltaFixes
+            ];
+            consolidatedMacroAnalysis.vera = veraPayload;
+            await Statement.findByIdAndUpdate(savedStatement._id, {
+              'analysis.vera.deltaFixes': veraPayload.deltaFixes
+            });
+          }
+          logger.info('[VERA_DELTA] post-macro hook complete', {
+            skipped: deltaResult?.skipped,
+            fixCount: deltaResult?.deltaFixes?.length ?? 0
+          });
+        } catch (deltaErr) {
+          logger.warn(`[VERA_DELTA] post-macro hook failed: ${deltaErr.message}`);
         }
       }
 

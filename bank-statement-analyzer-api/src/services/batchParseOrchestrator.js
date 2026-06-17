@@ -18,16 +18,20 @@ import {
   summarizeBatchParseOutcomes
 } from '../utils/statementParseQuality.js';
 import { buildParsingBleedAlert } from '../utils/amountSanityGuardrails.js';
-import { buildReconciliationMismatchAlert } from './templateGraduationService.js';
+import { buildReconciliationMismatchAlert, processTemplateOutcome } from './templateGraduationService.js';
 import { ensureInstitutionalProfileForRtn } from './bankEnrichmentService.js';
 import { RTN_BANK_MAP } from '../config/bankIdentifiers.js';
+import { isDemoMode } from '../config/appMode.js';
 import logger from '../utils/logger.js';
 import { clearVisionLayoutCacheForRtn } from './visionLayoutCacheService.js';
 import { setBatchProgress } from './batchProgressStore.js';
 import {
-  persistLearningTemplate,
   getLatestLearnableTemplate
 } from './institutionalTemplatePersist.js';
+import {
+  enrichMappingWithReconciliationSpec,
+  learnAndPersistLayout
+} from './coldStartLayoutService.js';
 import { isDigitalPdfMode } from './extraction/extractionModeRouter.js';
 import {
   prepareLayoutForDigitalApply,
@@ -67,7 +71,8 @@ function batchGeminiEnabled() {
   if (!resolveLlmApiKey()) return false;
   const v = process.env.BATCH_GEMINI_TEACHER;
   if (v === 'false' || v === '0') return false;
-  return true;
+  if (v === 'true' || v === '1') return true;
+  return isDemoMode();
 }
 
 /** Batch macro path: per-file vision row extraction (Plan C; default on, opt out with false/0). */
@@ -517,6 +522,21 @@ async function mergeParserResultIntoStatement(stmt, parseResult, identitySources
       ...parseResult.metadata.layoutPipelineShadow
     });
   }
+  const layoutDisc =
+    parseResult.metadata?.layoutDiscovery ||
+    (parseResult.metadata?.layoutPipelineDocumentMap
+      ? {
+          documentMap: parseResult.metadata.layoutPipelineDocumentMap,
+          contextArchive: parseResult.metadata.layoutPipelineContextArchive ?? null,
+          fingerprint: parseResult.metadata.layoutPipelineDocumentMap?.fingerprint ?? null,
+          mappingSource:
+            parseResult.metadata.layoutPipelineDocumentMap?.mappingSource ?? 'heuristic',
+          parsedAt: parseResult.metadata.parsed ?? null
+        }
+      : null);
+  if (layoutDisc) {
+    stmt.layoutDiscovery = layoutDisc;
+  }
   applyParseQualityPipeline(stmt, identitySources);
   attachParseOutcomeFlags(stmt);
   await attachChecksumDeltaProbe(stmt);
@@ -575,7 +595,12 @@ async function tryPdfPlumberRescue(stmt, ctx) {
   const plumberResult = await extractTransactionsFromPdfBuffer(stmt.fileBuffer, {
     bankName: stmt.bankName,
     fileName: stmt.fileName,
-    defaultYear
+    defaultYear,
+    rtn: effectiveRtn || stmt.parseResult?.metadata?.rtn || stmt.parseResult?.rtn,
+    layoutTemplate:
+      stmt.parseResult?.metadata?.layoutTemplate ??
+      stmt.parseResult?.metadata?.templateHintMeta?.mapping ??
+      null
   });
 
   if (!plumberResult.success || plumberResult.transactions.length === 0) {
@@ -858,20 +883,33 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
     } catch (e) {
       logger.warn(`[BATCH_ORCHESTRATOR] Type B excerpt for teach failed: ${e.message}`);
     }
-    const raw = await learnTemplateLayout(exemplar.fileBuffer, {
-      rtn: effectiveRtn || undefined,
-      bankName: exemplar.bankName,
-      printedOpeningBalance: exemplar.openingBalance,
-      printedClosingBalance: exemplar.closingBalance,
-      digitalTextExcerpt
-    });
-    const mapping = coerceLayoutMapping(raw);
+
+    const learned = profile?._id
+      ? await learnAndPersistLayout({
+          buffer: exemplar.fileBuffer,
+          rtn: effectiveRtn,
+          profileId: profile._id,
+          bankName: exemplar.bankName,
+          printedOpeningBalance: exemplar.openingBalance,
+          printedClosingBalance: exemplar.closingBalance,
+          digitalTextExcerpt
+        })
+      : null;
+
+    let mapping = learned?.mapping ?? null;
+    if (!mapping) {
+      const raw = await learnTemplateLayout(exemplar.fileBuffer, {
+        rtn: effectiveRtn || undefined,
+        bankName: exemplar.bankName,
+        printedOpeningBalance: exemplar.openingBalance,
+        printedClosingBalance: exemplar.closingBalance,
+        digitalTextExcerpt
+      });
+      mapping = enrichMappingWithReconciliationSpec(coerceLayoutMapping(raw));
+    }
+
     layoutByKey.set(groupKey, mapping);
     teachDoneByGroup.add(groupKey);
-
-    if (profile?._id && mapping) {
-      await persistLearningTemplate(profile._id, mapping);
-    }
     return mapping;
   } catch (e) {
     logger.warn(`[BATCH_ORCHESTRATOR] Gemini layout failed key=${groupKey}: ${e.message}`);
@@ -935,7 +973,7 @@ export async function processInstitutionalGroup(groupKey, stmts, ctx) {
   } = ctx;
 
   const digitalStmts = stmts.filter((s) => isDigitalPdfMode(s));
-  if (digitalStmts.length === 0 || digitalStmts.every((s) => s.parseQuality === 'OK')) {
+  if (digitalStmts.length === 0) {
     return;
   }
 
@@ -1069,7 +1107,41 @@ export async function enhanceBatchParsesWithTeacher(parsedStatements, ctx = {}) 
   const bleedAlert = buildParsingBleedAlert(aggregateSanity);
   if (bleedAlert) batchAlerts.push(bleedAlert);
 
+  await processBatchLayoutTemplateOutcomes(parsedStatements);
+
   return { parsedStatements, batchAlerts, aggregateSanity, teachDoneByGroup, layoutByKey };
+}
+
+/**
+ * Record template graduation counters when layout template was used as a mapping hint.
+ * @param {Array<object>} parsedStatements
+ */
+export async function processBatchLayoutTemplateOutcomes(parsedStatements = []) {
+  for (const stmt of parsedStatements) {
+    const meta = stmt.parseResult?.metadata ?? {};
+    if (!meta.templateUsedAsHint && !meta.usedLayoutTemplate) continue;
+
+    const rtn =
+      meta.rtn ??
+      stmt.parseResult?.rtn ??
+      null;
+    const cleanedRtn = String(rtn || '').replace(/\D/g, '');
+    const templateVersion = meta.templateVersion;
+    if (cleanedRtn.length !== 9 || !Number.isFinite(templateVersion)) continue;
+
+    const checksumOk = Boolean(stmt.checksumRecon?.ok);
+    try {
+      await processTemplateOutcome(cleanedRtn, templateVersion, checksumOk, {
+        lastError: stmt.checksumRecon?.reason,
+        fileName: stmt.fileName
+      });
+    } catch (err) {
+      logger.warn('[BATCH_ORCHESTRATOR] processTemplateOutcome failed', {
+        fileName: stmt.fileName,
+        error: err.message
+      });
+    }
+  }
 }
 
 export async function runChecksumGateRecovery(parsedStatements, ctx = {}) {

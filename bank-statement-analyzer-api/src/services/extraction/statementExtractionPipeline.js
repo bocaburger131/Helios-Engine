@@ -6,6 +6,13 @@ import { validateEndingDailyBalancePlacement } from './statementReconciliation.j
 import { reconcileRawBundle } from './layoutPipeline/reconciliationService.js';
 import { WellsParseReconciliationError } from './profiles/wellsFargoInitiateProfile.js';
 import { ChaseParseReconciliationError } from './profiles/chaseBusinessCompleteProfile.js';
+import { RegionsParseReconciliationError } from './profiles/regionsBusinessCheckingProfile.js';
+
+const FULL_CTX_PROFILE_IDS = new Set([
+  'generic_digital',
+  'chase_business_complete',
+  'regions_business_checking'
+]);
 
 /**
  * @param {object} ctx
@@ -23,7 +30,7 @@ export async function runStatementExtractionPipeline(ctx) {
 
   let extracted;
   try {
-    if (profile.id === 'generic_digital' || profile.id === 'chase_business_complete') {
+    if (FULL_CTX_PROFILE_IDS.has(profile.id)) {
       extracted = await profile.extract(ctx);
     } else {
       extracted = await profile.extract({
@@ -46,6 +53,16 @@ export async function runStatementExtractionPipeline(ctx) {
         profileId: profile.id,
         parsedDeposits: e.reconciliation?.parsedDeposits,
         printedDeposits: e.reconciliation?.printedDeposits
+      });
+      throw e;
+    }
+    if (e instanceof RegionsParseReconciliationError) {
+      logger.warn('[STATEMENT_PIPELINE] Regions reconciliation gate failed', {
+        profileId: profile.id,
+        parsedDeposits: e.reconciliation?.parsedDeposits,
+        printedDeposits: e.reconciliation?.printedDeposits,
+        parsedWithdrawals: e.reconciliation?.parsedWithdrawals,
+        printedWithdrawals: e.reconciliation?.printedWithdrawals
       });
       throw e;
     }
@@ -110,7 +127,8 @@ export async function runStatementExtractionPipeline(ctx) {
     dailyBalanceRule,
     extractionTier,
     profileId: profile.id,
-    chasePlumberTransactions: extracted.chasePlumberTransactions ?? null
+    chasePlumberTransactions: extracted.chasePlumberTransactions ?? null,
+    regionsPlumberTransactions: extracted.regionsPlumberTransactions ?? null
   };
 }
 

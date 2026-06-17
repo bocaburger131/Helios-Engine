@@ -1,6 +1,7 @@
 "use client";
 
-import { formatCurrency, type EnvelopeViewModel } from "@/lib/envelopeAdapter";
+import { type EnvelopeViewModel } from "@/lib/envelopeAdapter";
+import { formatAnalyzedAt, formatCurrency } from "@/lib/analysisAdapter";
 
 type Props = {
   view: EnvelopeViewModel;
@@ -28,8 +29,12 @@ export default function HeroGrid({ view, statementId }: Props) {
             Underwriting report
           </p>
           <h1 className="mt-1 text-2xl font-bold text-slate-900 sm:text-3xl">
-            {view.companyName}
+            {view.displayTitle}
           </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Analyzed {formatAnalyzedAt(view.analyzedAt)}
+            {view.monthsAnalyzedLabel ? ` · ${view.monthsAnalyzedLabel}` : ""}
+          </p>
           {view.businessAddress && (
             <p className="mt-1 text-sm text-slate-600">{view.businessAddress}</p>
           )}

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import UnderwritingDashboard from "@/components/UnderwritingDashboard";
+import { useDealContextOptional } from "@/components/shell/DealContext";
 import { fetchStatementById, getStoredToken } from "@/lib/apiClient";
 import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
 
@@ -9,6 +10,7 @@ type Props = {
   statementId: string;
   initialPayload?: HeliosStatementPayload;
   serverToken?: string | null;
+  serverFetchError?: string | null;
   usingFixture?: boolean;
   fixtureReason?: string;
 };
@@ -17,14 +19,17 @@ export default function DashboardClientLoader({
   statementId,
   initialPayload,
   serverToken,
+  serverFetchError,
   usingFixture = false,
   fixtureReason,
 }: Props) {
   const [payload, setPayload] = useState<HeliosStatementPayload | null>(
     initialPayload ?? null
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(serverFetchError ?? null);
   const [loading, setLoading] = useState(!initialPayload && !usingFixture);
+
+  const dealContext = useDealContextOptional();
 
   useEffect(() => {
     if (usingFixture || initialPayload) return;
@@ -32,10 +37,26 @@ export default function DashboardClientLoader({
     const token = serverToken || getStoredToken();
     setLoading(true);
     fetchStatementById(statementId, token)
-      .then(setPayload)
+      .then((p) => {
+        setPayload(p);
+        setError(null);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Load failed"))
       .finally(() => setLoading(false));
   }, [statementId, serverToken, usingFixture, initialPayload]);
+
+  useEffect(() => {
+    const ctx = payload?.data?.statement?.applicationContext;
+    if (!ctx || !dealContext) return;
+    dealContext.hydrateFromApplicationContext({
+      dealId: ctx.dealId,
+      companyName: ctx.companyName,
+      statedRevenue: ctx.statedRevenue ?? ctx.annualRevenue,
+      statedGAR: (ctx as { statedGAR?: number }).statedGAR,
+      annualRevenue: ctx.annualRevenue,
+      requestedLoanAmount: ctx.requestedLoanAmount,
+    });
+  }, [payload, dealContext]);
 
   if (loading) {
     return (

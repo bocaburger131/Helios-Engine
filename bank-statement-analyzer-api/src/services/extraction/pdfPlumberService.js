@@ -33,12 +33,33 @@ function plumberTimeoutMs() {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 }
 
-function bankSlug(bankName) {
+function bankSlug(bankName, rtn) {
   const n = String(bankName || '').toLowerCase();
   if (/wells/.test(n)) return 'wells';
   if (/regions/.test(n)) return 'regions';
   if (/chase|jpmorgan/.test(n)) return 'chase';
+  const cleanedRtn = String(rtn || '').replace(/\D/g, '');
+  if (cleanedRtn.length === 9) return 'generic';
   return 'generic';
+}
+
+/**
+ * @param {object} [layoutTemplate]
+ * @returns {string|null}
+ */
+function columnHintsArg(layoutTemplate) {
+  const cm = layoutTemplate?.columnMapping;
+  if (!cm || typeof cm !== 'object') return null;
+  const hints = {
+    dateIdx: cm.dateCol ?? cm.dateIdx ?? 0,
+    descIdx: cm.descCol ?? cm.descIdx ?? 1,
+    amountIdx: cm.amountCol ?? cm.amountIdx ?? 2,
+    balanceIdx: cm.balanceCol ?? cm.balanceIdx ?? null,
+    debitIdx: cm.debitCol ?? cm.debitIdx ?? null,
+    creditIdx: cm.creditCol ?? cm.creditIdx ?? null,
+    mathPattern: layoutTemplate.mathPattern ?? null
+  };
+  return JSON.stringify(hints);
 }
 
 /**
@@ -126,7 +147,7 @@ export const runPlumberChildProcess = runPythonChildProcess;
 
 /**
  * @param {Buffer} pdfBuffer
- * @param {{ bankName?: string, fileName?: string, defaultYear?: number }} [options]
+ * @param {{ bankName?: string, fileName?: string, defaultYear?: number, rtn?: string, layoutTemplate?: object }} [options]
  */
 export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) {
   if (!pdfPlumberEnabled()) {
@@ -139,14 +160,19 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
   const started = Date.now();
   const fileName = options.fileName || 'statement.pdf';
   const scriptPath = resolveScriptPath();
-  const slug = bankSlug(options.bankName);
+  const slug = bankSlug(options.bankName, options.rtn);
+  const scriptArgs = ['--bank', slug];
+  const hintsJson = columnHintsArg(options.layoutTemplate);
+  if (hintsJson) {
+    scriptArgs.push('--column-hints', hintsJson);
+  }
 
-  logger.info('[PDF_PLUMBER] start', { fileName, bank: slug });
+  logger.info('[PDF_PLUMBER] start', { fileName, bank: slug, columnHints: Boolean(hintsJson) });
 
   try {
     const { stdout, stderr } = await runPythonScriptOnPdfBuffer(pdfBuffer, {
       scriptPath,
-      scriptArgs: ['--bank', slug],
+      scriptArgs,
       timeoutMs: plumberTimeoutMs(),
       tempPrefix: 'pdfplumber-',
       runner: runChildProcessImpl ?? runPythonChildProcess

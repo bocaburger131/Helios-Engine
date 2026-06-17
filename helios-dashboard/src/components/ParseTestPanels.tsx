@@ -117,6 +117,11 @@ export function PipelineShadowPanel({ shadow }: { shadow: LayoutPipelineShadow |
             Layout-first wins
           </span>
         )}
+        {!shadow.layoutFirstWins && shadow.checksumOkLayoutFirst && !shadow.checksumOkLegacy && (
+          <p className="w-full text-xs text-sky-800">
+            Layout-first checksum passes where legacy fails — trust improves as the template graduates to VERIFIED.
+          </p>
+        )}
         {shadow.promoteCandidate && (
           <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
             Promote candidate

@@ -6,9 +6,9 @@
 import fs from 'fs/promises';
 import mongoose from 'mongoose';
 import InstitutionalProfile from '../models/InstitutionalProfile.js';
+import { getLatestLearnableTemplate } from '../services/institutionalTemplatePersist.js';
 import Statement from '../models/Statement.js';
 import pdfParserService from '../services/pdfParserService.js';
-import { identifyTemplate } from '../services/templateLearningService.js';
 import logger from '../utils/logger.js';
 import {
   validateReconciliation,
@@ -16,6 +16,10 @@ import {
   buildReconciliationMismatchAlert
 } from '../services/templateGraduationService.js';
 import { shouldTriggerVera, applyVeraHoldOnStatement } from '../services/veraVerificationService.js';
+import {
+  learnAndPersistLayout,
+  reparseWithLayoutTemplate
+} from '../services/coldStartLayoutService.js';
 
 /**
  * @param {import('bull').Job} job
@@ -36,53 +40,48 @@ export async function processTemplateLearningJob(job) {
     }
   });
 
-  const mapping = await identifyTemplate(buffer, rtn, {
-    statementId: String(statementId),
-    jobId: String(job.id)
-  });
-  const { layoutConfidence: _omitLc, ...mappingForTemplate } = mapping;
-
   const profile = await InstitutionalProfile.findById(institutionalProfileId);
   if (!profile) {
     throw new Error('InstitutionalProfile not found');
   }
 
-  const maxVersion = Math.max(
-    0,
-    ...(profile.templates || []).map((t) => (Number.isFinite(t.version) ? t.version : 0))
-  );
-  const nextVersion = maxVersion + 1;
-
-  await InstitutionalProfile.updateOne(
-    { _id: institutionalProfileId },
-    {
-      $push: {
-        templates: {
-          version: nextVersion,
-          status: 'LEARNING',
-          consecutiveSuccesses: 0,
-          totalProcessed: 0,
-          layoutConfidence: mapping.layoutConfidence ?? null,
-          mapping: mappingForTemplate
-        }
-      }
+  const learned = await learnAndPersistLayout({
+    buffer,
+    rtn,
+    profileId: institutionalProfileId,
+    visionOptions: {
+      statementId: String(statementId),
+      jobId: String(job.id)
     }
-  );
+  });
+
+  if (!learned?.mapping) {
+    throw new Error('Layout learning produced no mapping');
+  }
 
   const refreshed = await InstitutionalProfile.findById(institutionalProfileId).lean();
-  const templates = refreshed?.templates || [];
-  const manuallyVerified = Boolean(refreshed?.manuallyVerified);
-  const verifiedTpl = templates.find((t) => t.status === 'VERIFIED');
-  const learningSorted = templates
-    .filter((t) => t.status === 'LEARNING')
-    .sort((a, b) => (b.version || 0) - (a.version || 0));
-  const layoutTemplate = manuallyVerified
-    ? verifiedTpl?.mapping || learningSorted[0]?.mapping || mappingForTemplate
-    : mappingForTemplate;
+  const learnable = getLatestLearnableTemplate(refreshed);
+  const layoutTemplate = learnable?.mapping || learned.mapping;
+  const templateHintMeta = learnable
+    ? {
+        mapping: learnable.mapping,
+        templateVersion: learnable.version,
+        templateStatus: learnable.status,
+        templateUsedAsHint: true
+      }
+    : {
+        mapping: learned.mapping,
+        templateVersion: learned.version,
+        templateStatus: 'LEARNING',
+        templateUsedAsHint: true
+      };
 
-  const secondParse = await pdfParserService.parseStatement(buffer, {
-    ...anchorData,
-    layoutTemplate
+  const secondParse = await reparseWithLayoutTemplate({
+    buffer,
+    layoutTemplate,
+    anchorData,
+    parserService: pdfParserService,
+    templateHintMeta
   });
 
   if (!secondParse?.success || !Array.isArray(secondParse.transactions) || secondParse.transactions.length === 0) {
@@ -100,14 +99,16 @@ export async function processTemplateLearningJob(job) {
 
   const checksumRecon = validateReconciliation(secondParse);
   const geminiConfidence =
-    mapping.layoutConfidence ??
-    learningSorted[0]?.layoutConfidence ??
-    learningSorted[0]?.mapping?.layoutConfidence ??
+    learned.layoutConfidence ??
+    learnable?.mapping?.layoutConfidence ??
     null;
   const triggerVera = shouldTriggerVera({ checksumRecon, geminiConfidence });
 
   const cleanedRtn = String(rtn || '').replace(/\D/g, '');
-  const graduationVersion = verifiedTpl ? verifiedTpl.version : nextVersion;
+  const graduationVersion =
+    learnable?.version ??
+    templateHintMeta?.templateVersion ??
+    learned.version;
 
   if (triggerVera) {
     await applyVeraHoldOnStatement({
@@ -134,12 +135,15 @@ export async function processTemplateLearningJob(job) {
       timestamp: new Date().toISOString(),
       statementId: String(statementId),
       jobId: String(job.id),
-      headerAnchors: mapping?.headerAnchors
+      headerAnchors: layoutTemplate?.headerAnchors
     });
     return { ok: true, statementId: String(statementId), veraHold: true, transactionCount: secondParse.transactions.length };
   }
 
-  if (cleanedRtn.length === 9 && secondParse.metadata?.usedLayoutTemplate) {
+  if (
+    cleanedRtn.length === 9 &&
+    (secondParse.metadata?.usedLayoutTemplate || secondParse.metadata?.templateUsedAsHint)
+  ) {
     await processTemplateOutcome(cleanedRtn, graduationVersion, checksumRecon.ok, {
       lastError: checksumRecon.reason
     });
@@ -161,6 +165,7 @@ export async function processTemplateLearningJob(job) {
       transactionCount: secondParse.transactions.length,
       openingBalance: opening,
       closingBalance: closing,
+      layoutDiscovery: secondParse.metadata?.layoutDiscovery ?? null,
       'metadata.templateLearning.status': 'complete',
       'metadata.templateLearning.completedAt': new Date(),
       'metadata.templateLearning.jobId': String(job.id),
@@ -174,7 +179,7 @@ export async function processTemplateLearningJob(job) {
     timestamp: new Date().toISOString(),
     statementId: String(statementId),
     jobId: String(job.id),
-    headerAnchors: mapping?.headerAnchors
+    headerAnchors: layoutTemplate?.headerAnchors
   });
 
   return { ok: true, statementId: String(statementId), transactionCount: secondParse.transactions.length };

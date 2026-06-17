@@ -8,11 +8,46 @@ import {
   bucketByDay,
   bucketByWeek,
   filterDailyByMonth,
+  getChartActivityFromPayload,
   getOpeningBalanceFromSummaries,
   getTransactionsFromPayload,
+  hasChartActivityData,
+  rollupDailyToActivityRows,
+  rollupWeeklyToActivityRows,
+  type ChartActivity,
 } from "@/lib/dailyActivityAdapter";
 
+export type { ChartActivity } from "@/lib/dailyActivityAdapter";
+
 export type Horizon = "daily" | "weekly" | "single" | "monthly" | "l3m" | "quarterly";
+
+export type ReconciliationLineDelta = {
+  printed: number | null;
+  parsed: number | null;
+  delta: number | null;
+  role: "credit" | "debit";
+  match: boolean;
+};
+
+export type ReconciliationBreakdown = {
+  checksumOk?: boolean | null;
+  printedLines?: Record<string, number> | null;
+  sectionTotals?: Record<string, number> | null;
+  lineDeltas?: Record<string, ReconciliationLineDelta> | null;
+  printedComputedClosing?: number | null;
+  printedClosingMatch?: boolean | null;
+  sectionReconciled?: boolean | null;
+};
+
+export type ReconciliationLineRow = {
+  fileName: string;
+  key: string;
+  printed: number | null;
+  parsed: number | null;
+  delta: number | null;
+  role: "credit" | "debit";
+  match: boolean;
+};
 
 export type MonthlyStatementSummary = {
   fileName: string;
@@ -22,7 +57,21 @@ export type MonthlyStatementSummary = {
   closingBalance?: number;
   parseQuality?: string;
   checksumOk?: boolean;
+  reconciliation?: ReconciliationBreakdown | null;
   layoutPipelineShadow?: LayoutPipelineShadow | null;
+  layoutDiscovery?: {
+    documentMap?: {
+      fingerprint?: string;
+      regions?: Record<
+        string,
+        { type?: string; text?: string; pageIndex?: number | null; bbox?: unknown }
+      >;
+      mappingSource?: string;
+    };
+    contextArchive?: HeliosStatementPayload["data"]["statement"]["analysis"]["contextArchive"];
+    fingerprint?: string | null;
+    mappingSource?: string | null;
+  } | null;
   feeTransactions?: Array<{
     date?: string;
     description?: string;
@@ -86,12 +135,21 @@ export type HeliosStatementPayload = {
             requestedLoanAmount?: number;
           };
         };
+        nsfAndOverdraft?: {
+          nsfCount?: number;
+          overdraftCount?: number;
+        };
         underwritingVitals?: {
           adb?: {
             l3mAverage?: number;
             byMonth?: AdbByMonth[];
           };
+          nsfAndOverdraft?: {
+            nsfCount?: number;
+            overdraftCount?: number;
+          };
         };
+        chartActivity?: ChartActivity | null;
         vera?: {
           decision?: string;
           bankabilityScore?: number;
@@ -163,14 +221,43 @@ export type HeliosStatementPayload = {
           eligibilityBand?: string;
         };
         metadata?: {
+          transactionPersist?: {
+            attempted?: number;
+            persisted?: number;
+            skipped?: { invalidDate?: number; invalidAmount?: number };
+            error?: string | null;
+          };
           parseQualityByFile?: Array<{
             fileName?: string;
             checksumOk?: boolean;
             parseQuality?: string;
             layoutPipelineShadow?: LayoutPipelineShadow | null;
           }>;
+          parseOutcome?: string;
+          checksumPassRatio?: number;
+          institutionProfileGate?: {
+            step1Required?: boolean;
+            productionReady?: boolean;
+            profileStatus?: string;
+            layoutDiscoveryStatus?: string;
+            layoutMapped?: boolean;
+            codeProfileId?: string;
+            bankName?: string | null;
+          };
+          layoutDiscoveryByFile?: Array<{
+            fileName?: string;
+            hasDocumentMap?: boolean;
+            layoutDiscovery?: MonthlyStatementSummary["layoutDiscovery"];
+          }>;
         };
       };
+      layoutDiscovery?: MonthlyStatementSummary["layoutDiscovery"];
+      analysisTitle?: string;
+      analyzedAt?: string | null;
+      monthsAnalyzedLabel?: string;
+      transactionDataSource?: "collection" | "rollup" | "none";
+      uploadDate?: string | null;
+      processedDate?: string | null;
       monthlyStatementSummaries?: MonthlyStatementSummary[];
       transactions?: Array<{
         date?: string | Date;
@@ -198,10 +285,19 @@ export type ChartRow = {
   monthKey: string;
   deposits: number;
   withdrawals: number;
+  net?: number;
   adb: number | null;
   balance?: number | null;
   txnCount?: number;
   estimated?: boolean;
+};
+
+export type ParseIntegrity = {
+  checksumPassRate: number | null;
+  trustedForMetrics: boolean;
+  degraded: boolean;
+  failureCount: number;
+  totalStatements: number;
 };
 
 export type MonthOption = {
@@ -216,6 +312,10 @@ export type DashboardMeta = {
   accountNumber: string;
   requestedLoanAmount: number | null;
   l3mAverageAdb: number | null;
+  analysisTitle: string;
+  analyzedAt: string | null;
+  monthsAnalyzedLabel: string;
+  displayTitle: string;
 };
 
 const MONTH_NAMES = [
@@ -240,6 +340,142 @@ export function formatCurrency(value: number | null | undefined): string {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+/** Prefer universal reconciliation checksum over macro parseQuality flag. */
+export function effectiveChecksumOk(summary: {
+  checksumOk?: boolean;
+  reconciliation?: ReconciliationBreakdown | null;
+}): boolean {
+  if (summary.reconciliation?.checksumOk != null) {
+    return Boolean(summary.reconciliation.checksumOk);
+  }
+  return summary.checksumOk === true;
+}
+
+export function formatAnalyzedAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function periodStartFromSummary(summary: MonthlyStatementSummary): string | null {
+  const cp = summary.coveragePeriod;
+  if (cp?.startDate) return String(cp.startDate).slice(0, 10);
+  const fn = String(summary.fileName || "");
+  const match = fn.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/i);
+  if (match) {
+    const yearMatch = fn.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : "2024";
+    const idx = MONTH_NAMES.findIndex(
+      (x) => x.toUpperCase() === match[1].toUpperCase()
+    );
+    if (idx >= 0) return `${year}-${String(idx + 1).padStart(2, "0")}-01`;
+  }
+  return null;
+}
+
+/** Human-readable statement period for tables (e.g. "Dec 2023"). */
+export function statementPeriodLabel(summary: MonthlyStatementSummary): string {
+  const start = periodStartFromSummary(summary);
+  if (!start || !/^\d{4}-\d{2}/.test(start)) {
+    return summary.fileName || "Statement";
+  }
+  const [y, mo] = start.split("-");
+  const idx = Number(mo) - 1;
+  if (idx < 0 || idx > 11) return summary.fileName || "Statement";
+  return `${MONTH_NAMES[idx]} ${y}`;
+}
+
+export function buildDisplayTitle(title: string): string {
+  const t = title.trim();
+  if (!t) return "Analysis";
+  if (/\banalysis\b/i.test(t)) return t;
+  return `${t} Analysis`;
+}
+
+/** Quality label for per-statement table — surfaces macro vs universal divergence. */
+export function parseQualityLabel(summary: MonthlyStatementSummary): string {
+  const universalOk = summary.reconciliation?.checksumOk;
+  const macroFailed = summary.parseQuality === "FAILED_CHECKSUM";
+
+  if (universalOk === true) {
+    if (macroFailed) {
+      return summary.reconciliation?.sectionReconciled === false
+        ? "Section mismatch"
+        : "OK (printed)";
+    }
+    return summary.parseQuality === "OK" ? "OK" : summary.parseQuality || "OK";
+  }
+
+  if (effectiveChecksumOk(summary)) {
+    return summary.parseQuality || "OK";
+  }
+
+  return summary.parseQuality || "Review";
+}
+
+function resolveAnalyzedAt(statement: HeliosStatementPayload["data"]["statement"]): string | null {
+  const analysis = statement?.analysis as
+    | { processing?: { completedAt?: string } }
+    | undefined;
+  return (
+    statement?.analyzedAt ??
+    analysis?.processing?.completedAt ??
+    statement?.processedDate ??
+    statement?.uploadDate ??
+    null
+  );
+}
+
+function resolveAnalysisTitle(statement: HeliosStatementPayload["data"]["statement"]): string {
+  return (
+    statement?.analysisTitle ||
+    statement?.applicationContext?.companyName ||
+    statement?.bankName ||
+    "Unknown applicant"
+  );
+}
+
+/** Resolve document map / context archive from layoutDiscovery or legacy analysis fields. */
+export function resolveDocumentProvenance(payload: HeliosStatementPayload) {
+  const stmt = payload.data?.statement;
+  const analysis = stmt?.analysis;
+  const fromMonthly = stmt?.monthlyStatementSummaries?.find(
+    (m) => m.layoutDiscovery?.documentMap
+  )?.layoutDiscovery;
+  const fromByFile = analysis?.metadata?.layoutDiscoveryByFile?.find(
+    (f) => f.layoutDiscovery?.documentMap
+  )?.layoutDiscovery;
+
+  const documentMap =
+    analysis?.documentMap ??
+    stmt?.layoutDiscovery?.documentMap ??
+    fromMonthly?.documentMap ??
+    fromByFile?.documentMap ??
+    null;
+
+  const contextArchive =
+    analysis?.contextArchive ??
+    stmt?.layoutDiscovery?.contextArchive ??
+    fromMonthly?.contextArchive ??
+    fromByFile?.contextArchive ??
+    null;
+
+  return {
+    documentMap,
+    contextArchive,
+    layoutDiscoveryStatus:
+      analysis?.metadata?.institutionProfileGate?.layoutDiscoveryStatus ?? null,
+    hasDocumentMap: Boolean(documentMap?.regions && Object.keys(documentMap.regions).length > 0),
+  };
 }
 
 function monthKeyFromSummary(summary: MonthlyStatementSummary): string | null {
@@ -374,15 +610,20 @@ export function buildChartRows(
   const transactions = getTransactionsFromPayload(payload);
   const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
   const opening = getOpeningBalanceFromSummaries(summaries);
+  const chartActivity = getChartActivityFromPayload(payload);
 
   if (horizon === "daily") {
-    let daily = bucketByDay(transactions, opening);
+    let daily =
+      transactions.length > 0
+        ? bucketByDay(transactions, opening)
+        : rollupDailyToActivityRows(chartActivity?.daily ?? []);
     if (selectedMonthKey) daily = filterDailyByMonth(daily, selectedMonthKey);
     return daily.map((d) => ({
       label: d.label,
       monthKey: d.date,
       deposits: d.deposits,
       withdrawals: d.withdrawals,
+      net: d.net,
       adb: null,
       balance: d.balance,
       txnCount: d.txnCount,
@@ -390,12 +631,16 @@ export function buildChartRows(
   }
 
   if (horizon === "weekly") {
-    const weekly = bucketByWeek(transactions, opening);
+    const weekly =
+      transactions.length > 0
+        ? bucketByWeek(transactions, opening)
+        : rollupWeeklyToActivityRows(chartActivity?.weekly ?? []);
     return weekly.map((w) => ({
       label: w.label,
       monthKey: w.weekKey,
       deposits: w.deposits,
       withdrawals: w.withdrawals,
+      net: w.net,
       adb: null,
       balance: w.balance,
       txnCount: w.txnCount,
@@ -423,13 +668,100 @@ export function buildChartRows(
 }
 
 export function hasTransactionLevelData(payload: HeliosStatementPayload): boolean {
-  return getTransactionsFromPayload(payload).length > 0;
+  if (getTransactionsFromPayload(payload).length > 0) return true;
+  return hasChartActivityData(payload);
+}
+
+export function usesRollupOnlyTransactions(payload: HeliosStatementPayload): boolean {
+  return (
+    getTransactionsFromPayload(payload).length === 0 && hasChartActivityData(payload)
+  );
+}
+
+const METRICS_TRUST_MIN_CHECKSUM_RATE = 0.8;
+const ADB_CLOSING_MULTIPLIER_CAP = 10;
+
+function isAbsurdAdb(adb: number | null, closingBalance: number | null): boolean {
+  if (adb == null || !Number.isFinite(adb) || adb <= 0) return false;
+  if (adb > 5_000_000) return true;
+  if (closingBalance != null && closingBalance > 0 && adb > closingBalance * ADB_CLOSING_MULTIPLIER_CAP) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether parse output is trustworthy enough for headline underwriting metrics.
+ */
+export function parseIntegrity(payload: HeliosStatementPayload): ParseIntegrity {
+  const statement = payload.data?.statement;
+  const summaries = statement?.monthlyStatementSummaries ?? [];
+  const parseMeta = statement?.analysis?.metadata?.parseQualityByFile as
+    | Array<{ checksumOk?: boolean }>
+    | undefined;
+
+  const rows =
+    summaries.length > 0
+      ? summaries
+      : (parseMeta ?? []).map((r) => ({ checksumOk: r.checksumOk }));
+
+  const totalStatements = rows.length;
+  if (totalStatements === 0) {
+    return {
+      checksumPassRate: null,
+      trustedForMetrics: hasTransactionLevelData(payload),
+      degraded: !hasTransactionLevelData(payload),
+      failureCount: 0,
+      totalStatements: 0,
+    };
+  }
+
+  const okCount = rows.filter((s) => effectiveChecksumOk(s)).length;
+  const checksumPassRate = okCount / totalStatements;
+  const closing = numClosingBalance(statement);
+  const l3mAdb = statement?.analysis?.underwritingVitals?.adb?.l3mAverage ?? null;
+  const absurdVitals = isAbsurdAdb(
+    typeof l3mAdb === "number" ? l3mAdb : null,
+    closing
+  );
+
+  const analysisMeta = statement?.analysis?.metadata as
+    | {
+        parseOutcome?: string;
+        institutionProfileGate?: { productionReady?: boolean };
+      }
+    | undefined;
+  const parseDegraded = analysisMeta?.parseOutcome === "DEGRADED";
+  const profileNotProductionReady =
+    analysisMeta?.institutionProfileGate?.productionReady === false;
+
+  const trustedForMetrics =
+    checksumPassRate >= METRICS_TRUST_MIN_CHECKSUM_RATE &&
+    !absurdVitals &&
+    !parseDegraded &&
+    !profileNotProductionReady &&
+    (hasTransactionLevelData(payload) || checksumPassRate === 1);
+
+  return {
+    checksumPassRate,
+    trustedForMetrics,
+    degraded: !trustedForMetrics,
+    failureCount: totalStatements - okCount,
+    totalStatements,
+  };
+}
+
+function numClosingBalance(statement: HeliosStatementPayload["data"]["statement"]): number | null {
+  const n = Number(statement?.closingBalance);
+  return Number.isFinite(n) ? n : null;
 }
 
 export function chartUsesEstimatedData(
   payload: HeliosStatementPayload,
   horizon: Horizon
 ): boolean {
+  const integrity = parseIntegrity(payload);
+  if (!integrity.trustedForMetrics) return true;
   if (horizon === "daily" || horizon === "weekly") {
     return !hasTransactionLevelData(payload);
   }
@@ -438,6 +770,7 @@ export function chartUsesEstimatedData(
 
 export function extractDashboardMeta(payload: HeliosStatementPayload): DashboardMeta {
   const statement = payload.data?.statement;
+  const analysisTitle = resolveAnalysisTitle(statement);
   return {
     companyName:
       statement?.applicationContext?.companyName ||
@@ -449,6 +782,10 @@ export function extractDashboardMeta(payload: HeliosStatementPayload): Dashboard
       statement?.applicationContext?.requestedLoanAmount ?? null,
     l3mAverageAdb:
       statement?.analysis?.underwritingVitals?.adb?.l3mAverage ?? null,
+    analysisTitle,
+    analyzedAt: resolveAnalyzedAt(statement),
+    monthsAnalyzedLabel: statement?.monthsAnalyzedLabel ?? "",
+    displayTitle: buildDisplayTitle(analysisTitle),
   };
 }
 
@@ -456,7 +793,34 @@ export function getChecksumFailures(
   payload: HeliosStatementPayload
 ): MonthlyStatementSummary[] {
   const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
-  return summaries.filter((s) => s.checksumOk === false);
+  return summaries.filter((s) => !effectiveChecksumOk(s));
+}
+
+/**
+ * Flatten per-file printed-vs-parsed section deltas (deposits/withdrawals/checks/
+ * fees/...) so a failed checksum shows exactly which line diverged.
+ */
+export function getReconciliationLineDeltas(
+  payload: HeliosStatementPayload
+): ReconciliationLineRow[] {
+  const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
+  const rows: ReconciliationLineRow[] = [];
+  for (const summary of summaries) {
+    const deltas = summary.reconciliation?.lineDeltas;
+    if (!deltas) continue;
+    for (const [key, d] of Object.entries(deltas)) {
+      rows.push({
+        fileName: summary.fileName,
+        key,
+        printed: d.printed,
+        parsed: d.parsed,
+        delta: d.delta,
+        role: d.role,
+        match: d.match,
+      });
+    }
+  }
+  return rows;
 }
 
 export function getLayoutShadowEntries(payload: HeliosStatementPayload): Array<{
