@@ -64,6 +64,21 @@ const upload = multer({
 const statements = {};
 let statementCounter = 0;
 
+// Pre-create a demo upload session so the UI always has one ready
+const DEMO_SESSION_ID = 'demo-session-' + crypto.randomBytes(8).toString('hex');
+statements[DEMO_SESSION_ID] = {
+  sessionId: DEMO_SESSION_ID,
+  uploadSessionId: DEMO_SESSION_ID,
+  status: 'completed',
+  createdAt: new Date().toISOString(),
+  files: [
+    { fileName: 'demo-statement-q1-2025.pdf', path: '/uploads/demo-statement-q1-2025.pdf', pages: 3 },
+    { fileName: 'demo-statement-q2-2025.pdf', path: '/uploads/demo-statement-q2-2025.pdf', pages: 4 },
+    { fileName: 'demo-statement-q3-2025.pdf', path: '/uploads/demo-statement-q3-2025.pdf', pages: 3 },
+    { fileName: 'demo-statement-q4-2025.pdf', path: '/uploads/demo-statement-q4-2025.pdf', pages: 3 }
+  ]
+};
+
 function demoUser(email) {
   return { id: 'demo-user-id', email, role: 'ADMIN', name: email.split('@')[0] };
 }
@@ -196,9 +211,32 @@ app.get('/api/statements/list', requireAuth, (req, res) => {
   res.json({ success: true, data: list, total: list.length });
 });
 
+// ============================================================
+//  STATEMENTS — List
+// ============================================================
 app.get('/api/statements', requireAuth, (req, res) => {
-  const list = Object.values(statements).sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
-  res.json({ success: true, data: list, total: list.length });
+  // Return all statements that have analysis results (skip session/triage objects)
+  const list = Object.values(statements).filter(s => s.analysis || s._id || s.id).map(s => ({
+    _id: s._id || s.id,
+    id: s._id || s.id,
+    analysisTitle: s.businessName || s.applicationData?.companyName || 'Demo Business LLC',
+    veritasScore: s.veritasScore ?? s.analysis?.summary?.veritasScore ?? 72,
+    monthsAnalyzedLabel: 'Q1 2025 (Jan–Mar)',
+    analyzedAt: s.updatedAt || s.createdAt || new Date().toISOString(),
+    updatedAt: s.updatedAt || s.createdAt || new Date().toISOString(),
+    createdAt: s.createdAt || new Date().toISOString(),
+    applicationContext: {
+      companyName: s.businessName || s.applicationData?.companyName || 'Demo Business LLC',
+      dealId: s.applicationData?.dealId || 'APP-DEMO-001'
+    },
+    veraDecision: 'PROCEED',
+    fileCount: s.files?.length || s.statementCount || 4
+  }));
+
+  res.json({
+    success: true,
+    data: { statements: list }
+  });
 });
 
 // ============================================================
@@ -207,38 +245,113 @@ app.get('/api/statements', requireAuth, (req, res) => {
 app.get('/api/statements/:id', requireAuth, (req, res) => {
   const stmt = statements[req.params.id];
   if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
-  
+
+  const stmtId = stmt._id || stmt.id || req.params.id;
+  const analysis = stmt.analysis || {};
+  const sum = analysis.summary || {};
+
   res.json({
     success: true,
     data: {
-      statement: stmt,
-      vera: {
-        pdfUrl: `/api/statements/${req.params.id}/download`
+      id: stmtId,
+      _id: stmtId,
+      deal: {
+        companyName: 'Demo Business LLC',
+        dba: 'Demo Business Solutions',
+        taxId: 'XX-XXXXXXX',
+        businessAddress: '123 Main Street, Suite 400, Wilmington, DE 19801',
+        requestedLoanAmount: 250000,
+        statedGAR: 720000,
+        dealId: 'APP-DEMO-001'
       },
-      analysis: {
-        status: 'completed',
-        summary: {
+      applicationData: {
+        companyName: 'Demo Business LLC',
+        dbaName: 'Demo Business Solutions',
+        taxId: 'XX-XXXXXXX',
+        businessAddress: '123 Main Street, Suite 400, Wilmington, DE 19801',
+        requestedLoanAmount: 250000,
+        statedRevenue: 720000,
+        dealId: 'APP-DEMO-001',
+        industry: 'Wholesale Trade'
+      },
+      coverage: {
+        startDate: '2025-01-01',
+        endDate: '2025-03-31',
+        fileCount: 4,
+        accountCount: 2
+      },
+      metrics: {
+        totalDeposits: sum.totalDeposits ?? 1250000,
+        totalWithdrawals: sum.totalWithdrawals ?? 980000,
+        netCashFlow: sum.netCashFlow ?? 270000,
+        averageDailyBalance: sum.avgDailyBalance ?? 42500,
+        nsfCount: sum.nsfCount ?? 3,
+        openingBalance: 38500,
+        closingBalance: 52300
+      },
+      accountingSummary: {
+        opex: { total: 180000,
+          categories: [
+            { name: 'Payroll', amount: 95000 },
+            { name: 'Rent & Facilities', amount: 42000 },
+            { name: 'Operating Expenses', amount: 43000 }
+          ]
+        }
+      },
+      juniorUnderwriter: {
+        overallScore: 72,
+        fiveCs: {
+          capacity: { score: 74 },
+          capital: { score: 78 },
+          collateral: { score: 70 },
+          conditions: { score: 68 },
+          character: { score: 72 }
+        }
+      },
+      forensicIntelligence: {
+        monthlyBreakdown: [
+          { month: '2025-01', deposits: 410000, withdrawals: 325000 },
+          { month: '2025-02', deposits: 395000, withdrawals: 340000 },
+          { month: '2025-03', deposits: 445000, withdrawals: 315000 }
+        ],
+        quarterlyBreakdown: [
+          { quarter: 'Q1 2025', label: 'Q1 2025', deposits: 1250000, withdrawals: 980000 }
+        ],
+        l3m: {
           totalDeposits: 1250000,
           totalWithdrawals: 980000,
-          avgDailyBalance: 42500,
-          nsfCount: 3,
-          statementPeriod: { start: '2025-01-01', end: '2025-03-31' }
+          netCashFlow: 270000,
+          avgMonthlyDeposits: 416667,
+          depositGrowth: 8.5
         },
-        alerts: [
-          { code: 'NSF_001', type: 'risk', severity: 'high', title: 'Insufficient Funds', description: '3 NSF events in period' },
-          { code: 'CASH_001', type: 'cash_flow', severity: 'medium', title: 'Cash Flow Volatility', description: 'Revenue fluctuation >30%' },
-          { code: 'COMP_001', type: 'compliance', severity: 'low', title: 'Minimum Balance', description: 'Balance below threshold on 2 days' }
-        ],
-        transactions: [
-          { date: '2025-03-15', description: 'ACH Deposit - PAYMENT SOLUTIONS INC', amount: 45000, type: 'credit', category: 'revenue' },
-          { date: '2025-03-14', description: 'Wire Transfer - GLOBAL DISTRIBUTORS LLC', amount: 28500, type: 'credit', category: 'revenue' },
-          { date: '2025-03-14', description: 'Check #4521 - Office Rent', amount: -8500, type: 'debit', category: 'overhead' },
-          { date: '2025-03-13', description: 'ACH Withdrawal - PAYROLL PROCESSING', amount: -22500, type: 'debit', category: 'payroll' },
-          { date: '2025-03-12', description: 'NSF Fee - RETURNED CHECK', amount: -35, type: 'debit', category: 'fees' },
-          { date: '2025-03-10', description: 'Credit Card Payment - AMEX CORP', amount: -4200, type: 'debit', category: 'overhead' },
-          { date: '2025-03-08', description: 'Deposit - MERCHANT SETTLEMENT', amount: 18750, type: 'credit', category: 'revenue' }
+        dscr: { prospective: 1.85, ratio: 1.85 }
+      },
+      alerts: {
+        items: (analysis.alerts || stmt.alerts || [
+          { severity: 'HIGH', title: '3 NSF Events Detected', message: 'Insufficient funds on Mar 5, Feb 12, Jan 28' },
+          { severity: 'MEDIUM', title: 'Cash Flow Volatility', message: 'Monthly revenue varies 35% between months' },
+          { severity: 'LOW', title: 'Minimum Balance Threshold', message: 'Balance dropped below $5K on 2 days' }
+        ]).map(a => ({
+          severity: a.severity || 'MEDIUM',
+          title: a.title || a.code || 'Alert',
+          message: a.message || a.description || ''
+        }))
+      },
+      accountGroups: [
+        { bankName: 'Chase Bank NA', accountNumber: 'XXXX1234', transactionCount: 47, veritasScore: 72 },
+        { bankName: 'Bank of America', accountNumber: 'XXXX5678', transactionCount: 23, veritasScore: 68 }
+      ],
+      vera: {
+        decision: 'PROCEED',
+        bankabilityScore: 7.2,
+        briefingMarkdown: '## Vera Executive Briefing\n\n**Applicant:** Demo Business LLC\n**Deal ID:** APP-DEMO-001\n**Requested Amount:** $250,000\n\n### Risk Assessment\n- **Veritas Score:** 72/100 — Moderate risk profile\n- **Bankability Score:** 7.2/10 — Proceed with standard due diligence\n\n### Key Findings\n\n| Category | Finding |\n|----------|--------|\n| Cash Flow | $1.25M deposited over 3 months — consistent revenue pattern ✅ |\n| NSF Events | 3 NSF events detected — monitor closely ⚠️ |\n| Balance Adequacy | Avg daily balance $42.5K — adequate for requested amount ✅ |\n| Revenue Variance | Observed deposits align with stated revenue within acceptable range ✅ |\n\n### Stipulations\n1. Provide most recent 3 months of bank statements for validation\n2. Confirm NSF resolution with applicant\n3. Verify business address and operating history\n\n**Recommendation:** PROCEED — Moderate risk with standard covenants.',
+        stipulations: [
+          { name: 'NSF Letter of Explanation', status: 'pending' },
+          { name: '3 Months Additional Statements', status: 'pending' },
+          { name: 'Business Verification', status: 'satisfied' }
         ]
-      }
+      },
+      veritasScore: 72
     }
   });
 });
@@ -314,9 +427,29 @@ app.post('/api/statements/batch/confirm-bank', requireAuth, (req, res) => {
 // ============================================================
 //  BATCH — Run Analysis
 // ============================================================
-app.post('/api/statements/batch', requireAuth, (req, res) => {
-  const sessionId = req.body?.uploadSessionId || req.body?.sessionId;
-  if (!sessionId) return res.status(400).json({ success: false, error: 'uploadSessionId required' });
+// Support both: JSON body (uploadSessionId) AND multipart form with files
+const batchUploadHandler = (req, res) => {
+  // If files were uploaded directly (index.html flow), store them as a session
+  const files = req.files || [];
+  if (files.length > 0) {
+    const now = new Date().toISOString();
+    const sid = 'direct_' + crypto.randomBytes(8).toString('hex');
+    statements[sid] = {
+      sessionId: sid, uploadSessionId: sid, status: 'completed',
+      createdAt: now, updatedAt: now, files: files.map(f => ({
+        fileName: f.originalname || f.originalname,
+        path: f.path, pages: 1, size: f.size
+      }))
+    };
+    req.body = req.body || {};
+    req.body.uploadSessionId = sid;
+  }
+  // Continue with normal batch logic
+  batchLogic(req, res);
+};
+
+function batchLogic(req, res) {
+  const sessionId = req.body?.uploadSessionId || req.body?.sessionId || DEMO_SESSION_ID;
 
   const session = statements[sessionId];
   if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
@@ -367,7 +500,10 @@ app.post('/api/statements/batch', requireAuth, (req, res) => {
       redirectUrl: `/manual-results.html?id=${stmtId}`
     }
   });
-});
+}
+
+// Route registration — handles both JSON (batchLogic) and multipart (batchUploadHandler)
+app.post('/api/statements/batch', requireAuth, upload.array('files', 10), batchUploadHandler);
 
 // ============================================================
 //  BATCH — Progress & Job Status
@@ -413,6 +549,7 @@ app.get('/api/statements/batch/triage/:sessionId/file/:fileName', requireAuth, (
 // ============================================================
 //  RESULTS / ANALYSIS ENDPOINTS
 // ============================================================
+
 app.get('/api/statements/:id/analytics', requireAuth, (req, res) => {
   const stmt = statements[req.params.id];
   if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
@@ -484,6 +621,39 @@ app.post('/api/statements/:id/analyze', requireAuth, (req, res) => {
 
 app.post('/api/statements/:id/analyze-enhanced', requireAuth, (req, res) => {
   res.json({ success: true, message: 'Enhanced analysis complete', data: { id: req.params.id, status: 'completed' } });
+});
+
+// ============================================================
+//  CHAT — Vera AI Assistant (used by index.html inline form)
+// ============================================================
+app.post('/api/statements/analysis/chat', requireAuth, (req, res) => {
+  const { message, statementId } = req.body || {};
+  const stmt = statementId ? statements[statementId] : null;
+  const company = stmt?.businessName || 'Demo Business LLC';
+  const veritas = stmt?.veritasScore ?? 72;
+
+  const responses = {
+    'risk': `Based on the Veritas Score of ${veritas}/100, this application shows a moderate risk profile. Key factors: NSF history (3 events), cash flow volatility (23% monthly variance), and average daily balance of $42,500. Recommendation: Proceed with standard due diligence.`,
+    'nsf': `The analysis detected 3 NSF events in the review period (Jan 28, Feb 12, Mar 5). The total NSF fees amount to $105. This is a moderate concern — recommend obtaining a letter of explanation from the applicant.`,
+    'cash': `Net cash flow for the period is $270,000 (total deposits $1,250,000 minus withdrawals $980,000). Monthly deposits average $416,667 with a variance of ±8.5%. The business shows consistent revenue patterns.`,
+    'balance': `The average daily balance is $42,500. Opening balance was $38,500 and closing balance is $52,300 — a positive trend. The minimum balance dropped below $5,000 on 2 days during the period.`,
+    'veritas': `The Veritas Score is ${veritas}/100, which falls in the "Moderate Risk" category. This score is based on: Cash Flow Stability (78/100), Balance Adequacy (85/100), Deposit Consistency (82/100), and NSF History (65/100).`
+  };
+
+  let reply = 'I can help analyze this batch. Ask me about risk, NSF events, cash flow, balance trends, or the Veritas score.';
+  const lower = (message || '').toLowerCase();
+  if (lower.includes('risk') || lower.includes('veritas') || lower.includes('score')) {
+    reply = responses['risk'];
+    if (lower.includes('veritas')) reply = responses['veritas'];
+  } else if (lower.includes('nsf') || lower.includes('insufficient')) {
+    reply = responses['nsf'];
+  } else if (lower.includes('cash') || lower.includes('deposit') || lower.includes('revenue') || lower.includes('flow')) {
+    reply = responses['cash'];
+  } else if (lower.includes('balance') || lower.includes('bank')) {
+    reply = responses['balance'];
+  }
+
+  res.json({ success: true, data: { response: reply, statementId } });
 });
 
 // ============================================================
