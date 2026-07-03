@@ -425,7 +425,8 @@ export class PDFParserService {
           accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
           plumberTransactions,
           stitcherPrinted,
-          typeAText: stitcher.typeA?.text ?? null
+          typeAText: stitcher.typeA?.text ?? null,
+          pdfBuffer: buffer
         });
         transactions = pipelineResult.transactions || [];
         if (profile.id === 'wells_initiate_checking' || profile.id === 'chase_business_complete') {

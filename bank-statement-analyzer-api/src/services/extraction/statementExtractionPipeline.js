@@ -6,6 +6,10 @@ import { validateEndingDailyBalancePlacement } from './statementReconciliation.j
 import { reconcileRawBundle } from './layoutPipeline/reconciliationService.js';
 import { WellsParseReconciliationError } from './profiles/wellsFargoInitiateProfile.js';
 import { ChaseParseReconciliationError } from './profiles/chaseBusinessCompleteProfile.js';
+import {
+  extractTransactionsFromPdfBuffer as ocrExtractFromBuffer,
+  scanOcrEnabled
+} from './scanOcrService.js';
 
 /**
  * @param {object} ctx
@@ -89,6 +93,83 @@ export async function runStatementExtractionPipeline(ctx) {
 
   const extractionTier = reconciliation.checksumOk && dailyBalanceRule.valid ? 1 : null;
 
+  // ── OCR rescue pass ────────────────────────────────────────────────────────
+  // If the primary extraction failed checksum and we have the raw buffer,
+  // attempt a second pass through the OCR/scan pipeline.  If OCR produces a
+  // result that passes reconciliation we swap it in; otherwise we keep the
+  // original (non-fatal).
+  let ocrRescueApplied = false;
+  let ocrRescueFailed = false;
+
+  if (!reconciliation.checksumOk && ctx.pdfBuffer && scanOcrEnabled()) {
+    logger.info('[STATEMENT_PIPELINE] checksum failed — attempting OCR rescue', {
+      profileId: profile.id,
+      txnCount: extracted.transactions?.length ?? 0
+    });
+
+    try {
+      const ocrResult = await ocrExtractFromBuffer(ctx.pdfBuffer, {
+        bankName: ctx.resolvedBankType || '',
+        defaultYear: ctx.defaultYear,
+        fileName: ctx.options?.fileName
+      });
+
+      if (ocrResult?.success && ocrResult.transactions?.length) {
+        const ocrBundle = reconcileRawBundle(
+          {
+            transactions: ocrResult.transactions,
+            normalizedTransactions: ocrResult.normalizedTransactions ?? ocrResult.transactions,
+            meta: {
+              openingBalance: ocrResult.openingBalance,
+              closingBalance: ocrResult.closingBalance
+            },
+            printedVitals: {
+              opening: ocrResult.openingBalance,
+              closing: ocrResult.closingBalance,
+              deposits: null,
+              withdrawals: null
+            },
+            extractionMode: 'ocr_rescue'
+          },
+          { profileId: profile.id }
+        );
+
+        if (ocrBundle.reconciliationBreakdown?.checksumOk) {
+          // OCR pass succeeded — swap in its result
+          extracted = {
+            ...extracted,
+            transactions: ocrResult.transactions,
+            normalizedTransactions: ocrResult.normalizedTransactions ?? ocrResult.transactions
+          };
+          reconciliation = ocrBundle.reconciliationBreakdown;
+          ocrRescueApplied = true;
+          logger.info('[STATEMENT_PIPELINE] OCR rescue succeeded', {
+            profileId: profile.id,
+            txnCount: ocrResult.transactions.length
+          });
+        } else {
+          ocrRescueFailed = true;
+          logger.warn('[STATEMENT_PIPELINE] OCR rescue did not pass checksum', {
+            profileId: profile.id
+          });
+        }
+      } else {
+        ocrRescueFailed = true;
+        logger.warn('[STATEMENT_PIPELINE] OCR rescue returned no transactions', {
+          profileId: profile.id,
+          error: ocrResult?.error
+        });
+      }
+    } catch (ocrErr) {
+      ocrRescueFailed = true;
+      logger.warn('[STATEMENT_PIPELINE] OCR rescue threw', {
+        profileId: profile.id,
+        error: ocrErr.message
+      });
+    }
+  }
+  // ── end OCR rescue ─────────────────────────────────────────────────────────
+
   logger.info('[STATEMENT_PIPELINE] complete', {
     profileId: profile.id,
     txnCount: extracted.transactions?.length ?? 0,
@@ -97,11 +178,17 @@ export async function runStatementExtractionPipeline(ctx) {
     withdrawalsMatch: reconciliation.withdrawalsMatch,
     dailyBalanceValid: dailyBalanceRule.valid,
     extractionTier,
+    ocrRescueApplied,
+    ocrRescueFailed,
     durationMs: Date.now() - started
   });
 
   return {
-    meta,
+    meta: {
+      ...meta,
+      ocrRescueApplied,
+      ocrRescueFailed
+    },
     transactions: extracted.transactions,
     normalizedTransactions: extracted.normalizedTransactions,
     stitcherPrinted: extracted.stitcherPrinted,

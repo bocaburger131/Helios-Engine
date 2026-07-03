@@ -54,6 +54,7 @@ TABLE_SETTINGS_LINES = {
 
 Y_TOLERANCE = 4
 HEADER_WORDS_RE = re.compile(r"date|deposit|credit|withdraw|debit|description|balance", re.I)
+_COL_BUCKET_PT = 4.0  # histogram resolution in PDF points
 
 
 def debug_page(page_index: int, raw_row_count: int, strategy: str, table_count: int) -> None:
@@ -507,6 +508,62 @@ def _find_header_row(rows: list[list[dict[str, Any]]]) -> tuple[int, list[float]
     return None
 
 
+def detect_column_boundaries(page: Any) -> list[float]:
+    """
+    Build an X-coordinate histogram from every word on the page and find
+    natural column-gap positions dynamically.
+
+    Returns a list of break-point X values (between columns), sorted ascending.
+    Falls back to an empty list when insufficient words are found.
+    """
+    try:
+        words = page.extract_words() or []
+    except Exception:
+        return []
+
+    if len(words) < 6:
+        return []
+
+    page_width = float(getattr(page, "width", 0) or 612)
+    bucket_count = max(1, int(page_width / _COL_BUCKET_PT))
+    histogram: list[int] = [0] * bucket_count
+
+    for w in words:
+        try:
+            bucket = min(int(float(w["x0"]) / _COL_BUCKET_PT), bucket_count - 1)
+            histogram[bucket] += 1
+        except (KeyError, ValueError, ZeroDivisionError):
+            continue
+
+    # A gap bucket is one where the word-density drops to zero (or near-zero)
+    # and it sits between two denser regions.
+    gaps: list[float] = []
+    in_gap = False
+    gap_start = 0
+    for i, count in enumerate(histogram):
+        if count == 0 and not in_gap:
+            in_gap = True
+            gap_start = i
+        elif count > 0 and in_gap:
+            # midpoint of the gap → column break
+            gap_mid = (gap_start + i) / 2.0 * _COL_BUCKET_PT
+            # ignore gaps in the left/right margin (< 5 % or > 95 % of page width)
+            if 0.05 * page_width < gap_mid < 0.95 * page_width:
+                gaps.append(gap_mid)
+            in_gap = False
+
+    # Keep only breaks that produce columns at least 40 pt wide
+    filtered: list[float] = []
+    prev = 0.0
+    for g in gaps:
+        if g - prev >= 40.0:
+            filtered.append(g)
+            prev = g
+
+    # Require at least 2 breaks (3 columns) to trust the result
+    return filtered if len(filtered) >= 2 else []
+
+
 def _assign_column_breaks(header_xs: list[float], page_width: float, *, bank: str = "") -> list[float]:
     if len(header_xs) >= 4:
         breaks = []
@@ -571,12 +628,26 @@ def table_from_words(
 
     if header_info:
         header_idx, header_xs = header_info
-        breaks = _assign_column_breaks(header_xs, page_width, bank=bank)
+        # Prefer dynamic boundary detection; fall back to header-derived or static breaks
+        dynamic_breaks = detect_column_boundaries(page)
+        breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks(header_xs, page_width, bank=bank)
+        # Emit telemetry so JS can see which path was taken
+        print(
+            f"COLUMN_DEBUG page=? dynamic_breaks={len(dynamic_breaks)} "
+            f"final_breaks={len(breaks)} source={'dynamic' if dynamic_breaks else 'header'}",
+            file=sys.stderr,
+        )
         header_cells = _row_words_to_cells(word_rows[header_idx], breaks)
         table: list[list[str | None]] = [header_cells]
         data_start = header_idx + 1
     else:
-        breaks = _assign_column_breaks([], page_width, bank=bank)
+        dynamic_breaks = detect_column_boundaries(page)
+        breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks([], page_width, bank=bank)
+        print(
+            f"COLUMN_DEBUG page=? dynamic_breaks={len(dynamic_breaks)} "
+            f"final_breaks={len(breaks)} source={'dynamic' if dynamic_breaks else 'fallback'}",
+            file=sys.stderr,
+        )
         fallback = default_header or [
             "Date",
             "Description",
