@@ -159,7 +159,7 @@ app.post('/api/statements', requireAuth, upload.single('file'), async (req, res)
 
     const id = mockId();
     const now = new Date().toISOString();
-    const fileName = req.file.originalname;
+    const fileName = path.basename(req.file.originalname);
     const filePath = req.file.path;
 
     // Mock parse result
@@ -376,7 +376,7 @@ app.post('/api/statements/batch/triage', requireAuth, upload.array('files', 10),
 
   const sessionId = 'triage_' + crypto.randomBytes(8).toString('hex');
   const triageFiles = files.map(f => ({
-    fileName: f.originalname,
+    fileName: path.basename(f.originalname),
     size: f.size,
     path: f.path,
     status: 'pending'
@@ -437,7 +437,7 @@ const batchUploadHandler = (req, res) => {
     statements[sid] = {
       sessionId: sid, uploadSessionId: sid, status: 'completed',
       createdAt: now, updatedAt: now, files: files.map(f => ({
-        fileName: f.originalname || f.originalname,
+        fileName: path.basename(f.originalname),
         path: f.path, pages: 1, size: f.size
       }))
     };
