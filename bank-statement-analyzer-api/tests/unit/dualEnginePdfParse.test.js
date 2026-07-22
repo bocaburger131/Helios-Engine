@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   dualEngineParseEnabled,
   crossReferenceDualParse,
-  applyDualEngineToParseResult
+  applyDualEngineToParseResult,
+  aggregatePrintedDelta
 } from '../../src/services/extraction/dualEnginePdfParse.js';
 
 function pdfParseResult(transactions, opening = 1000, closing = 1500) {
@@ -74,7 +75,7 @@ describe('dualEnginePdfParse', () => {
     expect(dualEngine.plumberChecksumOk).toBe(true);
   });
 
-  it('both checksum OK with agreement keeps pdf-parse', () => {
+  it('both checksum OK prefers plumber (coordinate provenance tie-break)', () => {
     const pdf = pdfParseResult([creditTxn(500)], 1000, 1500);
     const plumber = {
       success: true,
@@ -83,8 +84,9 @@ describe('dualEnginePdfParse', () => {
       closingBalance: 1500
     };
     const { transactions, chosenEngine, dualEngine } = crossReferenceDualParse(pdf, plumber);
-    expect(chosenEngine).toBe('pdf_parse');
+    expect(chosenEngine).toBe('pdfplumber');
     expect(dualEngine.agreement).toBe(true);
+    expect(dualEngine.selectionRule).toBe('verified_tiebreak_plumber_preferred');
     expect(transactions[0].description).toBe('DEPOSIT');
   });
 
@@ -101,6 +103,27 @@ describe('dualEnginePdfParse', () => {
     expect(dualEngine.dualEngineBothFailed).toBe(true);
     expect(dualEngine.pdfParseChecksumOk).toBe(false);
     expect(dualEngine.plumberChecksumOk).toBe(false);
+  });
+
+  it('both fail picks engine closer to printed deposit totals', () => {
+    const pdf = pdfParseResult([creditTxn(200)], 1000, 1500);
+    const plumber = {
+      success: true,
+      transactions: [creditTxn(499)],
+      openingBalance: 1000,
+      closingBalance: 1500
+    };
+    const { chosenEngine, dualEngine, transactions } = crossReferenceDualParse(pdf, plumber);
+    expect(chosenEngine).toBe('pdfplumber');
+    expect(dualEngine.dualEngineBothFailed).toBe(true);
+    expect(dualEngine.fallbackLowerAggregateDelta).toBe(true);
+    expect(transactions[0].amount).toBe(499);
+  });
+
+  it('aggregatePrintedDelta sums deposit and withdrawal drift', () => {
+    const score = { deposits: 200, withdrawals: 50, delta: 999 };
+    const recon = { printedDeposits: 500, printedWithdrawals: 100 };
+    expect(aggregatePrintedDelta(score, recon)).toBe(350);
   });
 
   it('applyDualEngineToParseResult passthrough when dual disabled', () => {

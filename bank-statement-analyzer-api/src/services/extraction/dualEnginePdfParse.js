@@ -36,6 +36,28 @@ export function scoreParseCandidate(reconInput) {
 }
 
 /**
+ * Sum of absolute drift vs printed deposit/withdrawal totals (lower is better).
+ * Falls back to checksum closing delta when printed totals are unavailable.
+ * @param {{ delta?: number, deposits?: number, withdrawals?: number }} score
+ * @param {{ printedDeposits?: number|null, printedWithdrawals?: number|null }} reconInput
+ */
+export function aggregatePrintedDelta(score, reconInput) {
+  const pd = reconInput?.printedDeposits;
+  const pw = reconInput?.printedWithdrawals;
+  if (pd == null && pw == null) {
+    return Number(score?.delta ?? Infinity);
+  }
+  let total = 0;
+  if (pd != null) {
+    total += Math.abs(Number(score?.deposits ?? 0) - Number(pd));
+  }
+  if (pw != null) {
+    total += Math.abs(Number(score?.withdrawals ?? 0) - Number(pw));
+  }
+  return total;
+}
+
+/**
  * @param {object} pdfParseResult
  * @param {Array<object>} transactions
  * @returns {object}
@@ -234,25 +256,21 @@ export function crossReferenceDualParse(pdfParseResult, plumberResult, options =
     dualEngine.depositDriftPct = Number((drift * 100).toFixed(4));
     dualEngine.agreement = drift <= DEPOSIT_AGREEMENT_TOLERANCE;
 
-    if (dualEngine.agreement) {
-      chosenEngine = 'pdf_parse';
-      dualEngine.chosenEngine = chosenEngine;
-      return { transactions: pdfTxns, chosenEngine, dualEngine, changed };
-    }
-
-    if (plumberScore.delta < pdfScore.delta) {
-      chosenEngine = 'pdfplumber';
-      dualEngine.chosenEngine = chosenEngine;
-      changed = true;
-      return { transactions: plumberTxns, chosenEngine, dualEngine, changed };
-    }
-
-    chosenEngine = 'pdf_parse';
+    // Stable tie-break: prefer coordinate/plumber provenance over text.
+    // Never select by highest transaction count.
+    chosenEngine = 'pdfplumber';
     dualEngine.chosenEngine = chosenEngine;
-    return { transactions: pdfTxns, chosenEngine, dualEngine, changed };
+    dualEngine.selectionRule = 'verified_tiebreak_plumber_preferred';
+    changed = true;
+    return { transactions: plumberTxns, chosenEngine, dualEngine, changed };
   }
 
   dualEngine.dualEngineBothFailed = true;
+
+  const pdfPickDelta = aggregatePrintedDelta(pdfScore, pdfRecon);
+  const plumberPickDelta = aggregatePrintedDelta(plumberScore, plumberRecon);
+  dualEngine.pdfAggregateDelta = pdfPickDelta;
+  dualEngine.plumberAggregateDelta = plumberPickDelta;
 
   if (pdfTxns.length === 0 && plumberTxns.length > 0) {
     chosenEngine = 'pdfplumber';
@@ -263,17 +281,18 @@ export function crossReferenceDualParse(pdfParseResult, plumberResult, options =
     return { transactions, chosenEngine, dualEngine, changed };
   }
 
-  if (plumberTxns.length > 0 && plumberScore.delta < pdfScore.delta) {
+  if (plumberTxns.length > 0 && plumberPickDelta < pdfPickDelta) {
     chosenEngine = 'pdfplumber';
     transactions = plumberTxns;
     changed = true;
     dualEngine.chosenEngine = chosenEngine;
-    dualEngine.fallbackLowerTierADelta = true;
+    dualEngine.fallbackLowerAggregateDelta = true;
     return { transactions, chosenEngine, dualEngine, changed };
   }
 
   chosenEngine = 'pdf_parse';
   dualEngine.chosenEngine = chosenEngine;
+  dualEngine.fallbackLowerAggregateDelta = pdfPickDelta <= plumberPickDelta;
   return { transactions: pdfTxns, chosenEngine, dualEngine, changed };
 }
 
@@ -308,8 +327,7 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
 
   const isRegions =
     pdfParseResult?.metadata?.extractionProfile === 'regions_business_checking' ||
-    pdfParseResult?.metadata?.profileId === 'regions_business_checking' ||
-    /regions/i.test(String(context.bankName || ''));
+    pdfParseResult?.metadata?.profileId === 'regions_business_checking';
 
   const isGeneric =
     pdfParseResult?.metadata?.extractionProfile === 'generic_digital' ||

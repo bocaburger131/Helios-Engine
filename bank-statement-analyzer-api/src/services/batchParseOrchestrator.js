@@ -21,6 +21,7 @@ import { buildParsingBleedAlert } from '../utils/amountSanityGuardrails.js';
 import { buildReconciliationMismatchAlert, processTemplateOutcome } from './templateGraduationService.js';
 import { ensureInstitutionalProfileForRtn } from './bankEnrichmentService.js';
 import { RTN_BANK_MAP } from '../config/bankIdentifiers.js';
+import { getProfileMeta } from './extraction/bankProfileRegistry.js';
 import { isDemoMode } from '../config/appMode.js';
 import logger from '../utils/logger.js';
 import { clearVisionLayoutCacheForRtn } from './visionLayoutCacheService.js';
@@ -33,6 +34,12 @@ import {
   learnAndPersistLayout
 } from './coldStartLayoutService.js';
 import { isDigitalPdfMode } from './extraction/extractionModeRouter.js';
+import {
+  isGeminiCircuitOpen,
+  withGeminiGuard,
+  tripGeminiCircuit,
+  isGeminiQuotaError
+} from './extraction/geminiCircuitBreaker.js';
 import {
   prepareLayoutForDigitalApply,
   extractTypeBTextFromBuffer,
@@ -50,6 +57,29 @@ import { applyDiagnosticCorrection } from '../utils/checksumAutoCorrection.js';
 /** Strict integrity gate — not overridable below 0.8 via env. */
 export const MACRO_CHECKSUM_MIN_OK_RATIO = 0.8;
 
+/**
+ * Drop per-statement PDF buffers once every buffer consumer (pdfplumber, OCR,
+ * layout teach, delta probe, diagnostic rescue) has run. Macro analysis only
+ * needs transactions; retaining buffers multiplies RAM by batch size.
+ * @param {Array<object>} parsedStatements
+ * @returns {number} bytes released
+ */
+export function releaseFileBuffers(parsedStatements = []) {
+  let releasedBytes = 0;
+  for (const stmt of parsedStatements) {
+    if (stmt?.fileBuffer) {
+      releasedBytes += stmt.fileBuffer.length || 0;
+      stmt.fileBuffer = null;
+    }
+  }
+  if (releasedBytes > 0) {
+    logger.info(
+      `[BATCH_ORCHESTRATOR] Released ${(releasedBytes / (1024 * 1024)).toFixed(1)} MB of statement PDF buffers`
+    );
+  }
+  return releasedBytes;
+}
+
 export function computeBatchChecksumStats(parsedStatements) {
   const total = parsedStatements.length;
   const okCount = parsedStatements.filter((s) => s.parseQuality === 'OK').length;
@@ -64,8 +94,6 @@ export function computeBatchChecksumStats(parsedStatements) {
 export function resolveBatchHttpStatus(parsedStatements) {
   return summarizeBatchParseOutcomes(parsedStatements);
 }
-
-const REGIONS_MS_RTN = '062001186';
 
 function batchGeminiEnabled() {
   if (!resolveLlmApiKey()) return false;
@@ -203,6 +231,51 @@ async function runDiagnosticRescue(stmt, ctx) {
     });
   }
 
+  // #region agent log
+  {
+    const txs = stmt.transactions || [];
+    const topOutflows = [...txs]
+      .filter((t) => Number(t?.amount) < 0)
+      .sort((a, b) => Math.abs(Number(b.amount)) - Math.abs(Number(a.amount)))
+      .slice(0, 6)
+      .map((t) => ({
+        amount: Number(t.amount),
+        section: t.section || t.sectionLabel || null,
+        desc: String(t.description || '').slice(0, 50),
+        source: t.extractionSource || null
+      }));
+    fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '05b151' },
+      body: JSON.stringify({
+        sessionId: '05b151',
+        runId: 'pre-fix',
+        hypothesisId: 'A,C,E',
+        location: 'batchParseOrchestrator.js:runDiagnosticRescue',
+        message: 'checksum mismatch entering diagnostic rescue',
+        data: {
+          fileName: stmt.fileName,
+          parseQuality: stmt.parseQuality,
+          profileId: stmt.parseResult?.metadata?.extractionProfile || stmt.extractionProfile || null,
+          txnCount: txs.length,
+          checksumOk: recon.ok ?? null,
+          depositsMatch: recon.depositsMatch ?? null,
+          withdrawalsMatch: recon.withdrawalsMatch ?? null,
+          parsedDeposits: recon.parsedDeposits ?? recon.deposits ?? null,
+          printedDeposits: recon.printedDeposits ?? null,
+          parsedWithdrawals: recon.parsedWithdrawals ?? recon.withdrawals ?? null,
+          printedWithdrawals: recon.printedWithdrawals ?? null,
+          opening: recon.opening ?? null,
+          closing: recon.closing ?? null,
+          computedClosing: recon.computedClosing ?? null,
+          topOutflows
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+  }
+  // #endregion
+
   // Programmatic pre-check: bypass AI entirely when mathematical anomaly or pageTelemetry proves COLUMN_FLIP
   const programmaticDiag = detectProgrammaticAnomalies(stmt);
   if (programmaticDiag) {
@@ -320,10 +393,17 @@ async function scanRtnFromPdfBuffer(fileBuffer, bankName = '') {
   return null;
 }
 
-function regionsRtnFallback(stmt, identitySources = {}) {
-  const bank = String(stmt.bankName || '').toLowerCase();
-  if (!bank.includes('regions')) return null;
-  return REGIONS_MS_RTN;
+/**
+ * Institution-level RTN fallback from the resolved extraction profile's metadata
+ * (some institutions never print a routing number on statements).
+ */
+function profileRtnFallback(stmt) {
+  const profileId =
+    stmt.parseResult?.metadata?.extractionProfile ??
+    stmt.parseResult?.metadata?.profileId ??
+    null;
+  if (!profileId) return null;
+  return getProfileMeta(profileId).fallbackRtn ?? null;
 }
 
 export async function resolveEffectiveRtn(firstStmt, identitySources) {
@@ -337,9 +417,9 @@ export async function resolveEffectiveRtn(firstStmt, identitySources) {
     }
     return rtn;
   }
-  rtn = regionsRtnFallback(firstStmt, identitySources);
+  rtn = profileRtnFallback(firstStmt);
   if (rtn) {
-    logger.info(`[BATCH_ORCHESTRATOR] Regions RTN fallback ${rtn} for ${firstStmt.fileName}`);
+    logger.info(`[BATCH_ORCHESTRATOR] profile RTN fallback ${rtn} for ${firstStmt.fileName}`);
     if (firstStmt.parseResult) {
       firstStmt.parseResult.rtn = rtn;
       if (firstStmt.parseResult.metadata) firstStmt.parseResult.metadata.rtn = rtn;
@@ -483,8 +563,9 @@ function profileTier1Reconciled(stmt) {
   );
 }
 
-function needsTemplateRescue(stmt) {
+export function needsTemplateRescue(stmt) {
   if (profileTier1Reconciled(stmt)) return false;
+  if (stmt.parseQuality !== 'OK' && stmt.checksumRecon?.ok === false) return true;
   return isLayoutMisaligned(stmt) || hasChecksumBleed(stmt);
 }
 
@@ -536,6 +617,12 @@ async function mergeParserResultIntoStatement(stmt, parseResult, identitySources
       : null);
   if (layoutDisc) {
     stmt.layoutDiscovery = layoutDisc;
+  }
+  if (parseResult.metadata?.profileReconciliation) {
+    stmt.parseResult.metadata = {
+      ...(stmt.parseResult.metadata || {}),
+      profileReconciliation: parseResult.metadata.profileReconciliation
+    };
   }
   applyParseQualityPipeline(stmt, identitySources);
   attachParseOutcomeFlags(stmt);
@@ -593,14 +680,14 @@ async function tryPdfPlumberRescue(stmt, ctx) {
   }
 
   const plumberResult = await extractTransactionsFromPdfBuffer(stmt.fileBuffer, {
-    bankName: stmt.bankName,
+    profileId: stmt.parseResult?.metadata?.extractionProfile ?? null,
     fileName: stmt.fileName,
     defaultYear,
-    rtn: effectiveRtn || stmt.parseResult?.metadata?.rtn || stmt.parseResult?.rtn,
-    layoutTemplate:
-      stmt.parseResult?.metadata?.layoutTemplate ??
-      stmt.parseResult?.metadata?.templateHintMeta?.mapping ??
-      null
+    layoutTemplate: isDemoMode()
+      ? null
+      : stmt.parseResult?.metadata?.layoutTemplate ??
+        stmt.parseResult?.metadata?.templateHintMeta?.mapping ??
+        null
   });
 
   if (!plumberResult.success || plumberResult.transactions.length === 0) {
@@ -611,24 +698,79 @@ async function tryPdfPlumberRescue(stmt, ctx) {
     return false;
   }
 
+  let rescueTransactions = plumberResult.transactions;
+  let rescueMetadata = {
+    ...(stmt.parseResult?.metadata || {}),
+    ...plumberResult.metadata,
+    usedPdfPlumber: true,
+    extractionEngine: 'pdfplumber',
+    templateCoordinateStatus: 'PLUMBER_RESCUED'
+  };
+
+  const profileId =
+    stmt.parseResult?.metadata?.extractionProfile ??
+    plumberResult.metadata?.extractionProfile ??
+    null;
+  const profileHooks = profileId ? getProfileMeta(profileId).recoveryHooks : null;
+  const aggregateMismatch = stmt.checksumDeltaProbe?.probeHint === 'AGGREGATE_MISMATCH';
+
+  if (profileHooks?.plumber && (aggregateMismatch || stmt.checksumRecon?.ok === false)) {
+    let rawText = stmt.parseResult?.rawText || plumberResult.metadata?.rawText || '';
+    if (!rawText && stmt.fileBuffer) {
+      try {
+        const data = await pdfParse(stmt.fileBuffer);
+        rawText = data?.text || '';
+      } catch {
+        rawText = '';
+      }
+    }
+    const stitcherPrinted = stmt.stitcher?.typeA?.printed ?? null;
+    const recovered = profileHooks.plumber({
+      plumberTransactions: plumberResult.transactions,
+      text: rawText,
+      defaultYear,
+      rtn: effectiveRtn,
+      accountNumber: stmt.accountNumber,
+      stitcherPrinted,
+      typeAText: rawText
+    });
+    if (
+      recovered?.transactions?.length &&
+      (recovered.checksumOk || recovered.reconciliation?.checksumRecon?.ok)
+    ) {
+      rescueTransactions = recovered.transactions;
+      if (recovered.meta) {
+        rescueMetadata = {
+          ...rescueMetadata,
+          extractionProfile: profileId,
+          profileReconciliation: {
+            ...recovered.meta,
+            checksumOk: recovered.checksumOk,
+            reconciliation: recovered.reconciliation
+          }
+        };
+      }
+      logger.info('[BATCH_ORCHESTRATOR] profile plumber recovery applied', {
+        fileName: stmt.fileName,
+        profileId,
+        txnCount: rescueTransactions.length,
+        checksumOk: recovered.checksumOk
+      });
+    }
+  }
+
   await mergeParserResultIntoStatement(
     stmt,
     {
       success: true,
-      transactions: plumberResult.transactions,
+      transactions: rescueTransactions,
       openingBalance: plumberResult.openingBalance ?? stmt.openingBalance,
       closingBalance: plumberResult.closingBalance ?? stmt.closingBalance,
       balances: {
         opening: plumberResult.openingBalance ?? stmt.openingBalance,
         closing: plumberResult.closingBalance ?? stmt.closingBalance
       },
-      metadata: {
-        ...(stmt.parseResult?.metadata || {}),
-        ...plumberResult.metadata,
-        usedPdfPlumber: true,
-        extractionEngine: 'pdfplumber',
-        templateCoordinateStatus: 'PLUMBER_RESCUED'
-      }
+      metadata: rescueMetadata
     },
     identitySources,
     { monotonic: false }
@@ -859,6 +1001,12 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
     return null;
   }
 
+  if (isGeminiCircuitOpen()) {
+    logger.warn('[BATCH_ORCHESTRATOR] Gemini circuit open — skip layout teach', { groupKey });
+    layoutByKey.set(groupKey, null);
+    return null;
+  }
+
   if (correlationId) {
     setBatchProgress(correlationId, {
       phase: 'template_learn',
@@ -868,7 +1016,8 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
     });
   }
 
-  try {
+  const docKey = `${groupKey}|${exemplar.fileName || 'exemplar'}`;
+  const guarded = await withGeminiGuard(docKey, async () => {
     if (effectiveRtn) {
       await clearVisionLayoutCacheForRtn(effectiveRtn);
     }
@@ -902,20 +1051,34 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
         rtn: effectiveRtn || undefined,
         bankName: exemplar.bankName,
         printedOpeningBalance: exemplar.openingBalance,
-        printedClosingBalance: exemplar.closingBalance,
-        digitalTextExcerpt
+        printedClosingBalance: exemplar.closingBalance
       });
       mapping = enrichMappingWithReconciliationSpec(coerceLayoutMapping(raw));
     }
-
-    layoutByKey.set(groupKey, mapping);
-    teachDoneByGroup.add(groupKey);
     return mapping;
-  } catch (e) {
-    logger.warn(`[BATCH_ORCHESTRATOR] Gemini layout failed key=${groupKey}: ${e.message}`);
+  });
+
+  if (!guarded.ok) {
+    if (guarded.skipped) {
+      logger.warn('[BATCH_ORCHESTRATOR] Gemini teach skipped', {
+        groupKey,
+        reason: guarded.reason
+      });
+    } else if (guarded.error) {
+      logger.warn(
+        `[BATCH_ORCHESTRATOR] Gemini layout failed key=${groupKey}: ${guarded.error.message || guarded.error}`
+      );
+      if (isGeminiQuotaError(guarded.error)) {
+        tripGeminiCircuit(guarded.error);
+      }
+    }
     layoutByKey.set(groupKey, null);
     return null;
   }
+
+  layoutByKey.set(groupKey, guarded.result);
+  teachDoneByGroup.add(groupKey);
+  return guarded.result;
 }
 
 async function tryVisionRowFallback(stmt, ctx) {
@@ -1230,6 +1393,19 @@ export async function runChecksumGateRecovery(parsedStatements, ctx = {}) {
   );
 
   for (const stmt of failing) {
+    if (stmt.parseQuality === 'OK') continue;
+    const effectiveRtn = await resolveEffectiveRtn(stmt, identitySources);
+    try {
+      await escalateMisalignedFile(stmt, {
+        ...groupCtx,
+        effectiveRtn
+      });
+    } catch (e) {
+      logger.warn(`[BATCH_ORCHESTRATOR] CHECKSUM_GATE escalation failed ${stmt.fileName}: ${e.message}`);
+    }
+  }
+
+  for (const stmt of failing) {
     const nowOk = stmt.parseQuality === 'OK';
     if (nowOk) recoveredCount += 1;
     perFile.push({
@@ -1274,10 +1450,12 @@ export async function runChecksumGateRecovery(parsedStatements, ctx = {}) {
 export default {
   enhanceBatchParsesWithTeacher,
   runChecksumGateRecovery,
+  releaseFileBuffers,
   computeBatchChecksumStats,
   processInstitutionalGroup,
   MACRO_CHECKSUM_MIN_OK_RATIO,
   batchUseVisionRowFallback,
   layoutGroupKey,
-  hasChecksumBleed
+  hasChecksumBleed,
+  needsTemplateRescue
 };

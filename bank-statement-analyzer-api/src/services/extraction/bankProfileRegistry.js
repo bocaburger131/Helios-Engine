@@ -18,15 +18,103 @@ import { getReconciliationSpec } from './reconciliationSpec.js';
 
 
 
+/**
+ * Declarative per-profile behavior flags. Shared orchestration code must key on
+ * these flags — never on profile IDs or bank names.
+ *
+ * - strictProfile: pipeline result only accepted at tier 1 with checksum OK
+ * - blockLegacyFallback: never fall through to the legacy line extractor
+ * - fullContextExtract: profile.extract receives the full pipeline ctx
+ * - recoveryEligible: document map recovery passes may run
+ * - retainProfileRowsOnFailure: keep profile rows instead of legacy extract when pipeline fails
+ * - reconciliationErrorName: error name thrown by the profile's reconciliation gate
+ * - recoveryHooks.nearMiss / recoveryHooks.plumber: profile-supplied recovery functions
+ * - plumberTxnKey: pipelineResult/error key carrying recovered plumber rows
+ * - plumberLayoutProfile: structural layout profile passed to the Python sidecar
+ * - sectionAnchorMode: legacy extractor section gating ('transaction_history_strict' | 'multi_table')
+ * - fastGeminiRecovery: optional Gemini row-extraction rescue config
+ * - exposeLegacyReconciliationField: emit metadata.wellsReconciliation (legacy consumers)
+ * - fallbackRtn: institution RTN assumed when the statement never prints one
+ */
 const PROFILE_META = Object.freeze({
 
-  [wellsInitiate.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(wellsInitiate.PROFILE_ID) },
+  [wellsInitiate.PROFILE_ID]: {
+    strictProfile: true,
+    blockLegacyFallback: true,
+    skipLegacyTextFallback: true,
+    profileVersion: '1',
+    effectiveFrom: '2024-01-01',
+    deprecatedAt: null,
+    reconciliationSpec: getReconciliationSpec(wellsInitiate.PROFILE_ID),
+    displayName: 'Wells',
+    logTag: 'WELLS_INITIATE',
+    reconciliationErrorName: 'WellsParseReconciliationError',
+    fullContextExtract: false,
+    recoveryEligible: true,
+    retainProfileRowsOnFailure: true,
+    exposeLegacyReconciliationField: true,
+    sectionAnchorMode: 'transaction_history_strict',
+    fastGeminiRecovery: {
+      enabledEnv: 'WELLS_INITIATE_FAST_GEMINI',
+      extractSummary: wellsInitiate.extractSummary
+    },
+    recoveryHooks: { nearMiss: wellsInitiate.tryRecoverWellsNearMiss },
+    plumberTxnKey: null,
+    plumberLayoutProfile: 'txn_history_dual_amount'
+  },
 
-  [chaseBusiness.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(chaseBusiness.PROFILE_ID) },
+  [chaseBusiness.PROFILE_ID]: {
+    strictProfile: true,
+    blockLegacyFallback: true,
+    skipLegacyTextFallback: true,
+    profileVersion: '1',
+    effectiveFrom: '2024-01-01',
+    deprecatedAt: null,
+    reconciliationSpec: getReconciliationSpec(chaseBusiness.PROFILE_ID),
+    displayName: 'Chase',
+    logTag: 'CHASE_BUSINESS',
+    reconciliationErrorName: 'ChaseParseReconciliationError',
+    fullContextExtract: true,
+    recoveryEligible: true,
+    recoveryHooks: { plumber: chaseBusiness.tryRecoverChaseFromPlumber },
+    plumberTxnKey: 'chasePlumberTransactions',
+    plumberLayoutProfile: 'section_typed_activity'
+  },
 
-  [regionsBusiness.PROFILE_ID]: { strictProfile: true, blockLegacyFallback: true, reconciliationSpec: getReconciliationSpec(regionsBusiness.PROFILE_ID) },
+  [regionsBusiness.PROFILE_ID]: {
+    strictProfile: true,
+    blockLegacyFallback: true,
+    skipLegacyTextFallback: true,
+    profileVersion: '1',
+    effectiveFrom: '2024-01-01',
+    deprecatedAt: null,
+    reconciliationSpec: getReconciliationSpec(regionsBusiness.PROFILE_ID),
+    displayName: 'Regions',
+    logTag: 'REGIONS_BUSINESS',
+    reconciliationErrorName: 'RegionsParseReconciliationError',
+    fullContextExtract: true,
+    recoveryEligible: true,
+    recoveryHooks: { plumber: regionsBusiness.tryRecoverRegionsFromPlumber },
+    plumberTxnKey: 'regionsPlumberTransactions',
+    plumberLayoutProfile: 'multi_table_sections',
+    // Regions statements never print an RTN; Mississippi charter routing number.
+    fallbackRtn: '062001186'
+  },
 
-  [genericDigital.PROFILE_ID]: { strictProfile: false, blockLegacyFallback: false, reconciliationSpec: getReconciliationSpec(genericDigital.PROFILE_ID) }
+  [genericDigital.PROFILE_ID]: {
+    strictProfile: false,
+    blockLegacyFallback: false,
+    skipLegacyTextFallback: false,
+    profileVersion: '1',
+    effectiveFrom: '2024-01-01',
+    deprecatedAt: null,
+    reconciliationSpec: getReconciliationSpec(genericDigital.PROFILE_ID),
+    displayName: 'Generic',
+    logTag: 'GENERIC_DIGITAL',
+    fullContextExtract: true,
+    recoveryEligible: true,
+    plumberLayoutProfile: 'generic'
+  }
 
 });
 
@@ -179,26 +267,6 @@ export function resolveProfile(input = {}) {
     bestScore = genericDigital.detect(text);
 
   }
-
-  const bankHint = String(input.bankName || '').toLowerCase();
-  const body = String(text || '');
-  const chaseAnchors =
-    /jpmorgan\s+chase/i.test(body) && /deposits?\s+and\s+additions?/i.test(body);
-  if (
-    chaseAnchors &&
-    (bankHint.includes('chase') || bankHint.includes('jpmorgan'))
-  ) {
-    const chaseProfile = PROFILES.find((p) => p.id === chaseBusiness.PROFILE_ID);
-    if (chaseProfile) {
-      const boosted = Math.max(bestScore, 0.87);
-      if (boosted > bestScore || best.id !== chaseBusiness.PROFILE_ID) {
-        best = chaseProfile;
-        bestScore = boosted;
-      }
-    }
-  }
-
-
 
   logger.info('[EXTRACTION_PROFILE]', {
 

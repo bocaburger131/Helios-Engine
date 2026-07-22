@@ -50,20 +50,46 @@ export function shouldReuseLayoutWithoutGemini(mapping, typeBText) {
 }
 
 /**
- * Attach fingerprint to mapping for Mongo persistence.
+ * Attach fingerprint + version metadata to mapping for Mongo persistence.
+ * Layout changes must create a new profileVersion — do not mutate in place.
  * @param {object} mapping
+ * @param {{ profileVersion?: string, effectiveFrom?: string|Date, deprecatedAt?: string|Date|null }} [version]
  * @returns {object}
  */
-export function withLayoutFingerprint(mapping) {
+export function withLayoutFingerprint(mapping, version = {}) {
+  if (!mapping || typeof mapping !== 'object') return mapping;
+  const effectiveFrom =
+    version.effectiveFrom || mapping.effectiveFrom || new Date().toISOString();
+  const profileVersion =
+    version.profileVersion ||
+    mapping.profileVersion ||
+    `v1-${buildLayoutFingerprint(mapping).slice(0, 24) || 'empty'}`;
+  return {
+    ...mapping,
+    layoutFingerprint: buildLayoutFingerprint(mapping),
+    profileVersion,
+    effectiveFrom:
+      effectiveFrom instanceof Date ? effectiveFrom.toISOString() : effectiveFrom,
+    deprecatedAt: version.deprecatedAt ?? mapping.deprecatedAt ?? null
+  };
+}
+
+/**
+ * Mark a layout variant deprecated when superseded by a new fingerprint.
+ * @param {object} mapping
+ * @param {string|Date} [at]
+ */
+export function deprecateLayoutVariant(mapping, at = new Date()) {
   if (!mapping || typeof mapping !== 'object') return mapping;
   return {
     ...mapping,
-    layoutFingerprint: buildLayoutFingerprint(mapping)
+    deprecatedAt: at instanceof Date ? at.toISOString() : at
   };
 }
 
 export default {
   buildLayoutFingerprint,
   shouldReuseLayoutWithoutGemini,
-  withLayoutFingerprint
+  withLayoutFingerprint,
+  deprecateLayoutVariant
 };

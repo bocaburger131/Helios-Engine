@@ -23,16 +23,11 @@ import {
   dualEngineParseEnabled,
   applyDualEngineToParseResult
 } from './extraction/dualEnginePdfParse.js';
-import { resolveProfile } from './extraction/bankProfileRegistry.js';
+import { classifyDocument } from './extraction/documentClassifier.js';
+import { resolveProfile, getProfileMeta } from './extraction/bankProfileRegistry.js';
 import { runStatementExtractionPipeline } from './extraction/statementExtractionPipeline.js';
 import { reconcileStatement } from './extraction/statementReconciliation.js';
-import { tryRecoverChaseFromPlumber } from './extraction/profiles/chaseBusinessCompleteProfile.js';
-import { tryRecoverRegionsFromPlumber } from './extraction/profiles/regionsBusinessCheckingProfile.js';
-import {
-  extractSummary,
-  normalizeSpaces,
-  tryRecoverWellsNearMiss
-} from './extraction/profiles/wellsFargoInitiateProfile.js';
+import { normalizeSpaces } from './extraction/profiles/wellsFargoInitiateProfile.js';
 import {
   extractTransactionRows,
   rowFallbackEnabled
@@ -51,12 +46,18 @@ import {
   logToxicFallbackBlocked
 } from './extraction/layoutPipeline/toxicFallbackGuard.js';
 
-function wellsFastGeminiEnabled() {
-  const v = process.env.WELLS_INITIATE_FAST_GEMINI;
+/**
+ * Profile-driven fast Gemini row-extraction rescue gate.
+ * @param {{ fastGeminiRecovery?: { enabledEnv?: string } }} profileMeta
+ */
+function profileFastGeminiEnabled(profileMeta) {
+  const cfg = profileMeta?.fastGeminiRecovery;
+  if (!cfg) return false;
+  const v = cfg.enabledEnv ? process.env[cfg.enabledEnv] : undefined;
   if (v === 'false' || v === '0') return false;
   // Diagnostic AI Rescue replaces brute-force row extraction. While it is active
-  // (default), skip the legacy Wells fast-Gemini row-extraction call site so we
-  // never brute-force extract on a checksum miss. Opt back in explicitly via
+  // (default), skip the fast-Gemini row-extraction call site so we never
+  // brute-force extract on a checksum miss. Opt back in explicitly via
   // AI_DIAGNOSTIC_RESCUE_ENABLED=false.
   const diag = process.env.AI_DIAGNOSTIC_RESCUE_ENABLED;
   if (!(diag === 'false' || diag === '0')) return false;
@@ -82,13 +83,13 @@ const RE_DEBIT_LINE_HINT =
 
 /** Strong credit tokens; skipped when debit hint matches (debit wins). */
 const RE_CREDIT_LINE_HINT =
-  /\b(DIRECT\s*DEP|WIRE\s+IN|ACH\s*CREDIT|DEPOSIT\s+FROM|MOBILE\s+DEP|PAYROLL|REFUND|INTEREST\s+PAID|CREDIT\s+VIA|PYMT\s+PROC|SHIFT4\s+PYMT|TRANSFER\s+FROM|MERCHANT\s+DEP|DEPOSITED|INCOMING\s+WIRE)\b/i;
+  /\b(DIRECT\s*DEP|WIRE\s+IN|ACH\s*CREDIT|DEPOSIT\s+FROM|MOBILE\s+DEP|PAYROLL|REFUND|INTEREST\s+PAID|CREDIT\s+VIA|PYMT\s+PROC|SHIFT4\s+PYMT|TRANSFER\s+FROM|ADVANCE\s+FROM|MERCHANT\s+DEP|DEPOSITED|INCOMING\s+WIRE)\b/i;
 
 /** Summary / rollup rows that look like dated transactions but are period totals. */
 const RE_SUMMARY_TOTAL_ROW =
   /\b(deposits?\s*(?:\/|and)\s*credits?|withdrawals?\s*(?:\/|and)\s*debits?|total\s+(?:deposits?|credits?|withdrawals?|debits?|electronic|checks?|fees?|service)|subtotal|daily\s+balance\s+summary)\b/i;
 
-/** Regions / multi-table: each header re-opens parsing (do not permanently close). */
+/** Multi-table statements: each subsection header re-opens parsing (do not permanently close). */
 const RE_TXN_SECTION_START =
   /transaction\s+history|(?:credits?\s+and\s+debits?|debits?\s+and\s+credits?)\s*(?:\(continued\))?|electronic\s+deposits?(?:\s*[-/]\s*additions)?|electronic\s+credits?|electronic\s+withdrawals?|checks?\s*(?:paid|cleared)|check\s+card|bank\s+fees?|service\s+charges?|deposits?\s+and\s+(?:additions?|(?:other\s+)?credits?)|withdrawals?\s+and\s+(?:other\s+)?debits?|atm\s+(?:&|and)\s+debit|pos\s+debits?/i;
 
@@ -96,9 +97,46 @@ const RE_TXN_SECTION_START =
 const RE_TXN_SUBSECTION_TOTAL =
   /^\s*total\s+(?:checks?|fees?|withdrawals?|deposits?|credits?|debits?|electronic|service)\b/i;
 
-/** Wells Fargo: close activity parsing after transaction history block. */
-const RE_WELLS_TXN_SECTION_END =
-  /^(?:daily balance summary|interest summary|summary of account|account summary)\b/i;
+/** Footer anchors that close activity parsing after the transaction block. */
+const RE_TXN_SECTION_END_ANCHOR =
+  /^(?:daily balance summary|daily ledger balances?|interest summary|summary of account|account summary)\b/i;
+
+/** Compact check-register rows where date+check#+amount fuse per entry, two entries per physical line: "06/02/231649-2,000.0006/05/2350346-278.01". */
+const RE_COMPACT_CHECK_ENTRY = /(\d{2}\/\d{2}\/\d{2})(\d{3,6})(\*?)(-[\d,]+\.\d{2})/g;
+
+/** Structural fusion: a 10-digit "Confirmation#" number runs directly into the money
+ * amount with no separator. Splitting is shape-validated (digits then a well-formed
+ * amount), so it is safe to apply to any statement. */
+const RE_MERGED_CONFIRMATION_AMOUNT =
+  /(Confirmation#\s*)(\d{10})(?=\d{1,3}(?:,\d{3})*\.\d{2}(?!\d))/gi;
+
+/**
+ * Expand multi-entry check lines into one parseable line per check and split
+ * confirmation numbers that ran into the amount. No-op for normal lines.
+ * @param {string[]} lines
+ * @returns {string[]}
+ */
+export function expandCompactStatementLines(lines) {
+  const out = [];
+  for (const rawLine of lines) {
+    const line = String(rawLine ?? '').replace(RE_MERGED_CONFIRMATION_AMOUNT, '$1$2 ');
+    RE_COMPACT_CHECK_ENTRY.lastIndex = 0;
+    const matches = [...line.trim().matchAll(RE_COMPACT_CHECK_ENTRY)];
+    if (matches.length === 0) {
+      out.push(line);
+      continue;
+    }
+    const residue = line.trim().replace(RE_COMPACT_CHECK_ENTRY, '').replace(/\s+/g, '');
+    if (residue.length > 2) {
+      out.push(line);
+      continue;
+    }
+    for (const m of matches) {
+      out.push(`${m[1]} Check #${m[2]} ${m[4]}`);
+    }
+  }
+  return out;
+}
 
 /**
  * @param {string} line
@@ -278,15 +316,48 @@ export class PDFParserService {
     logger.info(`[PDF_PARSER] Starting parseStatement for bankType: ${resolvedBankType}`);
 
     try {
+      // Phase 0 preflight — cheap classify before extractors (encrypted/corrupt short-circuit).
+      let documentClassification = null;
+      try {
+        documentClassification = await classifyDocument({
+          buffer,
+          fileName: options?.fileName || options?.originalname || '',
+          mimetype: options?.mimetype || 'application/pdf'
+        });
+        if (
+          documentClassification.terminalStatus === 'NEEDS_REUPLOAD' ||
+          documentClassification.terminalStatus === 'CORRUPT_PDF'
+        ) {
+          const err = new PDFParseError(
+            `Document preflight: ${documentClassification.documentClass} (${documentClassification.reason})`
+          );
+          err.documentClassification = documentClassification;
+          err.terminalStatus = documentClassification.terminalStatus;
+          throw err;
+        }
+      } catch (preErr) {
+        if (preErr?.terminalStatus) throw preErr;
+        logger.warn('[PDF_PARSER] classifyDocument soft-fail', {
+          error: preErr?.message || String(preErr)
+        });
+      }
+
       if (resolvedBankType === 'TFS') {
         logger.info('[PDF_PARSER] Using TFS parser (pdf2json)');
-        return await this._parseTfsWithPdf2Json(buffer, options);
+        const tfsResult = await this._parseTfsWithPdf2Json(buffer, options);
+        if (tfsResult?.metadata && documentClassification) {
+          tfsResult.metadata.documentClass = documentClassification.documentClass;
+          tfsResult.metadata.documentClassification = documentClassification;
+        }
+        return tfsResult;
       }
 
       // Default parsing logic for other bank types
       logger.info('[PDF_PARSER] Using default parser (pdf-parse)');
       const data = await pdfParse(buffer);
       logger.info('[PDF_PARSER] pdf-parse completed. Extracting data.');
+      // Stash classification for metadata stamp later in this parse path.
+      options._documentClassification = documentClassification;
 
       const anchorPayload = this._resolveAnchorOptions(options);
 
@@ -392,9 +463,8 @@ export class PDFParserService {
 
       const plumberOptions = {
         fileName: options?.fileName,
-        bankName: bankNameFromTriage || accountInfo.bankName || options?.bankName,
+        profileId: profile.id,
         defaultYear,
-        rtn: waterfallResult.rtn ?? null,
         layoutTemplate: options?.layoutTemplate ?? null
       };
       let plumberResult = null;
@@ -487,7 +557,7 @@ export class PDFParserService {
           typeAText: stitcher.typeA?.text ?? null
         });
         transactions = pipelineResult.transactions || [];
-        if (profile.id === 'wells_initiate_checking' || profile.id === 'chase_business_complete') {
+        if (getProfileMeta(profile.id).strictProfile) {
           wellsReconciliation = pipelineResult.reconciliation ?? null;
         }
         if (pipelineResult.meta?.openingBalance != null) {
@@ -511,13 +581,8 @@ export class PDFParserService {
         if (pipelineResult.stitcher) {
           Object.assign(stitcher, pipelineResult.stitcher);
         }
-        const strictProfileIds = new Set([
-          'wells_initiate_checking',
-          'chase_business_complete',
-          'regions_business_checking'
-        ]);
         const profileAccepted =
-          !strictProfileIds.has(profile.id) ||
+          !getProfileMeta(profile.id).strictProfile ||
           (pipelineResult.extractionTier === 1 &&
             pipelineResult.reconciliation?.checksumOk === true);
 
@@ -537,79 +602,62 @@ export class PDFParserService {
           extractionTier: pipelineResult.extractionTier
         });
       } catch (pipelineErr) {
+        const profileMeta = getProfileMeta(profile.id);
+
         if (
-          profile.id === 'wells_initiate_checking' &&
-          pipelineErr?.name === 'WellsParseReconciliationError'
+          profileMeta.reconciliationErrorName &&
+          pipelineErr?.name === profileMeta.reconciliationErrorName
         ) {
           wellsReconciliation = pipelineErr.reconciliation ?? null;
-          const wellsPartial = pipelineErr.partial ?? null;
-          logger.warn('[WELLS_INITIATE] rejected — reconciliation failed', {
+          logger.warn(`[${profileMeta.logTag}] rejected — reconciliation failed`, {
             parsedDeposits: wellsReconciliation?.parsedDeposits,
             printedDeposits: wellsReconciliation?.printedDeposits,
             parsedWithdrawals: wellsReconciliation?.parsedWithdrawals,
             printedWithdrawals: wellsReconciliation?.printedWithdrawals
           });
 
-          const recovered = tryRecoverWellsNearMiss({
-            reconciliation: wellsReconciliation,
-            meta: wellsPartial?.meta,
-            transactions: wellsPartial?.transactions,
-            normalizedTransactions: wellsPartial?.normalizedTransactions
-          });
-
-          if (recovered?.transactions?.length) {
-            transactions = recovered.transactions;
-            wellsReconciliation = recovered.reconciliation;
-            pipelineResult = {
-              profileId: profile.id,
-              extractionTier: recovered.checksumOk ? 1 : 2,
-              reconciliation: recovered.reconciliation,
-              dailyBalanceRule: { valid: true, violations: 0 },
-              meta: { ...(recovered.meta || {}), extractionProfile: profile.id },
-              normalizedTransactions: recovered.normalizedTransactions
-            };
-            if (recovered.meta?.openingBalance != null) {
-              balances.opening = recovered.meta.openingBalance;
-            }
-            if (recovered.meta?.closingBalance != null) {
-              balances.closing = recovered.meta.closingBalance;
-            }
-            logger.info('[PDF_PARSER] Wells near-miss recovery — using profile extract', {
-              txnCount: transactions.length,
-              checksumOk: recovered.checksumOk,
-              nearMiss: recovered.nearMiss,
-              beatsLegacy: recovered.beatsLegacy
+          if (profileMeta.recoveryHooks?.nearMiss) {
+            const partial = pipelineErr.partial ?? null;
+            const recovered = profileMeta.recoveryHooks.nearMiss({
+              reconciliation: wellsReconciliation,
+              meta: partial?.meta,
+              transactions: partial?.transactions,
+              normalizedTransactions: partial?.normalizedTransactions
             });
+
+            if (recovered?.transactions?.length) {
+              transactions = recovered.transactions;
+              wellsReconciliation = recovered.reconciliation;
+              pipelineResult = {
+                profileId: profile.id,
+                extractionTier: recovered.checksumOk ? 1 : 2,
+                reconciliation: recovered.reconciliation,
+                dailyBalanceRule: { valid: true, violations: 0 },
+                meta: { ...(recovered.meta || {}), extractionProfile: profile.id },
+                normalizedTransactions: recovered.normalizedTransactions
+              };
+              if (recovered.meta?.openingBalance != null) {
+                balances.opening = recovered.meta.openingBalance;
+              }
+              if (recovered.meta?.closingBalance != null) {
+                balances.closing = recovered.meta.closingBalance;
+              }
+              logger.info(
+                `[PDF_PARSER] ${profileMeta.displayName} near-miss recovery — using profile extract`,
+                {
+                  txnCount: transactions.length,
+                  checksumOk: recovered.checksumOk,
+                  nearMiss: recovered.nearMiss,
+                  beatsLegacy: recovered.beatsLegacy
+                }
+              );
+            }
           }
         }
-        if (
-          profile.id === 'chase_business_complete' &&
-          pipelineErr?.name === 'ChaseParseReconciliationError'
-        ) {
-          wellsReconciliation = pipelineErr.reconciliation ?? null;
-          logger.warn('[CHASE_BUSINESS] rejected — reconciliation failed', {
-            parsedDeposits: wellsReconciliation?.parsedDeposits,
-            printedDeposits: wellsReconciliation?.printedDeposits,
-            parsedWithdrawals: wellsReconciliation?.parsedWithdrawals,
-            printedWithdrawals: wellsReconciliation?.printedWithdrawals
-          });
-        }
-        if (
-          profile.id === 'regions_business_checking' &&
-          pipelineErr?.name === 'RegionsParseReconciliationError'
-        ) {
-          wellsReconciliation = pipelineErr.reconciliation ?? null;
-          logger.warn('[REGIONS_BUSINESS] rejected — reconciliation failed', {
-            parsedDeposits: wellsReconciliation?.parsedDeposits,
-            printedDeposits: wellsReconciliation?.printedDeposits,
-            parsedWithdrawals: wellsReconciliation?.parsedWithdrawals,
-            printedWithdrawals: wellsReconciliation?.printedWithdrawals
-          });
-        }
 
-        if (profile.id === 'wells_initiate_checking' && wellsFastGeminiEnabled()) {
+        if (profileFastGeminiEnabled(profileMeta)) {
           try {
-            logger.info('[PDF_PARSER] Wells fast Gemini row extraction', {
+            logger.info(`[PDF_PARSER] ${profileMeta.displayName} fast Gemini row extraction`, {
               fileName: options?.fileName,
               priorError: pipelineErr.message
             });
@@ -621,7 +669,9 @@ export class PDFParserService {
               defaultYear,
               fileName: options?.fileName
             });
-            const summary = extractSummary(normalizeSpaces(data.text));
+            const summary = profileMeta.fastGeminiRecovery.extractSummary(
+              normalizeSpaces(data.text)
+            );
             const meta = summary
               ? {
                   openingBalance: summary.openingBalance,
@@ -643,28 +693,34 @@ export class PDFParserService {
                 dailyBalanceRule: { valid: true, violations: 0 },
                 meta: { ...meta, extractionProfile: profile.id }
               };
-              logger.info('[PDF_PARSER] Wells fast Gemini accepted', {
+              logger.info(`[PDF_PARSER] ${profileMeta.displayName} fast Gemini accepted`, {
                 txnCount: transactions.length,
                 checksumOk: true
               });
             } else {
-              logger.warn('[PDF_PARSER] Wells fast Gemini checksum failed — legacy extract', {
-                parsedDeposits: reconciliation.parsedDeposits,
-                printedDeposits: reconciliation.printedDeposits
-              });
+              logger.warn(
+                `[PDF_PARSER] ${profileMeta.displayName} fast Gemini checksum failed — legacy extract`,
+                {
+                  parsedDeposits: reconciliation.parsedDeposits,
+                  printedDeposits: reconciliation.printedDeposits
+                }
+              );
             }
           } catch (geminiErr) {
-            logger.warn('[PDF_PARSER] Wells fast Gemini failed', { error: geminiErr.message });
+            logger.warn(`[PDF_PARSER] ${profileMeta.displayName} fast Gemini failed`, {
+              error: geminiErr.message
+            });
           }
         }
 
         if (pipelineResult?.extractionTier !== 1) {
-          if (profile.id === 'chase_business_complete') {
+          if (profileMeta.recoveryHooks?.plumber) {
+            const plumberTxnKey = profileMeta.plumberTxnKey;
             const plumberRaw =
               plumberResult?.transactions ??
-              pipelineErr?.chasePlumberTransactions ??
+              (plumberTxnKey ? pipelineErr?.[plumberTxnKey] : null) ??
               plumberTransactions;
-            const recovered = tryRecoverChaseFromPlumber({
+            const recovered = profileMeta.recoveryHooks.plumber({
               plumberTransactions: plumberRaw,
               text: data.text,
               defaultYear,
@@ -685,7 +741,7 @@ export class PDFParserService {
                 reconciliation: recovered.reconciliation,
                 dailyBalanceRule: { valid: true, violations: 0 },
                 meta: { ...recovered.meta, extractionProfile: profile.id },
-                chasePlumberTransactions: recovered.transactions
+                ...(plumberTxnKey ? { [plumberTxnKey]: recovered.transactions } : {})
               };
               if (recovered.meta.openingBalance != null) {
                 balances.opening = recovered.meta.openingBalance;
@@ -694,84 +750,42 @@ export class PDFParserService {
                 balances.closing = recovered.meta.closingBalance;
               }
               if (recovered.checksumOk) {
-                logger.info('[PDF_PARSER] Chase pdfplumber recovery accepted', {
-                  txnCount: transactions.length,
-                  checksumOk: true
-                });
+                logger.info(
+                  `[PDF_PARSER] ${profileMeta.displayName} pdfplumber recovery accepted`,
+                  {
+                    txnCount: transactions.length,
+                    checksumOk: true
+                  }
+                );
               } else {
-                logger.warn('[PDF_PARSER] Chase pdfplumber best-effort (checksum failed)', {
-                  txnCount: transactions.length,
-                  checksumOk: false,
-                  plumberTxnCount: plumberRaw?.length ?? 0
-                });
+                logger.warn(
+                  `[PDF_PARSER] ${profileMeta.displayName} pdfplumber best-effort (checksum failed)`,
+                  {
+                    txnCount: transactions.length,
+                    checksumOk: false,
+                    plumberTxnCount: plumberRaw?.length ?? 0
+                  }
+                );
               }
             } else {
               transactions = [];
-              logger.warn('[PDF_PARSER] Chase profile failed — no usable plumber rows', {
-                error: pipelineErr.message,
-                checksumOk: recovered?.reconciliation?.checksumOk ?? false,
-                plumberTxnCount: plumberRaw?.length ?? 0
-              });
-            }
-          } else if (profile.id === 'regions_business_checking') {
-            const plumberRaw =
-              plumberResult?.transactions ??
-              pipelineErr?.regionsPlumberTransactions ??
-              plumberTransactions;
-            const recovered = tryRecoverRegionsFromPlumber({
-              plumberTransactions: plumberRaw,
-              text: data.text,
-              defaultYear,
-              rtn: waterfallResult.rtn ?? null,
-              accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
-              stitcherPrinted: mergePrintedTotals(
-                stitcher.typeA?.printed ?? null,
-                stitcher.typeA?.text || data.text
-              ),
-              typeAText: stitcher.typeA?.text ?? null
-            });
-            if (recovered?.transactions?.length) {
-              transactions = recovered.transactions;
-              wellsReconciliation = recovered.reconciliation;
-              pipelineResult = {
-                profileId: profile.id,
-                extractionTier: recovered.checksumOk ? 1 : 2,
-                reconciliation: recovered.reconciliation,
-                dailyBalanceRule: { valid: true, violations: 0 },
-                meta: { ...recovered.meta, extractionProfile: profile.id },
-                regionsPlumberTransactions: recovered.transactions
-              };
-              if (recovered.meta.openingBalance != null) {
-                balances.opening = recovered.meta.openingBalance;
-              }
-              if (recovered.meta.closingBalance != null) {
-                balances.closing = recovered.meta.closingBalance;
-              }
-              if (recovered.checksumOk) {
-                logger.info('[PDF_PARSER] Regions pdfplumber recovery accepted', {
-                  txnCount: transactions.length,
-                  checksumOk: true
-                });
-              } else {
-                logger.warn('[PDF_PARSER] Regions pdfplumber best-effort (checksum failed)', {
-                  txnCount: transactions.length,
-                  checksumOk: false,
+              logger.warn(
+                `[PDF_PARSER] ${profileMeta.displayName} profile failed — no usable plumber rows`,
+                {
+                  error: pipelineErr.message,
+                  checksumOk: recovered?.reconciliation?.checksumOk ?? false,
                   plumberTxnCount: plumberRaw?.length ?? 0
-                });
-              }
-            } else {
-              transactions = [];
-              logger.warn('[PDF_PARSER] Regions profile failed — no usable plumber rows', {
-                error: pipelineErr.message,
-                checksumOk: recovered?.reconciliation?.checksumOk ?? false,
-                plumberTxnCount: plumberRaw?.length ?? 0
-              });
+                }
+              );
             }
-          } else if (profile.id === 'wells_initiate_checking' && transactions.length > 0) {
-            logger.info('[PDF_PARSER] Wells profile extract retained — skipping legacy extract', {
-              txnCount: transactions.length,
-              checksumOk: pipelineResult?.reconciliation?.checksumOk ?? false
-            });
+          } else if (profileMeta.retainProfileRowsOnFailure && transactions.length > 0) {
+            logger.info(
+              `[PDF_PARSER] ${profileMeta.displayName} profile extract retained — skipping legacy extract`,
+              {
+                txnCount: transactions.length,
+                checksumOk: pipelineResult?.reconciliation?.checksumOk ?? false
+              }
+            );
           } else if (
             shouldBlockLegacyExtract({
               profileId: profile.id,
@@ -807,7 +821,8 @@ export class PDFParserService {
                 layoutTemplate: options.layoutTemplate,
                 layoutAnchorsOnly: Boolean(options.layoutTemplate?.layoutAnchorsOnly),
                 stitcher,
-                bodyText
+                bodyText,
+                sectionAnchorMode: getProfileMeta(profile.id).sectionAnchorMode
               }
             );
             if (stitcher.typeA.printed.opening != null) balances.opening = stitcher.typeA.printed.opening;
@@ -912,6 +927,10 @@ export class PDFParserService {
           identityMethod,
           rtn: waterfallResult.rtn ?? null,
           fdicCert: waterfallResult.fdicCert ?? null,
+          documentClass: options._documentClassification?.documentClass ?? null,
+          documentClassification: options._documentClassification ?? null,
+          allowedEngines: options._documentClassification?.engines ?? null,
+          profileVersion: getProfileMeta(profile.id).profileVersion ?? null,
           usedLayoutTemplate: Boolean(resolvedLayoutTemplate),
           templateUsedAsHint: Boolean(templateHintMeta?.templateUsedAsHint),
           templateVersion: templateHintMeta?.templateVersion ?? null,
@@ -927,7 +946,7 @@ export class PDFParserService {
           profileReconciliation:
             pipelineResult?.reconciliation ?? wellsReconciliation ?? null,
           wellsReconciliation:
-            profile.id === 'wells_initiate_checking'
+            getProfileMeta(profile.id).exposeLegacyReconciliationField
               ? pipelineResult?.reconciliation ?? wellsReconciliation
               : undefined,
           extractionTier: pipelineResult?.extractionTier ?? null,
@@ -939,7 +958,9 @@ export class PDFParserService {
           layoutPipelineIdentityMap: layoutPipelineResult?.identityMap ?? null,
           plumberTxnCount:
             plumberTransactions?.length ??
-            pipelineResult?.chasePlumberTransactions?.length ??
+            (getProfileMeta(profile.id).plumberTxnKey
+              ? pipelineResult?.[getProfileMeta(profile.id).plumberTxnKey]?.length
+              : null) ??
             0,
         },
         rtn: waterfallResult.rtn ?? null,
@@ -1320,7 +1341,7 @@ export class PDFParserService {
           }
 
               if (openingBalance === null) {
-                // Opening balance — Chase uses "Beginning Balance", others use "Opening/Previous Balance"
+                // Opening balance — matches "Beginning Balance", "Opening Balance", or "Previous Balance"
                 const openingBalancePattern = /(?:Beginning Balance|Opening Balance|Previous Balance)[\s\S]{0,50}?(?:^|\s)\$?\s*((?:\d{1,3}(?:,\d{3})*|\d+)\.\d{2})(?!\d)/im;
                 const openingBalanceMatch = rawText.match(openingBalancePattern);
                 if (openingBalanceMatch) {
@@ -1375,7 +1396,7 @@ export class PDFParserService {
   }
 
   /**
-   * Slice and concatenate all transaction regions (Regions multi-table layouts).
+   * Slice and concatenate all transaction regions (multi-table subsection layouts).
    * @param {string} fullText
    * @param {object} layoutTemplate
    * @returns {string}
@@ -1534,7 +1555,16 @@ export class PDFParserService {
 
       const stitcher = context.stitcher ?? stitchStatement(rawText);
       context.stitcher = stitcher;
-      const isWells = /initiate business checking|wells fargo/i.test(rawText);
+      // Section gating is a structural property supplied by profile meta or a layout
+      // template — never inferred from bank branding in the text.
+      // 'transaction_history_strict': only a "Transaction history" header opens the
+      // section, and parsing waits for the period-summary end anchor.
+      // 'multi_table' (default): any recognized subsection header re-opens parsing.
+      const sectionAnchorMode =
+        context.sectionAnchorMode ??
+        context.layoutTemplate?.sectionAnchorMode ??
+        'multi_table';
+      const strictHistoryGate = sectionAnchorMode === 'transaction_history_strict';
       const typeBOnly =
         stitcher.typeB.combinedText?.trim().length > 0 &&
         stitcher.typeB.combinedText.trim() !== String(rawText || '').trim();
@@ -1568,18 +1598,19 @@ export class PDFParserService {
 
       const effectiveParser = parser || this.bankParsers.get('DEFAULT');
       const defaultYear = context.defaultYear ?? this._detectStatementYear(rawText);
-      const lines = gridText.split(/\r?\n/);
+      const lines = expandCompactStatementLines(gridText.split(/\r?\n/));
       const transactions = [];
       const genericTypeBLedger =
-        !isWells &&
+        !strictHistoryGate &&
         !RE_TRANSACTION_HISTORY.test(gridText) &&
         /\d{1,2}\/\d{1,2}/.test(gridText);
       let lastTransaction = null;
       let inTxnSection = genericTypeBLedger;
-      let pastSummaryAnchor = !isWells || stitcher.anchors.summaryEndSeen || typeBOnly;
+      let pastSummaryAnchor =
+        !strictHistoryGate || stitcher.anchors.summaryEndSeen || typeBOnly;
 
       const opensTxnSection = (line) => {
-        if (isWells) return RE_TRANSACTION_HISTORY.test(String(line || '').trim());
+        if (strictHistoryGate) return RE_TRANSACTION_HISTORY.test(String(line || '').trim());
         return isTransactionSectionHeader(line);
       };
 
@@ -1591,19 +1622,19 @@ export class PDFParserService {
           continue;
         }
 
-        if (isWells && RE_PERIOD_SUMMARY_END_ANCHOR.test(line)) {
+        if (strictHistoryGate && RE_PERIOD_SUMMARY_END_ANCHOR.test(line)) {
           pastSummaryAnchor = true;
           lastTransaction = null;
           continue;
         }
 
         if (opensTxnSection(line)) {
-          if (!pastSummaryAnchor && isWells) continue;
+          if (!pastSummaryAnchor && strictHistoryGate) continue;
           inTxnSection = true;
           lastTransaction = null;
           continue;
         }
-        if (inTxnSection && RE_WELLS_TXN_SECTION_END.test(line)) {
+        if (inTxnSection && RE_TXN_SECTION_END_ANCHOR.test(line)) {
           inTxnSection = false;
           lastTransaction = null;
           continue;
@@ -1612,7 +1643,7 @@ export class PDFParserService {
           lastTransaction = null;
           continue;
         }
-        if (!inTxnSection || (isWells && !pastSummaryAnchor)) {
+        if (!inTxnSection || (strictHistoryGate && !pastSummaryAnchor)) {
           continue;
         }
 
@@ -1701,7 +1732,7 @@ export class PDFParserService {
   }
 
   /**
-   * Wells Fargo / multi-line rows: amount on the next line without a date.
+   * Multi-line rows: amount on the next line without a date.
    * @param {string} line
    * @param {object|null} pendingTxn
    * @returns {{ amount: number, type: string }|null}
@@ -1709,13 +1740,21 @@ export class PDFParserService {
   static _parseOrphanAmountLine(line, pendingTxn = null) {
     const trimmed = String(line || '').trim();
     if (!trimmed || /^\d{1,2}[-/]\d{1,2}/.test(trimmed)) return null;
-    const matches = trimmed.match(/\(?-?\$?\s*[\d,]+\.\d{2}\)?/g);
+    // (?![\d.]) rejects phone-style tokens like "1.888.BUSINESS" masquerading as amounts.
+    const matches = trimmed.match(/\(?-?\$?\s*[\d,]+\.\d{2}\)?(?![\d.])/g);
     if (!matches?.length) return null;
     const desc = String(pendingTxn?.description || pendingTxn?.rawLine || '');
     const amount = PDFParserService._normalizeAmount(matches[0]);
     if (typeof amount !== 'number' || !Number.isFinite(amount)) return null;
-    const type = inferTransactionTypeFromLine(desc, amount);
-    const out = { amount: Math.abs(amount), type, rawAmount: matches[0] };
+    // Explicit minus on the amount line is authoritative — text hints must not flip it.
+    const out =
+      amount < 0
+        ? { amount, type: 'debit', rawAmount: matches[0] }
+        : {
+            amount: Math.abs(amount),
+            type: inferTransactionTypeFromLine(desc, amount),
+            rawAmount: matches[0]
+          };
     if (matches.length > 1) {
       const bal = PDFParserService._normalizeAmount(matches[matches.length - 1]);
       if (typeof bal === 'number' && Number.isFinite(bal)) {
@@ -2350,7 +2389,7 @@ export class PDFParserService {
     // ── HIGH-confidence anchors — exact brand fingerprints ─────────────────
     const highConfidenceAnchors = [
       { name: 'Chase',                     pattern: /CHASE\s*[®©R]|JPMorgan Chase Bank|chase\.com/i },
-      { name: 'Regions Bank',              pattern: /Regions Log In|Log on to regions\.com|regions\.com/i },
+      { name: 'Regions Bank',              pattern: /Regions Log In|Log on to regions\.com|regions\.com|Thank You For Banking With Regions|Regions Bank.*Member FDIC|001 Cycle\d+\s+Regions Bank/i },
       { name: 'Bank of America',           pattern: /bankofamerica\.com|Bank of America,\s*N\.A\./i },
       { name: 'Wells Fargo',               pattern: /wellsfargo\.com|Wells Fargo Bank,\s*N\.A\./i },
       { name: 'Navy Federal Credit Union', pattern: /navyfederal\.org|Navy Federal Credit Union/i },
@@ -2410,13 +2449,13 @@ export class PDFParserService {
   _extractAccountNumberGeneric(text) {
     if (!text || typeof text !== 'string') return null;
 
-    // Regions Bank often uses XX-XXXX-XXXX or simple Account: 123456789
-    // Also matching Patterns like "Account Number Ending In ####"
+    // Masked/segmented account formats: XX-XXXX-XXXX, simple Account: 123456789,
+    // and patterns like "Account Number Ending In ####"
     const patterns = [
       /[Aa]ccount\s*(?:[Nn]umber|Id|No|#)?[:\s#]*([Xx*•·]{0,10}\s?\d{4,17})\b/i,
       /[Aa]cct\.?\s*(?:[Nn]o\.?|#)?[:\s]*([Xx*•·]{0,10}\s?\d{4,17})\b/i,
       /(?:Ending In|Ending With|Ending)[:\s]*([Xx*•·]{0,6}\s?\d{4})\b/i,
-      /\b(\d{2}-\d{4}-\d{4})\b/, // Regions specific format
+      /\b(\d{2}-\d{4}-\d{4})\b/, // Segmented 2-4-4 account format
       /\b([Xx*•·]{4}\s?\d{4,12})\b/, // Purely masked format like XXXX 1234
       /Account\s+([0-9]{9,12})\b/i, // Generic numeric account
       /(?:Acct|Account)\s*#\s*([0-9]{4,15})\b/i // Account # check
@@ -2437,7 +2476,7 @@ export class PDFParserService {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Strip statement date prefixes glued to amounts (Regions: "01/3117,238.53" → "17,238.53").
+   * Strip statement date prefixes glued to amounts ("01/3117,238.53" → "17,238.53").
    * @param {string} line
    * @returns {string}
    */
