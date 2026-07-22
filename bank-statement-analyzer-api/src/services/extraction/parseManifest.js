@@ -134,6 +134,7 @@ export function buildReviewPacket(input = {}) {
   }));
 
   const repairHint = recommendRepair(failureClass);
+  const statementId = input.statementId || null;
 
   return {
     finalStatus: failureClass,
@@ -144,8 +145,21 @@ export function buildReviewPacket(input = {}) {
     missingSections: input.missingSections || [],
     candidateSummary,
     recommendedNextAction:
-      ACTION_BY_CLASS[failureClass] || repairHint?.action || 'manual_review',
-    repair: repairHint
+      failureClass === 'UNKNOWN_LAYOUT' || failureClass === 'AI_LAYOUT_FAILED'
+        ? 'human_layout_rescue'
+        : ACTION_BY_CLASS[failureClass] || repairHint?.action || 'manual_review',
+    repair: repairHint,
+    escapeHatch: statementId
+      ? {
+          endpoint: `/api/statements/${statementId}/layout-rescue`,
+          method: 'POST',
+          maxAttempts: Number(process.env.LAYOUT_HUMAN_RESCUE_MAX) || 2
+        }
+      : {
+          endpoint: '/api/statements/:id/layout-rescue',
+          method: 'POST',
+          maxAttempts: Number(process.env.LAYOUT_HUMAN_RESCUE_MAX) || 2
+        }
   };
 }
 

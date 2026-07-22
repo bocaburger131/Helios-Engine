@@ -62,25 +62,37 @@ export function partitionInflation(candidates) {
 }
 
 /**
- * Apply at most one bounded repair to the best non-verified candidate.
+ * Apply at most one bounded repair to a non-verified candidate; always re-verify.
  * @param {object} candidate
  * @param {object} opts
- * @param {import('./repairMatrix.js').createRepairTracker extends Function} opts.tracker
- * @param {Record<string, object[]>} [opts.sectionRowBags] — sectionOwner → rows
  */
 export function applyBoundedRepair(candidate, opts = {}) {
   const tracker = opts.tracker || createRepairTracker();
   const classified = candidate.verification?.recon
     ? classifyChecksumFailure(candidate.verification.recon, candidate.transactions)
     : { class: 'MANUAL_REVIEW' };
-  const failureClass = normalizeFailureClass(classified, candidate.verification?.recon);
+  const failureClass = normalizeFailureClass(
+    classified,
+    candidate.verification?.recon,
+    candidate.verification?.flags
+  );
   const strategyKey = opts.strategyKey || `v1|${candidate.engine}|${failureClass}`;
   const begin = tracker.tryBegin(candidate.engine, strategyKey, failureClass);
   if (!begin.allowed) {
-    return { repaired: false, reason: begin.reason, candidate, repair: begin.repair };
+    return { repaired: false, reason: begin.reason, candidate, repair: begin.repair, failureClass };
   }
 
   const repair = begin.repair;
+  const before = {
+    isVerified: Boolean(candidate.verification?.isVerified),
+    txnCount: (candidate.transactions || []).length,
+    checksumOk: Boolean(candidate.verification?.recon?.checksumOk)
+  };
+
+  /** @type {object[]} */
+  let nextTxns = candidate.transactions || [];
+  let repairDetail = null;
+
   if (repair.action === REPAIR_ACTIONS.SUPPLEMENTAL_LEDGER) {
     const bags = opts.sectionRowBags || {};
     const present = new Set(
@@ -88,6 +100,7 @@ export function applyBoundedRepair(candidate, opts = {}) {
         (k) => (candidate.sectionCoverage[k] || 0) > 0
       )
     );
+    let applied = false;
     for (const owner of [
       SECTION_OWNERS.FEES,
       SECTION_OWNERS.RETURNED_ITEMS,
@@ -97,53 +110,139 @@ export function applyBoundedRepair(candidate, opts = {}) {
       const rows = bags[owner];
       if (!rows?.length) continue;
       const result = appendMissingSection({
-        transactions: candidate.transactions,
+        transactions: nextTxns,
         sectionRows: rows,
         sectionOwner: owner,
         meta: candidate.meta,
         engine: candidate.engine
       });
       if (result.applied) {
-        const next = verifyParseCandidate(
-          createParseCandidate({
-            engine: candidate.engine,
-            transactions: result.transactions,
-            meta: candidate.meta,
-            documentClass: candidate.documentClass
-          })
-        );
-        return {
-          repaired: true,
-          repair,
-          repairDetail: result,
-          candidate: next,
-          failureClass
-        };
+        nextTxns = result.transactions;
+        repairDetail = result;
+        applied = true;
+        break;
       }
     }
-  }
-
-  if (repair.action === REPAIR_ACTIONS.DROP_SUMMARY_DUPES) {
+    if (!applied) {
+      return { repaired: false, reason: 'no_missing_section_rows', candidate, repair, failureClass };
+    }
+  } else if (
+    repair.action === REPAIR_ACTIONS.DROP_SUMMARY_DUPES ||
+    repair.action === REPAIR_ACTIONS.DEDUPE_FINGERPRINTS ||
+    repair.action === REPAIR_ACTIONS.PARTITION_SUMMARY_ROWS
+  ) {
     const fps = new Set();
-    const cleaned = (candidate.transactions || []).filter((t) => {
+    nextTxns = (candidate.transactions || []).filter((t) => {
+      if (t.sectionOwner === SECTION_OWNERS.SUMMARY_ONLY || t.summaryOnly) return false;
       const fp = t.rowFingerprint;
       if (!fp) return true;
       if (fps.has(fp)) return false;
       fps.add(fp);
-      return t.sectionOwner !== SECTION_OWNERS.SUMMARY_ONLY;
+      return true;
     });
+  } else if (repair.action === REPAIR_ACTIONS.QUARANTINE_OUT_OF_PERIOD) {
+    const start = candidate.meta?.periodStart || candidate.meta?.statementPeriod?.start;
+    const end = candidate.meta?.periodEnd || candidate.meta?.statementPeriod?.end;
+    if (!start || !end) {
+      return { repaired: false, reason: 'no_period_bounds', candidate, repair, failureClass };
+    }
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    const grace = (Number(process.env.STATEMENT_POSTING_GRACE_DAYS) || 5) * 86400000;
+    nextTxns = (candidate.transactions || []).filter((t) => {
+      const d = new Date(t.date || t.postedDate);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getTime() >= startMs - grace && d.getTime() <= endMs + grace;
+    });
+  } else if (repair.action === REPAIR_ACTIONS.SWITCH_STRATEGY) {
+    const alt = opts.alternateCandidate;
+    if (!alt?.transactions?.length) {
+      return { repaired: false, reason: 'no_alternate_engine', candidate, repair, failureClass };
+    }
     const next = verifyParseCandidate(
       createParseCandidate({
-        engine: candidate.engine,
-        transactions: cleaned,
-        meta: candidate.meta,
+        engine: alt.engine,
+        transactions: alt.transactions,
+        meta: { ...candidate.meta, ...(alt.meta || {}) },
         documentClass: candidate.documentClass
       })
     );
-    return { repaired: true, repair, candidate: next, failureClass };
+    return {
+      repaired: true,
+      repair,
+      failureClass,
+      candidate: next,
+      repairDetail: {
+        before,
+        after: {
+          isVerified: next.verification?.isVerified,
+          txnCount: next.transactions?.length,
+          checksumOk: next.verification?.recon?.checksumOk
+        },
+        switchedTo: alt.engine
+      }
+    };
+  } else if (repair.action === REPAIR_ACTIONS.SUMMARY_ANCHOR_REREAD) {
+    // Evidence-only: mark incomplete unless caller provided summaryMeta patch.
+    if (opts.summaryMetaPatch) {
+      const next = verifyParseCandidate(
+        createParseCandidate({
+          engine: candidate.engine,
+          transactions: candidate.transactions,
+          meta: { ...candidate.meta, ...opts.summaryMetaPatch },
+          documentClass: candidate.documentClass
+        })
+      );
+      return {
+        repaired: true,
+        repair,
+        failureClass,
+        candidate: next,
+        repairDetail: { before, after: { isVerified: next.verification?.isVerified } }
+      };
+    }
+    return {
+      repaired: false,
+      reason: 'evidence_incomplete',
+      candidate,
+      repair,
+      failureClass
+    };
+  } else if (repair.action === REPAIR_ACTIONS.CACHED_TEMPLATE_OR_AI) {
+    return {
+      repaired: false,
+      reason: 'unknown_layout_requires_hitl_or_teach',
+      candidate,
+      repair,
+      failureClass
+    };
+  } else {
+    return { repaired: false, reason: 'repair_not_applicable', candidate, repair, failureClass };
   }
 
-  return { repaired: false, reason: 'repair_not_applicable', candidate, repair, failureClass };
+  const next = verifyParseCandidate(
+    createParseCandidate({
+      engine: candidate.engine,
+      transactions: nextTxns,
+      meta: candidate.meta,
+      documentClass: candidate.documentClass
+    })
+  );
+
+  return {
+    repaired: true,
+    repair,
+    failureClass,
+    candidate: next,
+    repairDetail: repairDetail || {
+      before,
+      after: {
+        isVerified: Boolean(next.verification?.isVerified),
+        txnCount: (next.transactions || []).length,
+        checksumOk: Boolean(next.verification?.recon?.checksumOk)
+      }
+    }
+  };
 }
 
 /**
@@ -167,17 +266,31 @@ export function resolveVerifiedCandidateBundle(input = {}) {
   const repairs = [];
 
   let working = selectable;
-  let selected = selectBestVerifiedCandidate(working);
+  let selected = selectBestVerifiedCandidate(working, {
+    documentClass: input.documentClass,
+    engineOrder: input.engineOrder
+  });
 
   if (!selected) {
     const target = working.find((c) => c.verification && !c.verification.isVerified);
     if (target) {
-      const repairResult = applyBoundedRepair(target, { tracker, sectionRowBags });
+      const alternate = working.find((c) => c.engine !== target.engine) ||
+        candidates.find((c) => c.engine !== target.engine);
+      const repairResult = applyBoundedRepair(target, {
+        tracker,
+        sectionRowBags,
+        alternateCandidate: alternate
+          ? { engine: alternate.engine, transactions: alternate.transactions, meta: alternate.meta }
+          : null
+      });
       if (repairResult.repaired) {
         repairs.push({
           engine: target.engine,
           action: repairResult.repair?.action,
-          detail: repairResult.repairDetail?.deltaCents || null
+          failureClass: repairResult.failureClass,
+          detail: repairResult.repairDetail?.deltaCents || repairResult.repairDetail?.after || null,
+          before: repairResult.repairDetail?.before || null,
+          after: repairResult.repairDetail?.after || null
         });
         working = working.map((c) =>
           c.engine === target.engine ? repairResult.candidate : c
@@ -185,7 +298,10 @@ export function resolveVerifiedCandidateBundle(input = {}) {
         candidates = candidates.map((c) =>
           c.engine === target.engine ? repairResult.candidate : c
         );
-        selected = selectBestVerifiedCandidate(working);
+        selected = selectBestVerifiedCandidate(working, {
+          documentClass: input.documentClass,
+          engineOrder: input.engineOrder
+        });
       }
     }
   }
@@ -245,7 +361,10 @@ export function resolveBasicCandidateBundle(input = {}) {
 
   const candidates = buildAndVerifyCandidates(engineResults, meta, documentClass);
   const { selectable, rejected } = partitionInflation(candidates);
-  const selected = selectBestVerifiedCandidate(selectable);
+  const selected = selectBestVerifiedCandidate(selectable, {
+    documentClass,
+    engineOrder: input.engineOrder || null
+  });
   const finalStatus = selected?.finalStatus || deriveTerminalClass(selectable, rejected);
   const hash = buffer ? documentHash(buffer) : null;
   const manifest = buildParseManifest({

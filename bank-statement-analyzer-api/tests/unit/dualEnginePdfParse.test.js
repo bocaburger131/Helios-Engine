@@ -86,7 +86,7 @@ describe('dualEnginePdfParse', () => {
     const { transactions, chosenEngine, dualEngine } = crossReferenceDualParse(pdf, plumber);
     expect(chosenEngine).toBe('pdfplumber');
     expect(dualEngine.agreement).toBe(true);
-    expect(dualEngine.selectionRule).toBe('verified_tiebreak_plumber_preferred');
+    expect(dualEngine.selectionRule).toMatch(/docclass_engine_order/);
     expect(transactions[0].description).toBe('DEPOSIT');
   });
 

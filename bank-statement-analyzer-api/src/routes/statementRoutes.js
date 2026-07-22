@@ -11,6 +11,11 @@ import { publicUploadRateLimit } from '../middleware/publicUploadRateLimit.js';
 import { isPublicUploadEnabled } from '../config/appMode.js';
 import logger from '../utils/logger.js';
 import enhancedAnalysisRoutes from './enhancedAnalysisRoutes.js';
+import {
+  validateBody,
+  batchUploadBodySchema,
+  confirmBankBodySchema
+} from '../validation/zodSchemas.js';
 
 // Initialize router and controller
 const router = express.Router();
@@ -83,8 +88,8 @@ router.get(
   authenticateToken,
   controller.getTriageSessionFile
 );
-router.post('/batch/confirm-bank', authenticateToken, controller.confirmBankAndResume);
-router.post('/batch', authenticateToken, upload.array('statements', 20), controller.uploadStatements);
+router.post('/batch/confirm-bank', authenticateToken, validateBody(confirmBankBodySchema), controller.confirmBankAndResume);
+router.post('/batch', authenticateToken, upload.array('statements', 20), validateBody(batchUploadBodySchema), controller.uploadStatements);
 
 // Demo-only login-free ingestion (gated by ENABLE_PUBLIC_UPLOAD + DEMO_MODE)
 const publicUploadChain = [
@@ -101,8 +106,8 @@ router.get(
   assignPublicGuest,
   controller.getTriageSessionFile
 );
-router.post('/batch/confirm-bank/public', assignPublicGuest, controller.confirmBankAndResume);
-router.post('/batch/public', ...publicUploadChain, controller.uploadStatements);
+router.post('/batch/confirm-bank/public', assignPublicGuest, validateBody(confirmBankBodySchema), controller.confirmBankAndResume);
+router.post('/batch/public', ...publicUploadChain, validateBody(batchUploadBodySchema), controller.uploadStatements);
 
 if (isPublicUploadEnabled()) {
   logger.info('[statementRoutes] Registered public upload: POST /batch/triage/public, POST /batch/public');
@@ -118,6 +123,7 @@ router.post('/analysis/chat', authenticateToken, controller.chatAboutStatements)
 router.delete('/all', authenticateToken, controller.deleteAllStatements);
 router.get('/:id/file', controller.getStatementFileWithToken);
 router.patch('/:id/verify', authenticateToken, controller.verifyStatementVera);
+router.post('/:id/layout-rescue', authenticateToken, controller.layoutRescue);
 router.get('/:id/export-json', authenticateToken, controller.exportStatementJson);
 router.get('/:id/template-learning', authenticateToken, controller.getStatementTemplateLearning);
 router.get('/:id', authenticateToken, controller.getStatementById);

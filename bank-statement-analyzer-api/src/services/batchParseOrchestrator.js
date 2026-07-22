@@ -38,7 +38,8 @@ import {
   isGeminiCircuitOpen,
   withGeminiGuard,
   tripGeminiCircuit,
-  isGeminiQuotaError
+  isGeminiQuotaError,
+  recordAiQualityFailure
 } from './extraction/geminiCircuitBreaker.js';
 import {
   prepareLayoutForDigitalApply,
@@ -1076,9 +1077,16 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
     return null;
   }
 
-  layoutByKey.set(groupKey, guarded.result);
+  const mappingResult = guarded.result;
+  if (!mappingResult || typeof mappingResult !== 'object') {
+    recordAiQualityFailure(docKey, { reason: 'empty_or_invalid_mapping' });
+    layoutByKey.set(groupKey, null);
+    return null;
+  }
+
+  layoutByKey.set(groupKey, mappingResult);
   teachDoneByGroup.add(groupKey);
-  return guarded.result;
+  return mappingResult;
 }
 
 async function tryVisionRowFallback(stmt, ctx) {

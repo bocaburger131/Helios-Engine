@@ -1,19 +1,26 @@
 /**
- * Gemini layout-teach circuit breaker: trip on 429 / credits depleted;
- * at most one AI attempt per document when repair class is UNKNOWN_LAYOUT.
+ * Gemini layout-teach circuit breaker + human rescue counters.
+ * Quota (429) trips the batch circuit; AI quality failure does NOT.
  */
 import logger from '../../utils/logger.js';
+
+const MAX_HUMAN_RESCUE = Number(process.env.LAYOUT_HUMAN_RESCUE_MAX) || 2;
 
 let tripped = false;
 let tripReason = null;
 let tripAt = null;
 const docAiAttempts = new Map();
+const humanRescueAttempts = new Map();
+/** @type {Map<string, { at: string, resultOk: boolean, reason?: string }>} */
+const aiQualityFails = new Map();
 
 export function resetGeminiCircuitBreaker() {
   tripped = false;
   tripReason = null;
   tripAt = null;
   docAiAttempts.clear();
+  humanRescueAttempts.clear();
+  aiQualityFails.clear();
 }
 
 export function isGeminiCircuitOpen() {
@@ -38,7 +45,7 @@ export function isGeminiQuotaError(err) {
 }
 
 /**
- * Trip the breaker so subsequent batch files skip Gemini.
+ * Trip the breaker so subsequent batch files skip automatic Gemini.
  * @param {unknown} err
  */
 export function tripGeminiCircuit(err) {
@@ -51,7 +58,30 @@ export function tripGeminiCircuit(err) {
 }
 
 /**
- * @param {string} documentKey — file hash or name
+ * Record a successful HTTP Gemini response that failed verification.
+ * Does not trip the quota circuit.
+ * @param {string} documentKey
+ * @param {{ reason?: string }} [info]
+ */
+export function recordAiQualityFailure(documentKey, info = {}) {
+  const key = String(documentKey || 'unknown');
+  aiQualityFails.set(key, {
+    at: new Date().toISOString(),
+    resultOk: false,
+    reason: info.reason || 'ai_layout_failed_verification'
+  });
+  logger.warn('[GEMINI_QUALITY] Layout teach returned unverified mapping', {
+    documentKey: key,
+    reason: info.reason
+  });
+}
+
+export function getAiQualityFailure(documentKey) {
+  return aiQualityFails.get(String(documentKey || 'unknown')) || null;
+}
+
+/**
+ * @param {string} documentKey
  * @returns {{ allowed: boolean, reason?: string }}
  */
 export function beginDocumentAiAttempt(documentKey) {
@@ -68,7 +98,39 @@ export function beginDocumentAiAttempt(documentKey) {
 }
 
 /**
- * Wrap an async Gemini call with quota trip + per-doc limit.
+ * Human-in-the-loop rescue: independent of auto one-shot; bypasses quota circuit
+ * but still capped (default 2).
+ * @param {string} documentKey
+ * @returns {{ allowed: boolean, attempt: number, max: number, reason?: string }}
+ */
+export function beginHumanRescueAttempt(documentKey) {
+  const key = String(documentKey || 'unknown');
+  const n = humanRescueAttempts.get(key) || 0;
+  if (n >= MAX_HUMAN_RESCUE) {
+    return {
+      allowed: false,
+      attempt: n,
+      max: MAX_HUMAN_RESCUE,
+      reason: 'human_rescue_exhausted'
+    };
+  }
+  const next = n + 1;
+  humanRescueAttempts.set(key, next);
+  logger.info('[GEMINI_HITL] Human layout rescue attempt', {
+    documentKey: key,
+    attempt: next,
+    max: MAX_HUMAN_RESCUE,
+    circuitOpen: tripped
+  });
+  return { allowed: true, attempt: next, max: MAX_HUMAN_RESCUE };
+}
+
+export function getHumanRescueAttempts(documentKey) {
+  return humanRescueAttempts.get(String(documentKey || 'unknown')) || 0;
+}
+
+/**
+ * Wrap an async Gemini call with quota trip + per-doc auto limit.
  * @param {string} documentKey
  * @param {() => Promise<any>} fn
  */
@@ -88,12 +150,31 @@ export async function withGeminiGuard(documentKey, fn) {
   }
 }
 
+/**
+ * Escape-hatch descriptor for review packets.
+ * @param {string} statementId
+ */
+export function buildEscapeHatch(statementId) {
+  return {
+    endpoint: `/api/statements/${statementId}/layout-rescue`,
+    method: 'POST',
+    maxAttempts: MAX_HUMAN_RESCUE,
+    recommendedNextAction: 'human_layout_rescue'
+  };
+}
+
 export default {
   resetGeminiCircuitBreaker,
   isGeminiCircuitOpen,
   tripGeminiCircuit,
   beginDocumentAiAttempt,
+  beginHumanRescueAttempt,
+  getHumanRescueAttempts,
   withGeminiGuard,
   isGeminiQuotaError,
-  geminiCircuitStatus
+  geminiCircuitStatus,
+  recordAiQualityFailure,
+  getAiQualityFailure,
+  buildEscapeHatch,
+  MAX_HUMAN_RESCUE
 };

@@ -62,17 +62,21 @@ import {
 } from '../services/templateGraduationService.js';
 import {
   createUploadSessionId,
+  createSessionAccessToken,
   saveTriageSession,
   updateTriageSessionMeta,
   loadTriageSession,
   saveConfirmedBankForSession,
-  getConfirmedBankForFile
+  getConfirmedBankForFile,
+  assertTriageSessionAccess
 } from '../services/triageSessionService.js';
 import { resolveBankIdFromName } from '../utils/bankConfirmationGate.js';
 import { buildMacroResponseEnvelope } from '../services/macroResponseEnvelope.js';
 import { buildAnalysisListFields } from '../utils/analysisListMeta.js';
 import { resolveMonthlyChecksumOk } from '../utils/monthlyChecksumTrust.js';
 import { buildChartActivityRollup } from '../utils/chartActivityRollup.js';
+import businessRegistryOrchestrator from '../services/businessRegistry/orchestrator.js';
+import { seedStateRegistryProfiles } from '../services/businessRegistry/seedProfiles.js';
 import { persistMacroTransactions } from '../utils/macroTransactionPersist.js';
 import { reconcileMacroFinancialTotals } from '../utils/macroLedgerTotals.js';
 import { syncDealAnalysis } from '../services/crm/heliosZohoPipeline.js';
@@ -83,7 +87,8 @@ import {
   verifyVeraPdfToken,
   resolveStatementPdfAbsolutePath,
   completeHumanVerification,
-  resolveVeraHeaderAnchorsForStatement
+  resolveVeraHeaderAnchorsForStatement,
+  buildRegistryCredentialRequest
 } from '../services/veraVerificationService.js';
 import {
   rollupExpensesFromTransactions,
@@ -96,8 +101,10 @@ import { parseOneStatementPdfForBatch } from '../utils/parseOneStatementPdfForBa
 import {
   enhanceBatchParsesWithTeacher,
   runChecksumGateRecovery,
+  releaseFileBuffers,
   computeBatchChecksumStats,
   resolveBatchHttpStatus,
+  processBatchLayoutTemplateOutcomes,
   MACRO_CHECKSUM_MIN_OK_RATIO
 } from '../services/batchParseOrchestrator.js';
 import { attachParseOutcomeFlags } from '../utils/statementParseQuality.js';
@@ -116,7 +123,9 @@ import {
   buildChecksumGateBestEffortAlert,
   deriveBestEffortChecksumMode,
   includeStatementInMacro,
-  tagMacroTransactionsFromStatement
+  attachWarningsToEnvelope,
+  tagMacroTransactionsFromStatement,
+  filterStaleReconciliationAlerts
 } from '../utils/macroBestEffort.js';
 
 /**
@@ -1183,23 +1192,27 @@ class StatementController {
       if (apiPlan.sos) {
         try {
           const sosStart = Date.now();
-          logger.info('🏛️ Executing SOS Business Registration Check');
-          
-          // Mock SOS verification
-          results.sos = {
-            businessName: userContext.businessName,
-            registrationStatus: 'ACTIVE',
-            registrationDate: '2020-01-15',
-            state: 'CA',
-            verified: true
-          };
+          logger.info('Executing business registry verification');
+
+          if (process.env.USE_SOS_VERIFICATION === 'true') {
+            results.sos = await businessRegistryOrchestrator.verify({
+              businessName: userContext.businessName,
+              registrationState: userContext.registrationState || userContext.state,
+              businessAddress: userContext.businessAddress,
+              jobId: `waterfall-${Date.now()}`
+            });
+          } else {
+            results.sos = { skipped: true, reason: 'SOS_DISABLED' };
+          }
           
           results.executionOrder.push('sos');
           results.totalCost += WATERFALL_CRITERIA.apiCosts.sos;
           results.executionTimes.sos = Date.now() - sosStart;
           
-          logger.info('✅ SOS verification completed', {
-            status: results.sos.registrationStatus,
+          logger.info('SOS verification completed', {
+            found: results.sos?.found,
+            skipped: results.sos?.skipped,
+            state: results.sos?.state,
             cost: WATERFALL_CRITERIA.apiCosts.sos,
             duration: results.executionTimes.sos
           });
@@ -1866,7 +1879,7 @@ class StatementController {
       const earlyRtn =
         anchorData?.rtn ??
         (typeof req.body?.routingNumber === 'string' ? req.body.routingNumber : null);
-      if (earlyRtn) {
+      if (earlyRtn && !isDemoMode()) {
         try {
           uploadTemplateHint = await resolveLayoutTemplateForParse(earlyRtn);
         } catch (hintErr) {
@@ -1877,7 +1890,7 @@ class StatementController {
       const parseResult = await parserService.parseStatement(buffer, {
         ...anchorData,
         correlationId,
-        forceLayoutFirstPrimary: true,
+        forceLayoutFirstPrimary: !isDemoMode(),
         layoutTemplate: uploadTemplateHint?.mapping ?? null,
         templateHintMeta: uploadTemplateHint
       });
@@ -2876,6 +2889,57 @@ class StatementController {
   };
 
   /**
+   * POST /api/statements/:id/layout-rescue — human escape hatch after AI layout quality fail.
+   * Body: { mapping?: object, forceAi?: boolean }
+   */
+  static layoutRescue = async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ success: false, error: 'Invalid statement ID format' });
+      }
+
+      const { runLayoutRescue } = await import('../services/extraction/layoutRescueService.js');
+      let teachFn = null;
+      if (req.body?.forceAi) {
+        const { learnTemplateLayout, coerceLayoutMapping } = await import(
+          '../services/llm/aiLayoutService.js'
+        );
+        teachFn = async (buffer, ctx) => {
+          const raw = await learnTemplateLayout(buffer, {
+            rtn: ctx.rtn || undefined,
+            bankName: ctx.bankName
+          });
+          return coerceLayoutMapping(raw);
+        };
+      }
+
+      const result = await runLayoutRescue({
+        statementId: id,
+        userId,
+        mapping: req.body?.mapping || null,
+        forceAi: Boolean(req.body?.forceAi),
+        teachFn
+      });
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          error: error.message,
+          code: error.code || undefined
+        });
+      }
+      logger.error('Error in layoutRescue:', error);
+      next(error);
+    }
+  };
+
+  /**
    * GET /api/statements/:id/file?veraToken= — time-limited PDF access for Vera UI (no Bearer auth).
    */
   static getStatementFileWithToken = async (req, res, next) => {
@@ -3225,9 +3289,14 @@ class StatementController {
 
       // ── Portfolio-level chat (no specific statementId) ───────────────────
       if (!statementId) {
-        const userFilter = mongoose.Types.ObjectId.isValid(userId)
-          ? { user: new mongoose.Types.ObjectId(userId) }
-          : {};
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid user session for portfolio chat'
+          });
+        }
+
+        const userFilter = { user: new mongoose.Types.ObjectId(userId) };
 
         const portfolioStatements = await Statement.find(userFilter)
           .sort({ createdAt: -1 })
@@ -3811,10 +3880,13 @@ Vera's Underwriting Report:`;
         fileRoles[sk.name] = 'skipped';
       }
 
+      const sessionAccessToken = createSessionAccessToken();
       saveTriageSession(uploadSessionId, req.files, {
         dealId: req.body.dealId || null,
         businessName: req.body.businessName || null,
-        fileRoles
+        fileRoles,
+        ownerUserId: req.user?.id || 'anonymous',
+        sessionAccessToken
       });
 
       let extractedAnchorData = null;
@@ -3903,9 +3975,19 @@ Vera's Underwriting Report:`;
         }
       }
 
+      // The triage session now holds the canonical copies; drop the multer
+      // originals from uploads/ so bulk batches can't exhaust the disk.
+      for (const f of req.files || []) {
+        if (!f?.path) continue;
+        fs.promises.unlink(f.path).catch((err) => {
+          logger.warn(`[TRIAGE API] Could not delete multer original ${path.basename(f.path)}: ${err.message}`);
+        });
+      }
+
       return res.status(200).json({
         success: true,
         uploadSessionId,
+        triageAccessToken: sessionAccessToken,
         triage: {
           applications,
           statements,
@@ -4039,6 +4121,11 @@ Vera's Underwriting Report:`;
         });
       }
 
+      const access = assertTriageSessionAccess(req, session);
+      if (!access.ok) {
+        return res.status(access.status).json({ success: false, error: access.error });
+      }
+
       if (!(await isStatementQueueAvailable())) {
         return res.status(503).json({
           success: false,
@@ -4057,11 +4144,16 @@ Vera's Underwriting Report:`;
       const userId = req.user?.id || 'anonymous';
       const meta = session.manifest?.meta || {};
 
+      const triageAccessToken =
+        String(req.headers['x-triage-access-token'] ?? req.body?.triageAccessToken ?? '').trim() ||
+        null;
+
       await enqueueStatementBatchJob({
         jobId,
         correlationId,
         uploadSessionId,
         userId,
+        triageAccessToken,
         dealId: req.body.dealId ?? meta.dealId ?? null,
         businessName: req.body.businessName ?? meta.businessName ?? null,
         openingBalance: req.body.openingBalance ?? null,
@@ -4080,11 +4172,20 @@ Vera's Underwriting Report:`;
         message: `Bank confirmed for ${fileName}. Processing resumed in background.`
       });
     } catch (error) {
+      if (error?.code === 'SESSION_JOB_ACTIVE') {
+        return res.status(409).json({
+          success: false,
+          error: 'A batch job is already queued or running for this upload session',
+          existingJobId: error.existingJobId ?? null,
+          code: error.code
+        });
+      }
       logger.error('[confirmBankAndResume] error:', error);
       return res.status(500).json({
         success: false,
         error: 'Failed to confirm bank and resume batch',
-        details: error.message
+        details: error?.message,
+        code: error?.code ?? null
       });
     }
   };
@@ -4103,6 +4204,11 @@ Vera's Underwriting Report:`;
       const session = loadTriageSession(uploadSessionId);
       if (!session) {
         return res.status(404).json({ success: false, error: 'Upload session expired or not found' });
+      }
+
+      const access = assertTriageSessionAccess(req, session);
+      if (!access.ok) {
+        return res.status(access.status).json({ success: false, error: access.error });
       }
 
       const entry = (session.manifest?.files || []).find(
@@ -4151,6 +4257,11 @@ Vera's Underwriting Report:`;
         });
       }
 
+      const access = assertTriageSessionAccess(req, session);
+      if (!access.ok) {
+        return res.status(access.status).json({ success: false, error: access.error });
+      }
+
       if (!(await isStatementQueueAvailable())) {
         return res.status(503).json({
           success: false,
@@ -4175,11 +4286,16 @@ Vera's Underwriting Report:`;
         }
       }
 
+      const triageAccessToken =
+        String(req.headers['x-triage-access-token'] ?? req.body?.triageAccessToken ?? '').trim() ||
+        null;
+
       await enqueueStatementBatchJob({
         jobId,
         correlationId,
         uploadSessionId,
         userId,
+        triageAccessToken,
         dealId: req.body.dealId ?? meta.dealId ?? null,
         businessName: req.body.businessName ?? meta.businessName ?? req.body.businessName ?? null,
         openingBalance: req.body.openingBalance ?? null,
@@ -4200,11 +4316,20 @@ Vera's Underwriting Report:`;
           'Batch queued for background processing. Poll GET /api/statements/batch/jobs/:jobId for completion.'
       });
     } catch (error) {
+      if (error?.code === 'SESSION_JOB_ACTIVE') {
+        return res.status(409).json({
+          success: false,
+          error: 'A batch job is already queued or running for this upload session',
+          existingJobId: error.existingJobId ?? null,
+          code: error.code
+        });
+      }
       logger.error('[uploadStatements] enqueue error:', error);
       return res.status(500).json({
         success: false,
         error: 'Failed to queue batch processing',
-        details: error.message
+        details: error?.message,
+        code: error?.code ?? null
       });
     }
   };
@@ -4235,6 +4360,12 @@ Vera's Underwriting Report:`;
             error: 'Upload session expired or not found. Re-run triage from Upload Hub.'
           });
         }
+
+        const access = assertTriageSessionAccess(req, session);
+        if (!access.ok) {
+          return res.status(access.status).json({ success: false, error: access.error });
+        }
+
         req.files = session.files;
         triageSessionMeta = session.manifest?.meta || null;
         if (session.manifest?.meta?.dealId && !req.body.dealId) {
@@ -4261,7 +4392,7 @@ Vera's Underwriting Report:`;
       const userId = req.user?.id || 'anonymous';
       const openingBalanceOverride = parseFloat(req.body.openingBalance) || 0;
       const applicationData = req.body.applicationData ? JSON.parse(req.body.applicationData) : {};
-      const sosData = applicationData.sosData || {};
+      let sosData = { skipped: true, reason: 'SOS_DISABLED' };
 
       // ────────────────────────────────────────────────────────────────────
       // STAGE 1 — Enhanced Triage with Application Detection
@@ -4391,7 +4522,8 @@ Vera's Underwriting Report:`;
                 ownerName: d.ownerName || prev.ownerName,
                 ownerDOB: d.ownerDOB || prev.ownerDOB,
                 phoneNumber: d.phoneNumber || prev.phoneNumber,
-                email: d.email || prev.email
+                email: d.email || prev.email,
+                registrationState: d.registrationState || prev.registrationState
               };
 
               applicationExtractionResults.push({
@@ -4429,7 +4561,8 @@ Vera's Underwriting Report:`;
               statedRevenue: extractionResult.data.annualRevenue || extractionResult.data.statedRevenue,
               requestedLoanAmount: extractionResult.data.requestedAmount,
               businessStartDate: extractionResult.data.businessStartDate,
-              industry: extractionResult.data.industry
+              industry: extractionResult.data.industry,
+              registrationState: extractionResult.data.registrationState
             };
           } else {
             logger.info(`ℹ️ [FALLBACK] First file does not contain application data`);
@@ -4479,8 +4612,30 @@ Vera's Underwriting Report:`;
       const finalAnchorData = {
         taxId: applicationData.taxId || extractedAnchorData.taxId,
         businessAddress: applicationData.businessAddress || extractedAnchorData.businessAddress,
-        companyName: applicationData.companyName || req.body.businessName || extractedAnchorData.companyName
+        companyName: applicationData.companyName || req.body.businessName || extractedAnchorData.companyName,
+        registrationState:
+          applicationData.registrationState || extractedAnchorData.registrationState
       };
+
+      if (process.env.USE_SOS_VERIFICATION === 'true') {
+        try {
+          sosData = await businessRegistryOrchestrator.verify({
+            businessName: finalAnchorData.companyName || extractedAnchorData.companyName,
+            registrationState: finalAnchorData.registrationState,
+            businessAddress: finalAnchorData.businessAddress,
+            jobId: req.body.jobId || req.body.correlationId || null,
+            userId: userId !== 'anonymous' ? userId : null
+          });
+        } catch (sosErr) {
+          logger.warn(`[BATCH] Business registry verification failed: ${sosErr.message}`);
+          sosData = {
+            found: false,
+            skipped: true,
+            reason: sosErr.message,
+            source: 'businessRegistryOrchestrator'
+          };
+        }
+      }
 
       logger.info(`Final anchor data for Identity Waterfall: companyName=${finalAnchorData.companyName || 'N/A'}, taxId=${finalAnchorData.taxId ? 'PRESENT' : 'N/A'}, address=${finalAnchorData.businessAddress ? 'PRESENT' : 'N/A'}`);
 
@@ -4733,6 +4888,18 @@ Vera's Underwriting Report:`;
         }
       }
 
+      if (checksumRecoveryMeta?.succeeded) {
+        batchParseAlerts = filterStaleReconciliationAlerts(batchParseAlerts, parsedStatements);
+        await processBatchLayoutTemplateOutcomes(parsedStatements);
+      }
+
+      // Last buffer consumer (teach / delta probe / diagnostic rescue) has run;
+      // everything below works on transactions only. Also drop the local pdf
+      // arrays' buffer refs — they alias the same Buffers and outlive this point.
+      releaseFileBuffers(parsedStatements);
+      for (const item of statementPdfs) item.buffer = null;
+      for (const item of applicationPdfs) item.buffer = null;
+
       const waterfallSummaryByRtn = new Map();
       for (const stmt of parsedStatements) {
         const pr = stmt.parseResult;
@@ -4802,12 +4969,14 @@ Vera's Underwriting Report:`;
       const macroParseDegraded = batchChecksumStats.ratio < MACRO_CHECKSUM_MIN_OK_RATIO;
 
       let institutionProfileGate = triageSessionMeta?.institutionProfileGate ?? null;
-      if (!institutionProfileGate && parsedStatements.length > 0) {
+      if (parsedStatements.length > 0) {
         const exemplar = parsedStatements[0];
         const rtn =
           exemplar.parseResult?.rtn ??
           exemplar.parseResult?.metadata?.rtn ??
-          scanRtnFromText(exemplar.parseResult?.text || '');
+          scanRtnFromText(exemplar.parseResult?.text || '') ??
+          institutionProfileGate?.routingNumber ??
+          null;
         let profileDoc = null;
         if (rtn && mongoose.connection.readyState === 1) {
           try {
@@ -4819,7 +4988,7 @@ Vera's Underwriting Report:`;
         institutionProfileGate = assessInstitutionProfileGate({
           text: exemplar.parseResult?.text || '',
           rtn,
-          bankName: exemplar.bankName,
+          bankName: exemplar.bankName || institutionProfileGate?.bankName,
           institutionalProfile: profileDoc,
           layoutDiscoveryPresent: parsedStatements.some(
             (s) =>
@@ -5196,7 +5365,24 @@ Vera's Underwriting Report:`;
         // ── 5e: AlertsEngine on the macro report ──
         let engineAlerts = [];
         try {
-          engineAlerts = AlertsEngineService.generateAlerts(applicationData, [macroFinsightReport], sosData);
+          const alertsApplicationData = {
+            ...applicationData,
+            businessName:
+              applicationData.businessName ||
+              finalAnchorData?.companyName ||
+              extractedAnchorData?.companyName,
+            requestedAmount:
+              applicationData.requestedAmount ||
+              finalAnchorData?.requestedLoanAmount ||
+              extractedAnchorData?.requestedLoanAmount ||
+              extractedAnchorData?.requestedAmount,
+            industry: applicationData.industry || extractedAnchorData?.industry
+          };
+          engineAlerts = AlertsEngineService.generateAlerts(
+            alertsApplicationData,
+            [macroFinsightReport],
+            sosData
+          );
         } catch (alertErr) {
           logger.warn(`AlertsEngine failed for ${accountKey}: ${alertErr.message}`);
         }
@@ -5277,7 +5463,8 @@ Vera's Underwriting Report:`;
             totalDeposits: financialTotals.totalDeposits,
             totalWithdrawals: financialTotals.totalWithdrawals,
             netChange: financialTotals.netCashFlow,
-            openingBalance: financialTotals.openingBalance
+            openingBalance: financialTotals.openingBalance,
+            closingBalance: financialTotals.closingBalance
           },
           balanceAnalysis: {
             averageDailyBalance: financialTotals.averageDailyBalance,
@@ -5423,11 +5610,26 @@ Vera's Underwriting Report:`;
         };
       })();
 
+      const chartActivityMonthlyRows = accountGroupResults.flatMap((g) =>
+        (g.monthlyStatements || []).map((m) => {
+          const monthKey = m.coveragePeriod?.startDate?.slice(0, 7) || null;
+          const adbEntry = underwritingVitals?.adb?.byMonth?.find((row) => row.month === monthKey);
+          return {
+            monthKey,
+            totalDeposits: m.totalDeposits,
+            totalWithdrawals: m.totalWithdrawals,
+            coveragePeriod: m.coveragePeriod,
+            adb: adbEntry?.adb ?? null
+          };
+        })
+      ).filter((row) => row.monthKey);
+
       const chartActivity =
         allMacroTransactionsForForensics.length > 0
           ? buildChartActivityRollup(
               allMacroTransactionsForForensics,
-              financialTotals.openingBalance ?? macroAgg?.openingBalance ?? 0
+              financialTotals.openingBalance ?? macroAgg?.openingBalance ?? 0,
+              chartActivityMonthlyRows
             )
           : null;
 
@@ -5491,7 +5693,8 @@ Vera's Underwriting Report:`;
               ? (totalLLMCost / totalTransactionsCategorized)
               : 0,
             service: 'Perplexity AI'
-          }
+          },
+          sosVerification: sosData
         }
       };
 
@@ -5626,6 +5829,8 @@ Vera's Underwriting Report:`;
       });
       const macroInstitutionalProfileId = macroProfileCandidates[0]?.profileId ?? null;
 
+      const registryCredentialRequest = buildRegistryCredentialRequest(sosData);
+
       const savedStatement = await Statement.create({
         user: (userId !== 'anonymous' && mongoose.Types.ObjectId.isValid(userId)) ? userId : new mongoose.Types.ObjectId(),
         uploadId: batchId,
@@ -5657,7 +5862,8 @@ Vera's Underwriting Report:`;
           phoneNumber:       extractedAnchorData.phoneNumber        || null,
           email:             extractedAnchorData.email              || null,
           monthlyRevenue:    extractedAnchorData.monthlyRevenue     || null,
-          yearsInBusiness:   extractedAnchorData.yearsInBusiness    || null
+          yearsInBusiness:   extractedAnchorData.yearsInBusiness    || null,
+          registrationState: extractedAnchorData.registrationState || finalAnchorData.registrationState || null
         } : undefined,
         analysis: consolidatedMacroAnalysis,
         analytics: {
@@ -5714,7 +5920,10 @@ Vera's Underwriting Report:`;
           mimetype: 'application/pdf',
           pages: parsedStatements.length,
           fileHash: parsedStatements.length === 1 ? parsedStatements[0].fileHash : crypto.createHash('sha256').update(parsedStatements.map(s => s.fileHash || '').join(',')).digest('hex')
-        }
+        },
+        ...(registryCredentialRequest
+          ? { veraVerification: { registryCredentialRequest } }
+          : {})
       });
 
       if (allMacroTransactionsForForensics.length > 0) {
@@ -5947,9 +6156,14 @@ Vera's Underwriting Report:`;
         skippedFiles: skippedFiles.length > 0 ? skippedFiles : undefined
       });
 
+      attachWarningsToEnvelope(envelope, parsedStatements, bestEffortChecksumMode);
+
       await Statement.findByIdAndUpdate(savedStatement._id, {
-        'analysis.envelope201': envelope,
-        'metadata.zohoSync': { status: 'pending', queuedAt: new Date().toISOString() }
+        $set: {
+          'analysis.envelope201': envelope,
+          'analysis.intelligenceSummary': envelope?.data?.intelligenceSummary ?? null,
+          'metadata.zohoSync': { status: 'pending', queuedAt: new Date().toISOString() }
+        }
       });
 
       if (req.body.dealId && process.env.DISABLE_ZOHO !== 'true') {
@@ -5977,33 +6191,8 @@ Vera's Underwriting Report:`;
       const { envelope } = await runMacroStages();
       clearBatchProgress(correlationId);
 
-      // Diagnostic AI Rescue: surface COMPLETED_WITH_WARNINGS for HITL review when
-      // statements were saved best-effort (failed checksum but usable) or carry an
-      // AI diagnosis. BullMQ stays "completed"; only the business status differs.
-      const diagnosticSummaries = parsedStatements
-        .filter(
-          (s) =>
-            s.aiDiagnostic ||
-            (s.parseQuality !== 'OK' && includeStatementInMacro(s, bestEffortChecksumMode))
-        )
-        .map((s) => ({
-          fileName: s.fileName,
-          diagnosis: s.aiDiagnostic?.diagnosis ?? 'CHECKSUM_MISMATCH',
-          explanation:
-            s.aiDiagnostic?.explanation ??
-            `Checksum did not reconcile (delta ${s.checksumRecon?.delta ?? 'n/a'}).`,
-          confidenceScore: s.aiDiagnostic?.confidenceScore ?? null,
-          autoCorrected: Boolean(s.aiDiagnostic?.autoCorrected)
-        }));
-
-      if (bestEffortChecksumMode || diagnosticSummaries.length > 0) {
-        envelope.businessStatus = 'COMPLETED_WITH_WARNINGS';
-        envelope.diagnosticSummaries = diagnosticSummaries;
-        envelope.analysisQuality = {
-          checksumValidated: false,
-          flags: [...new Set(['CHECKSUM_MISMATCH', ...diagnosticSummaries.map((d) => d.diagnosis)])],
-          statementsRequiringReview: diagnosticSummaries.length
-        };
+      const diagnosticSummaries = envelope.diagnosticSummaries || [];
+      if (envelope.businessStatus === 'COMPLETED_WITH_WARNINGS') {
         setBatchProgress(correlationId, {
           status: 'COMPLETED_WITH_WARNINGS',
           progress: 100,
@@ -6021,6 +6210,24 @@ Vera's Underwriting Report:`;
     } catch (error) {
       clearBatchProgress(correlationId);
       logger.error('Macro Quarterly Engine error:', error);
+      // #region agent log
+      fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '05b151' },
+        body: JSON.stringify({
+          sessionId: '05b151',
+          runId: 'post-fix',
+          hypothesisId: 'SOS_ENUM',
+          location: 'statementController.js:macroCatch',
+          message: 'Macro Quarterly Engine 500',
+          data: {
+            errorName: error?.name || null,
+            errorMessage: String(error?.message || '').slice(0, 300)
+          },
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+      // #endregion
       mockComplianceLogger.logDataProcessing(req.user?.id || 'anonymous', 'MACRO_QUARTERLY_ENGINE_ANALYSIS', false);
 
       res.status(500).json({

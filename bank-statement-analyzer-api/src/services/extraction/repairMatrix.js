@@ -1,6 +1,7 @@
 /**
  * Bounded repair matrix: one targeted action per failure class.
  * Never re-run the same engine on unchanged input.
+ * Each repair must be followed by isVerifiedCandidate (caller responsibility).
  */
 export const REPAIR_ACTIONS = Object.freeze({
   SWITCH_STRATEGY: 'switch_extraction_strategy',
@@ -8,6 +9,9 @@ export const REPAIR_ACTIONS = Object.freeze({
   SUPPLEMENTAL_LEDGER: 'supplemental_section_ledger',
   SUMMARY_ANCHOR_REREAD: 'summary_anchor_reread',
   CACHED_TEMPLATE_OR_AI: 'cached_template_then_one_ai',
+  PARTITION_SUMMARY_ROWS: 'partition_summary_only_rows',
+  DEDUPE_FINGERPRINTS: 'dedupe_row_fingerprints',
+  QUARANTINE_OUT_OF_PERIOD: 'quarantine_malformed_dates',
   NONE: 'none'
 });
 
@@ -29,6 +33,21 @@ const MATRIX = Object.freeze({
     maxAttempts: 1,
     neverMerge: true
   },
+  SUMMARY_ROW_CONTAMINATION: {
+    action: REPAIR_ACTIONS.PARTITION_SUMMARY_ROWS,
+    stopCondition: 'no_summary_as_transactions',
+    maxAttempts: 1
+  },
+  DUPLICATE_ROWS: {
+    action: REPAIR_ACTIONS.DEDUPE_FINGERPRINTS,
+    stopCondition: 'unique_fingerprints',
+    maxAttempts: 1
+  },
+  MALFORMED_DATES: {
+    action: REPAIR_ACTIONS.QUARANTINE_OUT_OF_PERIOD,
+    stopCondition: 'valid_statement_period_or_undercount',
+    maxAttempts: 1
+  },
   UNDERCOUNT: {
     action: REPAIR_ACTIONS.SUPPLEMENTAL_LEDGER,
     stopCondition: 'append_only_non_overlapping_section',
@@ -37,6 +56,11 @@ const MATRIX = Object.freeze({
   AGGREGATE_MISMATCH: {
     action: REPAIR_ACTIONS.SUPPLEMENTAL_LEDGER,
     stopCondition: 'append_only_non_overlapping_section',
+    maxAttempts: 1
+  },
+  BALANCE_MISMATCH: {
+    action: REPAIR_ACTIONS.SUPPLEMENTAL_LEDGER,
+    stopCondition: 'balance_equation_ok_or_terminal',
     maxAttempts: 1
   },
   FALSE_LAYOUT_PASS_RISK: {
@@ -56,7 +80,7 @@ const MATRIX = Object.freeze({
   },
   UNKNOWN_LAYOUT: {
     action: REPAIR_ACTIONS.CACHED_TEMPLATE_OR_AI,
-    stopCondition: 'circuit_breaker_tenant_budget_cache',
+    stopCondition: 'circuit_breaker_then_hitl',
     maxAttempts: 1,
     allowAi: true
   },
@@ -69,7 +93,7 @@ const MATRIX = Object.freeze({
 
 /**
  * @param {string} failureClass
- * @returns {{ action: string, stopCondition: string, maxAttempts: number, allowAi?: boolean, neverMerge?: boolean }}
+ * @returns {{ action: string, stopCondition: string, maxAttempts: number, allowAi?: boolean, neverMerge?: boolean, failureClass?: string }}
  */
 export function recommendRepair(failureClass) {
   const row = MATRIX[failureClass];
@@ -77,7 +101,8 @@ export function recommendRepair(failureClass) {
     return {
       action: REPAIR_ACTIONS.NONE,
       stopCondition: 'terminal_manual_review',
-      maxAttempts: 0
+      maxAttempts: 0,
+      failureClass
     };
   }
   return { ...row, failureClass };
@@ -92,7 +117,7 @@ export function createRepairTracker() {
   return {
     /**
      * @param {string} engine
-     * @param {string} strategyKey — must change when strategy/scope/norm rule changes
+     * @param {string} strategyKey
      * @param {string} failureClass
      * @returns {{ allowed: boolean, repair: object, reason?: string }}
      */
@@ -119,12 +144,30 @@ export function createRepairTracker() {
 }
 
 /**
- * Map classifyChecksumFailure class → undercount when activity short.
  * @param {object} classified
  * @param {object} recon
+ * @param {object} [verificationFlags] — isVerifiedCandidate.flags
  * @returns {string}
  */
-export function normalizeFailureClass(classified, recon) {
+export function normalizeFailureClass(classified, recon, verificationFlags = null) {
+  if (verificationFlags) {
+    if (verificationFlags.noSummaryRowsAsTransactions === false) {
+      return 'SUMMARY_ROW_CONTAMINATION';
+    }
+    if (verificationFlags.noDuplicateFingerprints === false) {
+      return 'DUPLICATE_ROWS';
+    }
+    if (verificationFlags.validStatementPeriod === false) {
+      return 'MALFORMED_DATES';
+    }
+    if (
+      verificationFlags.balanceEquationOk === false &&
+      verificationFlags.printedTotalsOkWhenAvailable !== false
+    ) {
+      return 'BALANCE_MISMATCH';
+    }
+  }
+
   const c = classified?.class || 'MANUAL_REVIEW';
   if (c === 'OK') return 'OK';
   if (c === 'AGGREGATE_MISMATCH' || c === 'TIER_A_CLOSING_FAIL') {
@@ -139,6 +182,7 @@ export function normalizeFailureClass(classified, recon) {
     ) {
       return 'UNDERCOUNT';
     }
+    if (c === 'TIER_A_CLOSING_FAIL') return 'BALANCE_MISMATCH';
   }
   if (c === 'BLEED_OUTLIER_ROW') return 'WITHDRAWAL_INFLATION';
   return c;

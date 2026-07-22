@@ -256,13 +256,27 @@ export function crossReferenceDualParse(pdfParseResult, plumberResult, options =
     dualEngine.depositDriftPct = Number((drift * 100).toFixed(4));
     dualEngine.agreement = drift <= DEPOSIT_AGREEMENT_TOLERANCE;
 
-    // Stable tie-break: prefer coordinate/plumber provenance over text.
-    // Never select by highest transaction count.
-    chosenEngine = 'pdfplumber';
+    // Prefer engine earlier in documentClass allow-list; default plumber for native_text.
+    const order = options.documentClassEngines;
+    let preferPlumber = true;
+    if (Array.isArray(order) && order.length) {
+      const pi = order.indexOf('plumber');
+      const ti = order.indexOf('text');
+      if (pi >= 0 && ti >= 0) preferPlumber = pi <= ti;
+      else if (ti >= 0 && pi < 0) preferPlumber = false;
+    }
+
+    if (preferPlumber) {
+      chosenEngine = 'pdfplumber';
+      dualEngine.chosenEngine = chosenEngine;
+      dualEngine.selectionRule = 'docclass_engine_order_plumber';
+      changed = true;
+      return { transactions: plumberTxns, chosenEngine, dualEngine, changed };
+    }
+    chosenEngine = 'pdf_parse';
     dualEngine.chosenEngine = chosenEngine;
-    dualEngine.selectionRule = 'verified_tiebreak_plumber_preferred';
-    changed = true;
-    return { transactions: plumberTxns, chosenEngine, dualEngine, changed };
+    dualEngine.selectionRule = 'docclass_engine_order_text';
+    return { transactions: pdfTxns, chosenEngine, dualEngine, changed };
   }
 
   dualEngine.dualEngineBothFailed = true;
@@ -319,7 +333,13 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
 
   let pdfForMerge = pdfParseResult;
   let plumberForMerge = plumberResult;
-  let crossOptions = {};
+  let crossOptions = {
+    documentClassEngines:
+      context.documentClassEngines ||
+      pdfParseResult?.metadata?.allowedEngines ||
+      pdfParseResult?.metadata?.documentClassification?.engines ||
+      null
+  };
 
   const isChase =
     pdfParseResult?.metadata?.extractionProfile === 'chase_business_complete' ||
@@ -349,7 +369,7 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
         transactions: recovered.transactions,
         success: true
       };
-      crossOptions = { chaseMeta: recovered.meta };
+      crossOptions = { ...crossOptions, chaseMeta: recovered.meta };
       if (recovered.meta) {
         pdfForMerge = {
           ...pdfParseResult,
@@ -388,7 +408,7 @@ export function applyDualEngineToParseResult(pdfParseResult, plumberResult, cont
         transactions: recovered.transactions,
         success: true
       };
-      crossOptions = { chaseMeta: recovered.meta };
+      crossOptions = { ...crossOptions, chaseMeta: recovered.meta };
       if (recovered.meta) {
         pdfForMerge = {
           ...pdfParseResult,

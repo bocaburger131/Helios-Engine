@@ -195,19 +195,32 @@ export function requiredSectionCoverageScore(candidate, required) {
 
 /**
  * Select best among already-VERIFIED candidates. Never uses highest txn count.
- * @param {Array<object>} verifiedCandidates — each has .verification.isVerified === true
+ * @param {Array<object>} verifiedCandidates
+ * @param {{ documentClass?: string, engineOrder?: string[] }} [opts]
  * @returns {object|null}
  */
-export function selectBestVerifiedCandidate(verifiedCandidates) {
+export function selectBestVerifiedCandidate(verifiedCandidates, opts = {}) {
   const list = (verifiedCandidates || []).filter((c) => c?.verification?.isVerified);
   if (!list.length) return null;
+
+  const order = Array.isArray(opts.engineOrder) ? opts.engineOrder : null;
+  const rankFor = (engine) => {
+    if (order?.length) {
+      const canon = String(engine || '').replace(/^pdfplumber$/, 'plumber').replace(/^pdf_parse$/, 'text');
+      const idx = order.indexOf(canon);
+      if (idx >= 0) return idx;
+      return 100 + (ENGINE_RANK[engine] ?? 99);
+    }
+    // Default native_text preference: plumber > text > marker
+    return ENGINE_RANK[engine] ?? 99;
+  };
 
   const scored = list.map((c) => {
     const sectionTotalsMatch = c.verification?.printedSectionTotalsOk === true ? 1 : 0;
     const coverage = requiredSectionCoverageScore(c);
     const anomalies = Number(c.anomalousRowCount || 0);
     const provenance = Number(c.provenanceStrength || 0);
-    const engineRank = ENGINE_RANK[c.engine] ?? 99;
+    const engineRank = rankFor(c.engine);
     return { c, sectionTotalsMatch, coverage, anomalies, provenance, engineRank };
   });
 
@@ -216,6 +229,10 @@ export function selectBestVerifiedCandidate(verifiedCandidates) {
       return b.sectionTotalsMatch - a.sectionTotalsMatch;
     }
     if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+    // When documentClass supplies an allow-list order, honor it before provenance.
+    if (order?.length && a.engineRank !== b.engineRank) {
+      return a.engineRank - b.engineRank;
+    }
     if (a.anomalies !== b.anomalies) return a.anomalies - b.anomalies;
     if (b.provenance !== a.provenance) return b.provenance - a.provenance;
     return a.engineRank - b.engineRank;

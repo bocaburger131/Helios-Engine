@@ -25,7 +25,11 @@ const templateSchema = new Schema(
     mapping: { type: Schema.Types.Mixed, default: {} },
     /** Redacted Pass 1 region boundaries + anchor keys for variant matching */
     documentMapSnapshot: { type: Schema.Types.Mixed, default: null },
-    fingerprint: { type: String, trim: true, default: null }
+    fingerprint: { type: String, trim: true, default: null },
+    /** Universal ladder versioning — deprecate without delete */
+    profileVersion: { type: String, trim: true, default: '1' },
+    effectiveFrom: { type: Date, default: null },
+    deprecatedAt: { type: Date, default: null }
   },
   { _id: true }
 );

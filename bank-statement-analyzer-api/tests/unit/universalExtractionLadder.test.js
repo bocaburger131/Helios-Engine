@@ -398,6 +398,92 @@ describe('gemini circuit breaker', () => {
     expect(beginDocumentAiAttempt('doc-1').allowed).toBe(false);
     expect(beginDocumentAiAttempt('doc-2').allowed).toBe(true);
   });
+
+  it('quality failure does not trip circuit; human rescue is independent', async () => {
+    const {
+      recordAiQualityFailure,
+      beginHumanRescueAttempt,
+      getAiQualityFailure,
+      isGeminiCircuitOpen: isOpen
+    } = await import('../../src/services/extraction/geminiCircuitBreaker.js');
+    recordAiQualityFailure('stmt-1', { reason: 'bad_mapping' });
+    expect(isOpen()).toBe(false);
+    expect(getAiQualityFailure('stmt-1')?.resultOk).toBe(false);
+    expect(beginHumanRescueAttempt('stmt-1').allowed).toBe(true);
+    expect(beginHumanRescueAttempt('stmt-1').allowed).toBe(true);
+    expect(beginHumanRescueAttempt('stmt-1').allowed).toBe(false);
+  });
+});
+
+describe('Phase 3 repair handlers', () => {
+  it('dedupes fingerprints and re-verifies', async () => {
+    const { applyBoundedRepair } = await import(
+      '../../src/services/extraction/candidateOrchestrator.js'
+    );
+    const base = balancedLedger();
+    const dup = {
+      ...base.transactions[1],
+      description: base.transactions[1].description
+    };
+    // Same economic fingerprint as second txn → DUPLICATE_ROWS path after verify fails
+    const candidate = verifyParseCandidate(
+      createParseCandidate({
+        engine: 'plumber',
+        transactions: [...base.transactions, dup],
+        meta: base.meta
+      })
+    );
+    expect(candidate.verification.isVerified).toBe(false);
+    const repaired = applyBoundedRepair(candidate, {});
+    expect(repaired.repaired).toBe(true);
+    expect(repaired.candidate.verification.flags.noDuplicateFingerprints).toBe(true);
+  });
+
+  it('review packet includes escapeHatch', () => {
+    const packet = buildReviewPacket({
+      failureClass: 'UNKNOWN_LAYOUT',
+      statementId: 'abc123',
+      candidates: []
+    });
+    expect(packet.escapeHatch.endpoint).toContain('/layout-rescue');
+    expect(packet.recommendedNextAction).toBe('human_layout_rescue');
+  });
+});
+
+describe('Phase 4 profile snapshot', () => {
+  it('buildProfileSnapshot embeds mapping for historical read', async () => {
+    const {
+      buildProfileSnapshot,
+      resolveMappingForHistoricalRead
+    } = await import('../../src/services/extraction/profileSnapshot.js');
+    const snap = buildProfileSnapshot({
+      profileId: 'regions_business_checking',
+      profileVersion: '1',
+      mapping: {
+        headerAnchors: [{ tableStart: 'SUMMARY' }],
+        profileVersion: '1'
+      }
+    });
+    expect(snap.mappingSnapshot?.headerAnchors).toBeTruthy();
+    const hist = resolveMappingForHistoricalRead(snap, null);
+    expect(hist.source).toBe('snapshot');
+    expect(hist.mapping.headerAnchors[0].tableStart).toBe('SUMMARY');
+  });
+
+  it('selectBestVerifiedCandidate respects documentClass engine order', () => {
+    const meta = balancedLedger().meta;
+    const txs = balancedLedger().transactions;
+    const text = verifyParseCandidate(
+      createParseCandidate({ engine: 'text', transactions: txs, meta })
+    );
+    const plumber = verifyParseCandidate(
+      createParseCandidate({ engine: 'plumber', transactions: txs, meta })
+    );
+    const best = selectBestVerifiedCandidate([plumber, text], {
+      engineOrder: ['text', 'plumber']
+    });
+    expect(best.engine).toBe('text');
+  });
 });
 
 describe('marker output mapping', () => {

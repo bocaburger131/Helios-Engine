@@ -33,6 +33,7 @@ import {
   documentHash,
   PARSER_VERSION
 } from '../services/extraction/parseManifest.js';
+import { stampProfileSnapshot } from '../services/extraction/profileSnapshot.js';
 import { classifyChecksumFailure } from './checksumFailureMatrix.js';
 import { normalizeFailureClass } from '../services/extraction/repairMatrix.js';
 
@@ -447,8 +448,26 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
         failureClass,
         candidates: [candidate],
         recon: candidate.verification?.recon,
-        missingSections: []
+        missingSections: [],
+        statementId: parsedStatement._id?.toString?.() || parsedStatement.id || null
       });
+
+  stampProfileSnapshot(
+    { metadata: parsedStatement.parseResult?.metadata || (parsedStatement.metadata = parsedStatement.metadata || {}) },
+    {
+      profileId: parsedStatement.parseResult?.metadata?.extractionProfile || null,
+      profileVersion: parsedStatement.parseResult?.metadata?.profileVersion || null,
+      layoutFingerprint: parsedStatement.parseResult?.metadata?.layoutFingerprint || null,
+      mapping: parsedStatement.parseResult?.metadata?.layoutTemplate || null
+    }
+  );
+  if (parsedStatement.parseResult?.metadata?.profileSnapshot) {
+    parsedStatement.profileSnapshot = parsedStatement.parseResult.metadata.profileSnapshot;
+    if (parsedStatement.parseManifest) {
+      parsedStatement.parseManifest.profileSnapshot =
+        parsedStatement.parseResult.metadata.profileSnapshot;
+    }
+  }
 
   // Macro batch ratio still uses arithmetic/spec checksum; VERIFIED is the stricter gate.
   const parseQualityOk = checksumRecon.ok;

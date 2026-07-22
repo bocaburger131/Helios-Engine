@@ -24,7 +24,11 @@ import {
   applyDualEngineToParseResult
 } from './extraction/dualEnginePdfParse.js';
 import { classifyDocument, isEngineAllowed, markBrokenGeometry } from './extraction/documentClassifier.js';
-import { resolveBasicCandidateBundle } from './extraction/candidateOrchestrator.js';
+import {
+  resolveBasicCandidateBundle,
+  resolveVerifiedCandidateBundle
+} from './extraction/candidateOrchestrator.js';
+import { stampProfileSnapshot } from './extraction/profileSnapshot.js';
 import { resolveProfile, getProfileMeta } from './extraction/bankProfileRegistry.js';
 import { runStatementExtractionPipeline } from './extraction/statementExtractionPipeline.js';
 import { reconcileStatement } from './extraction/statementReconciliation.js';
@@ -1030,11 +1034,12 @@ export class PDFParserService {
           rtn: waterfallResult.rtn ?? null,
           accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
           stitcherPrinted: dualStitcherPrinted,
-          typeAText: stitcher.typeA?.text ?? null
+          typeAText: stitcher.typeA?.text ?? null,
+          documentClassEngines: options._documentClassification?.engines || null
         });
       }
 
-      // Phase 1 basic ladder: independent candidates → verify → select (no repairs).
+      // Ladder: candidates → verify → optional repair (Phase 3) → select → snapshot.
       const sharedMeta = {
         openingBalance: merged.openingBalance ?? merged.balances?.opening,
         closingBalance: merged.closingBalance ?? merged.balances?.closing,
@@ -1071,29 +1076,44 @@ export class PDFParserService {
       }
 
       if (engineResults.length > 0) {
-        const bundle = resolveBasicCandidateBundle({
+        const enableRepairs =
+          process.env.LADDER_REPAIRS_ENABLED !== 'false' &&
+          process.env.LADDER_REPAIRS_ENABLED !== '0';
+        const bundleFn = enableRepairs
+          ? resolveVerifiedCandidateBundle
+          : resolveBasicCandidateBundle;
+        const bundle = bundleFn({
           engineResults,
           meta: sharedMeta,
           documentClass: options._documentClassification?.documentClass ?? null,
+          engineOrder: options._documentClassification?.engines || null,
           buffer,
           profileId: profile.id,
-          profileVersion: getProfileMeta(profile.id).profileVersion ?? null
+          profileVersion: getProfileMeta(profile.id).profileVersion ?? null,
+          sectionRowBags: options.sectionRowBags || null
         });
         merged.metadata = merged.metadata || {};
         merged.metadata.parseManifest = bundle.manifest;
         merged.metadata.reviewPacket = bundle.reviewPacket;
         merged.metadata.parseFinalStatus = bundle.finalStatus;
-        merged.metadata.ladderPhase = 'phase1_basic';
+        merged.metadata.ladderPhase = enableRepairs ? 'phase3_repairs' : 'phase1_basic';
         if (bundle.selected?.transactions?.length) {
           merged.transactions = bundle.selected.transactions;
           merged.metadata.dualEngine = {
             ...(merged.metadata.dualEngine || {}),
             chosenEngine:
               bundle.selected.engine === 'plumber' ? 'pdfplumber' : 'pdf_parse',
-            selectionRule: 'basic_ladder_selectBestVerified',
+            selectionRule: 'ladder_selectBestVerified',
             ladderFinalStatus: bundle.finalStatus
           };
         }
+        stampProfileSnapshot(merged, {
+          profileId: profile.id,
+          profileVersion: getProfileMeta(profile.id).profileVersion,
+          mapping: options?.layoutTemplate || resolvedLayoutTemplate,
+          templateVersion: templateHintMeta?.templateVersion ?? null,
+          documentMapSnapshot: layoutPipelineResult?.documentMap ?? null
+        });
       }
 
       return merged;
