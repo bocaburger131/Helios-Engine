@@ -57,6 +57,17 @@ describe('resolveRequiresBankConfirmation', () => {
       })
     ).toBe(false);
   });
+
+  it('skips confirmation for regions profile at 0.89 confidence', () => {
+    expect(
+      resolveRequiresBankConfirmation({
+        identityMethod: 'HUMAN_REQUIRED',
+        bankName: 'Regions Bank',
+        bankNameConfidence: 'LOW',
+        profileConfidence: 0.89
+      })
+    ).toBe(false);
+  });
 });
 
 describe('batchConfirmationApplies', () => {
@@ -119,6 +130,16 @@ describe('PDFParserService._resolveIdentityWaterfall TEXT_BRAND_LOCK', () => {
     const result = service._resolveIdentityWaterfall(text, {}, { suppressDetailLogs: true });
     expect(result.identityMethod).toBe('TEXT_BRAND_LOCK');
     expect(result.bankName).toBe('Chase');
+    expect(result.confidence).toBe('HIGH');
+  });
+
+  it('returns TEXT_BRAND_LOCK for Regions Bank statement header', () => {
+    const text =
+      'Thank You For Banking With Regions! 2024 Regions Bank Member FDIC. ' +
+      'ACCOUNT # 0241929470 LIFEGREEN BUSINESS CHECKING March 1, 2024';
+    const result = service._resolveIdentityWaterfall(text, {}, { suppressDetailLogs: true });
+    expect(result.identityMethod).toBe('TEXT_BRAND_LOCK');
+    expect(result.bankName).toBe('Regions Bank');
     expect(result.confidence).toBe('HIGH');
   });
 

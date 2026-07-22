@@ -16,6 +16,7 @@ import pdfParse from 'pdf-parse';
 import logger from '../utils/logger.js';
 import { PerplexityService } from './perplexityService.js';
 import { isDemoMode } from '../config/appMode.js';
+import { parseStateFromAddress, resolveStateCode } from './businessRegistry/stateResolver.js';
 
 function useDeterministicParser() {
   if (String(process.env.USE_DETERMINISTIC_APP_PARSER || '').toLowerCase() === 'true') {
@@ -286,6 +287,9 @@ export class ApplicationPdfParser {
     data.dbaName = field([
       /(?:dba|d\.b\.a\.|doing\s+business\s+as)[\s*:]+([^\n]{2,80})/i
     ]);
+    if (data.dbaName && /representatives?|successors?|assigns?|disclaimer|funding\s*\)/i.test(data.dbaName)) {
+      data.dbaName = null;
+    }
 
     // ── Owner / Contact Name ──
     // Try full name first, then combine First + Last
@@ -438,6 +442,20 @@ export class ApplicationPdfParser {
     data.ownerDOB = field([
       /(?:date\s+of\s+birth|dob|birth\s+date)[\s*:]+([^\n]{3,30})/i
     ]);
+
+    // ── Registration / incorporation state ──
+    data.registrationState = field([
+      /(?:state\s+of\s+)?(?:incorporation|formation|organization)[\s*:]+([^\n]{2,30})/i,
+      /(?:registration|registered)\s+state[\s*:]+([^\n]{2,30})/i,
+      /entity\s+state[\s*:]+([^\n]{2,30})/i
+    ]);
+
+    if (!data.registrationState && data.businessAddress) {
+      data.registrationState = parseStateFromAddress(data.businessAddress);
+    }
+    if (data.registrationState) {
+      data.registrationState = resolveStateCode(data.registrationState) || data.registrationState;
+    }
 
     // ── Fallback: if companyName still missing, look for LLC/Inc/Corp after a newline ──
     if (!data.companyName) {

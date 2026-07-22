@@ -18,7 +18,7 @@ import healthRoutes from './healthRoutes.js';
 import metricsRoutes from './metricsRoutes.js';
 import devParseRoutes from './devParseRoutes.js';
 import testingRoutes from './testingRoutes.js';
-// import sosVerificationRoutes from './sosVerificationRoutes.js';
+import sosVerificationRoutes from './sosVerificationRoutes.js';
 // import settingsRoutes from './settingsRoutes.js';
 // import monitoringRoutes from './monitoringRoutes.js';
 
@@ -48,7 +48,9 @@ router.use('/statements', statementRoutes);
 
 // Integration routes
 // router.use('/zoho', zohoRoutes);
-// router.use('/sos', sosVerificationRoutes);
+if (process.env.USE_SOS_VERIFICATION === 'true') {
+  router.use('/sos', sosVerificationRoutes);
+}
 
 // App mode endpoint — exposes whether the server runs in DEMO or LIVE mode
 // so the UI can adapt (extract from PDF vs pull from CRM)

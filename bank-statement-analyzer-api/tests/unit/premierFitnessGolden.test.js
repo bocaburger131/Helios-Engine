@@ -35,7 +35,7 @@ function summaryTextForMonth(stmt) {
 }
 
 describe('Premier Fitness / Regions 9470 golden fixture (universal reconciliation)', () => {
-  it('all 12 months reconcile via printed closing identity (credit/debit role math)', () => {
+  it('all 12 months: printed SUMMARY self-reconciles (identity is not ledger accept)', () => {
     expect(golden.statements).toHaveLength(12);
     for (const stmt of golden.statements) {
       const pl = stmt.printedLines;
@@ -49,10 +49,12 @@ describe('Premier Fitness / Regions 9470 golden fixture (universal reconciliatio
         printedLines: pl,
         reconciliationSpec: REGIONS_SPEC
       };
+      // Empty ledger: printed identity holds, but universal gate must reject.
       const recon = reconcileStatement(meta, []);
       expect(recon.printedComputedClosing, stmt.fileName).toBeCloseTo(stmt.closingBalance, 2);
       expect(recon.printedClosingMatch, stmt.fileName).toBe(true);
-      expect(recon.checksumOk, stmt.fileName).toBe(true);
+      expect(recon.checksumOk, stmt.fileName).toBe(false);
+      expect(recon.activityOk, stmt.fileName).toBe(false);
     }
   });
 
@@ -109,7 +111,7 @@ describe('Premier Fitness / Regions 9470 golden fixture (universal reconciliatio
     expect(sectionTotals.checks).toBeCloseTo(10826.05, 2);
   });
 
-  it('extract reconciles MAY via printed identity and folds the CHECKS grid into the ledger', async () => {
+  it('extract rejects incomplete MAY ledger that only passes printed identity', async () => {
     const stmt = golden.statements.find((s) => s.fileName.includes('MAY'));
     const text = [
       summaryTextForMonth(stmt),
@@ -126,22 +128,19 @@ describe('Premier Fitness / Regions 9470 golden fixture (universal reconciliatio
       'DAILY BALANCE SUMMARY'
     ].join('\n');
 
-    const result = await extract({ text, defaultYear: 2024, accountNumber: golden.accountNumber });
-    expect(result.reconciliation.checksumOk).toBe(true);
-    expect(result.reconciliation.printedClosingMatch).toBe(true);
-    // CHECKS grid row tagged and signed as a debit.
-    const checkRows = result.transactions.filter(
-      (t) => (t.sectionLabel ?? t.section) === 'checks'
-    );
-    expect(checkRows.length).toBeGreaterThan(0);
-    expect(checkRows.every((t) => t.amount < 0)).toBe(true);
+    await expect(
+      extract({ text, defaultYear: 2024, accountNumber: golden.accountNumber })
+    ).rejects.toMatchObject({ name: 'RegionsParseReconciliationError' });
   });
 
-  it('flags a section mismatch (tamper signal) while the printed summary still self-reconciles', () => {
+  it('flags a section mismatch while printed summary still self-reconciles (ledger gate fails)', () => {
     const stmt = golden.statements.find((s) => s.fileName.includes('MAY'));
     const meta = {
       openingBalance: stmt.openingBalance,
       closingBalance: stmt.closingBalance,
+      printedDeposits: stmt.printedLines.deposits,
+      printedWithdrawals:
+        stmt.printedLines.withdrawals + (stmt.printedLines.checks ?? 0) + (stmt.printedLines.fees ?? 0),
       printedLines: stmt.printedLines,
       reconciliationSpec: REGIONS_SPEC
     };
@@ -151,7 +150,7 @@ describe('Premier Fitness / Regions 9470 golden fixture (universal reconciliatio
     ];
     const recon = reconcileStatement(meta, ledger);
     expect(recon.printedClosingMatch).toBe(true);
-    expect(recon.checksumOk).toBe(true);
+    expect(recon.checksumOk).toBe(false);
     expect(recon.sectionReconciled).toBe(false);
     expect(recon.lineDeltas.deposits.match).toBe(false);
   });

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import UnderwritingDashboard from "@/components/UnderwritingDashboard";
 import { useDealContextOptional } from "@/components/shell/DealContext";
-import { fetchStatementById, getStoredToken } from "@/lib/apiClient";
+import { fetchStatementById, getStoredToken, setStoredToken } from "@/lib/apiClient";
 import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
 
 type Props = {
@@ -30,6 +30,17 @@ export default function DashboardClientLoader({
   const [loading, setLoading] = useState(!initialPayload && !usingFixture);
 
   const dealContext = useDealContextOptional();
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const tokenFromUrl = url.searchParams.get("token");
+    if (!tokenFromUrl) return;
+    setStoredToken(tokenFromUrl);
+    url.searchParams.delete("token");
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, "", next);
+  }, []);
 
   useEffect(() => {
     if (usingFixture || initialPayload) return;

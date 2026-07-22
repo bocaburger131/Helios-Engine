@@ -2,6 +2,7 @@
  * Batch progress for Upload Hub polling (Redis-backed; in-memory fallback in tests).
  */
 import { redisClient } from '../config/redis.js';
+import { isRedisDisabled } from '../config/redisConnection.js';
 
 const TTL_MS = 10 * 60 * 1000;
 const TTL_SEC = Math.ceil(TTL_MS / 1000);
@@ -9,7 +10,7 @@ const KEY_PREFIX = 'batch:progress:';
 const memoryStore = new Map();
 
 function useMemoryStore() {
-  return process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false';
+  return isRedisDisabled();
 }
 
 function redisKey(correlationId) {

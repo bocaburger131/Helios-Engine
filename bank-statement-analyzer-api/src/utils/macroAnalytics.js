@@ -5,6 +5,7 @@
 
 import { isLikelyInternalTransfer } from './forensicIntelligence.js';
 import { isLedgerInflow, isLedgerOutflow } from './transactionNormalization.js';
+import logger from './logger.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -55,6 +56,23 @@ const NON_REVENUE_KEYWORDS = [
   'owner draw',
   'capital contribution'
 ];
+
+const OWNER_DRAW_KEYWORDS = [
+  'owner draw',
+  'owners draw',
+  "owner's draw",
+  'owner distribution',
+  'owner withdrawal',
+  'member draw',
+  'member distribution',
+  'shareholder distribution',
+  'partner draw',
+  'partner distribution',
+  'capital distribution',
+  'draw check'
+];
+
+const PERSONAL_TRANSFER_CHANNELS = ['zelle', 'venmo', 'cash app', 'transfer to', 'payment to'];
 
 function parseTxDate(tx) {
   const d = new Date(tx?.date || tx?.transactionDate);
@@ -115,7 +133,126 @@ function isNonRevenueDeposit(tx, applicationContext = {}, transferHints = {}) {
 }
 
 /**
+ * Debit-side owner-draw classifier. Mirrors the deposit-side OWNER_PERSONAL_TRANSFER
+ * logic in isNonRevenueDeposit: explicit draw keywords, or a personal-transfer channel
+ * (Zelle/Venmo/etc.) whose description contains the application owner's name.
+ * @param {object} tx
+ * @param {{ ownerName?: string }} applicationContext
+ * @returns {'OWNER_DRAW_KEYWORD'|'OWNER_PERSONAL_TRANSFER'|null}
+ */
+export function classifyOwnerDraw(tx, applicationContext = {}) {
+  if (!isLedgerOutflow(tx)) return null;
+  const amt = Math.abs(Number(tx?.amount));
+  if (!Number.isFinite(amt) || amt <= 0) return null;
+  const desc = String(tx.description || tx.memo || '');
+
+  if (matchesAny(desc, OWNER_DRAW_KEYWORDS)) return 'OWNER_DRAW_KEYWORD';
+
+  const owner = String(applicationContext.ownerName || '').trim();
+  if (owner.length >= 3 && matchesAny(desc, PERSONAL_TRANSFER_CHANNELS)) {
+    const ownerParts = owner.toLowerCase().split(/\s+/).filter((p) => p.length > 2);
+    const descLower = desc.toLowerCase();
+    if (ownerParts.some((p) => descLower.includes(p))) {
+      return 'OWNER_PERSONAL_TRANSFER';
+    }
+  }
+  return null;
+}
+
+const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+
+/**
+ * Owner-draw totals and underwriting ratios.
+ * drawToRevenueRatio uses true revenue (non-revenue deposits excluded);
+ * drawToNetCashFlowRatio is null when net cash flow is non-positive (ratio undefined).
+ * @param {Array<object>} transactions
+ * @param {{ ownerName?: string }} applicationContext
+ * @param {{ trueTotal?: number }|null} revenue - output of computeTrueRevenue
+ */
+export function computeOwnerDrawMetrics(transactions, applicationContext = {}, revenue = null) {
+  const draws = [];
+  const byMonth = new Map();
+  let totalDraws = 0;
+  let totalInflows = 0;
+  let totalOutflows = 0;
+
+  for (const tx of transactions || []) {
+    const amt = Math.abs(Number(tx?.amount));
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    if (isLedgerInflow(tx)) totalInflows += amt;
+    else if (isLedgerOutflow(tx)) totalOutflows += amt;
+
+    const classification = classifyOwnerDraw(tx, applicationContext);
+    if (!classification) continue;
+
+    totalDraws += amt;
+    draws.push({
+      date: tx.date || tx.transactionDate,
+      amount: round2(amt),
+      description: String(tx.description || '').slice(0, 120),
+      classification
+    });
+    const d = parseTxDate(tx);
+    if (d) {
+      const mk = monthKey(d);
+      byMonth.set(mk, (byMonth.get(mk) || 0) + amt);
+    }
+  }
+
+  const monthlyDraws = [...byMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, amount]) => ({ month, amount: round2(amount) }));
+
+  const trueRevenue = Number(revenue?.trueTotal);
+  const drawToRevenueRatio =
+    Number.isFinite(trueRevenue) && trueRevenue > 0 ? round4(totalDraws / trueRevenue) : null;
+
+  const netCashFlow = totalInflows - totalOutflows;
+  const drawToNetCashFlowRatio = netCashFlow > 0 ? round4(totalDraws / netCashFlow) : null;
+
+  return {
+    totalDraws: round2(totalDraws),
+    drawCount: draws.length,
+    draws: draws.slice(0, 25),
+    monthlyDraws,
+    drawToRevenueRatio,
+    drawToNetCashFlowRatio,
+    netCashFlow: round2(netCashFlow)
+  };
+}
+
+// Hard ceiling on the daily-balance window. A single mis-dated transaction (OCR
+// reading 1970 or 2099) must not turn the per-day loop into tens of thousands of
+// iterations; txns outside the window around the median date are dropped and counted.
+const MAX_DAILY_WINDOW_DAYS = 400;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function isDepositTxn(txn) {
+  const t = String(txn.type || '').toLowerCase();
+  if (t.includes('deposit') || t.includes('credit') || t === 'in') return true;
+  if (t.includes('withdraw') || t.includes('debit') || t === 'out') return false;
+  const amt = Number(txn.amount);
+  return Number.isFinite(amt) && amt >= 0;
+}
+
+/** Signed cash delta — respects type when amounts are stored unsigned (Chase parser). */
+export function signedTxnDelta(txn) {
+  const n = Number(txn.amount);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return n;
+  return isDepositTxn(txn) ? Math.abs(n) : -Math.abs(n);
+}
+
+/** Floor a Date to its UTC day (ms since epoch). Matches toISOString day keys. */
+function utcDayFloorMs(d) {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
  * Build daily end-of-day balances for ADB and negative-day counts.
+ * Outlier-dated txns beyond MAX_DAILY_WINDOW_DAYS of the median date are excluded
+ * (reported via droppedOutlierTxnCount). Day bucketing and the cursor both use UTC
+ * day keys so timezone boundaries cannot mis-bucket transactions.
  * @param {Array<object>} transactions
  * @param {number} openingBalance
  */
@@ -126,16 +263,28 @@ export function buildDailyBalances(transactions, openingBalance = 0) {
     .sort((a, b) => a.d - b.d);
 
   if (sorted.length === 0) {
-    return { daily: [], periodDays: 0, negativeDayCount: 0, lowestDailyBalance: openingBalance };
+    return {
+      daily: [],
+      periodDays: 0,
+      negativeDayCount: 0,
+      lowestDailyBalance: openingBalance,
+      droppedOutlierTxnCount: 0
+    };
   }
 
-  const start = new Date(sorted[0].d);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(sorted[sorted.length - 1].d);
-  end.setHours(23, 59, 59, 999);
+  const medianMs = sorted[Math.floor(sorted.length / 2)].d.getTime();
+  const halfWindowMs = (MAX_DAILY_WINDOW_DAYS / 2) * DAY_MS;
+  const kept = sorted.filter(({ d }) => Math.abs(d.getTime() - medianMs) <= halfWindowMs);
+  const droppedOutlierTxnCount = sorted.length - kept.length;
+  if (droppedOutlierTxnCount > 0) {
+    logger.warn('[MACRO_ANALYTICS] Dropped outlier-dated txns from daily balance window', {
+      dropped: droppedOutlierTxnCount,
+      windowDays: MAX_DAILY_WINDOW_DAYS
+    });
+  }
 
   const txByDate = {};
-  for (const { tx, d } of sorted) {
+  for (const { tx, d } of kept) {
     const key = d.toISOString().slice(0, 10);
     if (!txByDate[key]) txByDate[key] = [];
     txByDate[key].push(tx);
@@ -145,23 +294,28 @@ export function buildDailyBalances(transactions, openingBalance = 0) {
   let lowest = running;
   let negativeDayCount = 0;
   const daily = [];
-  const cursor = new Date(start);
   let periodDays = 0;
 
-  while (cursor <= end) {
-    const key = cursor.toISOString().slice(0, 10);
+  const startMs = utcDayFloorMs(kept[0].d);
+  const endMs = utcDayFloorMs(kept[kept.length - 1].d);
+  for (let dayMs = startMs; dayMs <= endMs; dayMs += DAY_MS) {
+    const key = new Date(dayMs).toISOString().slice(0, 10);
     for (const tx of txByDate[key] || []) {
-      const n = Number(tx.amount);
-      if (Number.isFinite(n)) running += n;
+      running += signedTxnDelta(tx);
     }
     lowest = Math.min(lowest, running);
     if (running < -0.01) negativeDayCount += 1;
     daily.push({ date: key, balance: round2(running) });
     periodDays += 1;
-    cursor.setDate(cursor.getDate() + 1);
   }
 
-  return { daily, periodDays, negativeDayCount, lowestDailyBalance: round2(lowest) };
+  return {
+    daily,
+    periodDays,
+    negativeDayCount,
+    lowestDailyBalance: round2(lowest),
+    droppedOutlierTxnCount
+  };
 }
 
 export function computeAdbByMonth(dailyBalances, months = 3) {
@@ -324,8 +478,20 @@ export function computeTrueRevenue(transactions, applicationContext = {}, transf
   return { trueMonthlyRevenue, excludedNonRevenue, l3mTrueRevenueAverage, trueTotal: round2(trueTotal) };
 }
 
-function buildForensicBriefing({ adb, liquidity, nsf, mca, revenue }) {
+const OWNER_DRAW_RATIO_ALERT_THRESHOLD = 0.3;
+
+function buildForensicBriefing({ adb, liquidity, nsf, mca, revenue, ownerDraw }) {
   const alerts = [];
+  if (
+    ownerDraw?.drawToRevenueRatio != null &&
+    ownerDraw.drawToRevenueRatio > OWNER_DRAW_RATIO_ALERT_THRESHOLD
+  ) {
+    alerts.push({
+      code: 'HIGH_OWNER_DRAW_RATIO',
+      severity: 'HIGH',
+      message: `Owner draws are ${(ownerDraw.drawToRevenueRatio * 100).toFixed(1)}% of true revenue ($${ownerDraw.totalDraws.toLocaleString()})`
+    });
+  }
   if (liquidity.negativeDayCount >= 3) {
     alerts.push({
       code: 'NEGATIVE_BALANCE_DAYS',
@@ -363,7 +529,13 @@ function buildForensicBriefing({ adb, liquidity, nsf, mca, revenue }) {
     `- **True L3M revenue (avg/mo):** $${revenue.l3mTrueRevenueAverage.toLocaleString()}`,
     mca.detected
       ? `- **MCA stacking:** detected (~$${mca.totalMonthlyDebtService.toLocaleString()}/mo debt service proxy)`
-      : '- **MCA stacking:** not detected'
+      : '- **MCA stacking:** not detected',
+    ownerDraw && ownerDraw.drawCount > 0
+      ? `- **Owner draws:** $${ownerDraw.totalDraws.toLocaleString()} across ${ownerDraw.drawCount} txn(s)` +
+        (ownerDraw.drawToRevenueRatio != null
+          ? ` (${(ownerDraw.drawToRevenueRatio * 100).toFixed(1)}% of true revenue)`
+          : '')
+      : '- **Owner draws:** none detected'
   ].join('\n');
 
   return { summaryMarkdown, alerts };
@@ -390,12 +562,14 @@ export function computeUnderwritingVitals({
   const nsfAndOverdraft = flagNsfAndOverdraft(transactions);
   const mcaStacking = detectMcaStacking(transactions);
   const revenue = computeTrueRevenue(transactions, applicationContext, transferFilterHints);
+  const ownerDraw = computeOwnerDrawMetrics(transactions, applicationContext, revenue);
   const forensicBriefing = buildForensicBriefing({
     adb,
     liquidity,
     nsf: nsfAndOverdraft,
     mca: mcaStacking,
-    revenue
+    revenue,
+    ownerDraw
   });
 
   return {
@@ -404,6 +578,7 @@ export function computeUnderwritingVitals({
     nsfAndOverdraft,
     mcaStacking,
     revenue,
+    ownerDraw,
     forensicBriefing,
     openingBalance: round2(openingBalance),
     closingBalance: closingBalance != null ? round2(closingBalance) : null,
@@ -417,5 +592,7 @@ export default {
   computeAdbByMonth,
   flagNsfAndOverdraft,
   detectMcaStacking,
-  computeTrueRevenue
+  computeTrueRevenue,
+  classifyOwnerDraw,
+  computeOwnerDrawMetrics
 };

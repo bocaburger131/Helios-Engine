@@ -112,8 +112,9 @@ app.post('/api/statements', demoAuth, upload.single('file'), async (req, res) =>
     };
 
     // Simulate processing time
+    const safeName = path.basename(req.file.originalname || 'statement.pdf');
     setTimeout(() => {
-      console.log(`✅ Processing complete for file: ${req.file.originalname}`);
+      console.log(`✅ Processing complete for file: ${safeName}`);
     }, 1000);
 
     res.status(201).json({
@@ -121,7 +122,7 @@ app.post('/api/statements', demoAuth, upload.single('file'), async (req, res) =>
       data: {
         statement: {
           id: `stmt_${Date.now()}`,
-          filename: req.file.originalname,
+          filename: safeName,
           uploadId,
           userId: req.user.id,
           status: 'processed',

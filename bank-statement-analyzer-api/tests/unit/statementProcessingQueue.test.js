@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockAdd = vi.fn().mockResolvedValue({ id: 'job-1' });
 const mockGetJob = vi.fn();
+const mockGetJobs = vi.fn().mockResolvedValue([]);
 const mockGetState = vi.fn();
 
 vi.mock('bullmq', () => ({
   Queue: vi.fn().mockImplementation(() => ({
     add: mockAdd,
     getJob: mockGetJob,
+    getJobs: mockGetJobs,
     client: Promise.resolve({ ping: vi.fn().mockResolvedValue('PONG') })
   }))
 }));
@@ -33,6 +35,33 @@ describe('statementProcessingQueue', () => {
       expect.objectContaining({ jobId: 'test-job-id', uploadSessionId: 'triage_1' }),
       expect.objectContaining({ jobId: 'test-job-id' })
     );
+  });
+
+  it('rejects a second enqueue while a job for the same session is active', async () => {
+    mockGetJobs.mockResolvedValueOnce([
+      { id: 'job-existing', data: { uploadSessionId: 'triage_dup' } }
+    ]);
+    const { enqueueStatementBatchJob } = await import('../../src/services/statementProcessingQueue.js');
+    await expect(
+      enqueueStatementBatchJob({ jobId: 'job-new', uploadSessionId: 'triage_dup', userId: 'u1' })
+    ).rejects.toMatchObject({ code: 'SESSION_JOB_ACTIVE', existingJobId: 'job-existing' });
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+
+  it('allows enqueue when active jobs belong to other sessions', async () => {
+    mockGetJobs.mockResolvedValueOnce([
+      { id: 'job-other', data: { uploadSessionId: 'triage_other' } }
+    ]);
+    const { enqueueStatementBatchJob } = await import('../../src/services/statementProcessingQueue.js');
+    await enqueueStatementBatchJob({ jobId: 'job-new', uploadSessionId: 'triage_dup', userId: 'u1' });
+    expect(mockAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails open when the queue cannot be inspected', async () => {
+    mockGetJobs.mockRejectedValueOnce(new Error('redis down'));
+    const { enqueueStatementBatchJob } = await import('../../src/services/statementProcessingQueue.js');
+    await enqueueStatementBatchJob({ jobId: 'job-x', uploadSessionId: 'triage_x', userId: 'u1' });
+    expect(mockAdd).toHaveBeenCalledTimes(1);
   });
 
   it('getStatementJobStatus maps requires_bank_confirmation returnvalue', async () => {

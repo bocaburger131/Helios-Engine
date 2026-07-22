@@ -79,10 +79,25 @@ export const analyzeStatementWithAlerts = async (req, res) => {
         }
     }];
     
+    const sosData =
+      statement.analysis?.metadata?.sosVerification ||
+      (process.env.USE_SOS_VERIFICATION === 'true' && applicationData.companyName
+        ? await (async () => {
+            const { default: orchestrator } = await import('../services/businessRegistry/orchestrator.js');
+            return orchestrator.verify({
+              businessName: applicationData.companyName,
+              registrationState: applicationData.registrationState,
+              businessAddress: applicationData.businessAddress,
+              jobId: `enhanced-${statementId}`,
+              userId: req.user?.id || null
+            });
+          })()
+        : { skipped: true, reason: 'SOS_DISABLED' });
+
     const alerts = AlertsEngineService.generateAlertsCustom(
       structuredApplicationData,
       finsightReports,
-      {} // sosData - could be enhanced with SOS verification data
+      sosData
     );
 
     // Filter critical and high severity alerts

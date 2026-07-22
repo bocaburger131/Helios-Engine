@@ -37,11 +37,42 @@ export type ChartActivityWeeklyBucket = ChartActivityBucket & {
   weekKey: string;
 };
 
+export type ChartActivityReconciliation = {
+  chartTotalDeposits?: number;
+  chartTotalWithdrawals?: number;
+  summaryTotalDeposits?: number;
+  summaryTotalWithdrawals?: number;
+  deltaDeposits?: number;
+  deltaWithdrawals?: number;
+  withinTolerance?: boolean;
+};
+
+export type ChartActivityWindow = {
+  deposits?: number;
+  withdrawals?: number;
+  net?: number;
+  avgDailyDeposits?: number;
+  avgDailyWithdrawals?: number;
+  avgTxnPerDay?: number;
+  txnCount?: number;
+  daysInWindow?: number;
+  calendarDays?: number;
+  monthKeys?: string[];
+  dateRange?: { startDate?: string; endDate?: string } | null;
+  reconciliation?: ChartActivityReconciliation | null;
+  adb?: number | null;
+  quarterKey?: string;
+};
+
 export type ChartActivity = {
   version?: number;
   openingBalance?: number;
   daily?: ChartActivityBucket[];
   weekly?: ChartActivityWeeklyBucket[];
+  windows?: {
+    l3m?: ChartActivityWindow | null;
+    quarterly?: ChartActivityWindow[];
+  };
   sourceTxnCount?: number;
   computedAt?: string;
 };
@@ -188,6 +219,90 @@ export function filterDailyByMonth(
   monthKey: string
 ): DailyActivityRow[] {
   return rows.filter((r) => r.date.startsWith(monthKey));
+}
+
+export type MonthlySummaryLike = {
+  coveragePeriod?: { startDate?: string; endDate?: string; daysCovered?: number };
+  fileName?: string;
+};
+
+export function monthKeyFromCoverage(summary: MonthlySummaryLike): string | null {
+  const start = summary.coveragePeriod?.startDate;
+  if (!start || start.length < 7) return null;
+  return start.slice(0, 7);
+}
+
+export function resolveL3mMonthKeys(payload: {
+  data?: {
+    statement?: {
+      monthlyStatementSummaries?: MonthlySummaryLike[];
+      analysis?: { chartActivity?: ChartActivity | null };
+    };
+  };
+}): string[] {
+  const fromWindow = payload.data?.statement?.analysis?.chartActivity?.windows?.l3m?.monthKeys;
+  if (Array.isArray(fromWindow) && fromWindow.length > 0) return fromWindow;
+
+  const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
+  const keys = summaries
+    .map(monthKeyFromCoverage)
+    .filter((k): k is string => Boolean(k))
+    .sort();
+  return keys.slice(-3);
+}
+
+export function filterDailyByL3mMonths(
+  rows: DailyActivityRow[],
+  monthKeys: string[]
+): DailyActivityRow[] {
+  if (!monthKeys.length) return rows;
+  const set = new Set(monthKeys);
+  return rows.filter((r) => set.has(r.date.slice(0, 7)));
+}
+
+export function resolveL3mDateRange(
+  payload: {
+    data?: { statement?: { monthlyStatementSummaries?: MonthlySummaryLike[] } };
+  },
+  monthKeys: string[]
+): { startDate: string; endDate: string } | null {
+  const set = new Set(monthKeys);
+  const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
+  let minStart: string | null = null;
+  let maxEnd: string | null = null;
+
+  for (const summary of summaries) {
+    const key = monthKeyFromCoverage(summary);
+    if (!key || !set.has(key)) continue;
+    const start = summary.coveragePeriod?.startDate;
+    const end = summary.coveragePeriod?.endDate || start;
+    if (start && (!minStart || start < minStart)) minStart = start;
+    if (end && (!maxEnd || end > maxEnd)) maxEnd = end;
+  }
+
+  if (!minStart || !maxEnd) return null;
+  return { startDate: minStart, endDate: maxEnd };
+}
+
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+export function formatL3mWindowLabel(monthKeys: string[]): string {
+  if (!monthKeys.length) return "L3M";
+  const first = monthKeys[0];
+  const last = monthKeys[monthKeys.length - 1];
+  const fmt = (mk: string) => {
+    const m = /^(\d{4})-(\d{2})$/.exec(mk);
+    if (!m) return mk;
+    const monthIdx = Number(m[2]) - 1;
+    const year = m[1].slice(2);
+    if (monthIdx < 0 || monthIdx > 11) return mk;
+    return `${MONTH_NAMES[monthIdx]} '${year}`;
+  };
+  if (monthKeys.length === 1) return fmt(first);
+  return `${fmt(first)} – ${fmt(last)}`;
 }
 
 export function getOpeningBalanceFromSummaries(

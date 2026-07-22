@@ -12,10 +12,34 @@ function normalizeRedisUrl(url) {
 }
 
 /**
+ * Single source of truth for the USE_REDIS switch: Redis is ON unless running
+ * tests or explicitly disabled with USE_REDIS=false. All consumers (env.js,
+ * redis.js, queue availability, progress store) must use this helper.
+ */
+export function isRedisDisabled() {
+  return process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false';
+}
+
+function getDisabledRedisConnectionOptions() {
+  return {
+    host: '127.0.0.1',
+    port: 1,
+    maxRetriesPerRequest: 1,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    retryStrategy: () => null
+  };
+}
+
+/**
  * BullMQ / ioredis connection object.
  * @returns {import('bullmq').ConnectionOptions}
  */
 export function getRedisConnectionOptions() {
+  if (isRedisDisabled()) {
+    return getDisabledRedisConnectionOptions();
+  }
+
   if (process.env.REDIS_URL) {
     return {
       url: normalizeRedisUrl(process.env.REDIS_URL),

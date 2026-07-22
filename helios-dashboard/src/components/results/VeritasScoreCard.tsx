@@ -13,6 +13,7 @@ type Props = {
 };
 
 export default function VeritasScoreCard({ view }: Props) {
+  const untrusted = !view.parseTrusted;
   return (
     <div className="veritas-card p-6">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -20,7 +21,7 @@ export default function VeritasScoreCard({ view }: Props) {
       </p>
       <div className="mt-3 flex items-end gap-3">
         <span className="text-4xl font-bold">
-          {view.veritasScore != null ? view.veritasScore.toFixed(1) : "—"}
+          {untrusted ? "—" : view.veritasScore != null ? view.veritasScore.toFixed(1) : "—"}
         </span>
         <span className={`helios-chip ${BADGE_STYLE[view.veritasBadge]}`}>
           {view.veritasBadge}
@@ -33,7 +34,7 @@ export default function VeritasScoreCard({ view }: Props) {
           {view.veraScore != null ? ` · ${view.veraScore}/10` : ""}
         </p>
       )}
-      {view.metrics.l3mAdb != null && (
+      {!untrusted && view.metrics.l3mAdb != null && (
         <p className="mt-2 text-xs text-slate-500">
           L3M ADB {formatCurrency(view.metrics.l3mAdb)}
         </p>

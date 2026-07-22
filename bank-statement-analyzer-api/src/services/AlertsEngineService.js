@@ -6,6 +6,7 @@
  */
 
 import logger from '../utils/logger.js';
+import { detectGarnishments } from '../utils/garnishmentDetection.js';
 
 class AlertsEngineService {
     
@@ -54,6 +55,7 @@ class AlertsEngineService {
                 alerts.push(...this._generateWithdrawalPatternAlerts(finsightReport, index));
                 alerts.push(...this._generateCreditRiskAlerts(finsightReport, index));
                 alerts.push(...this._generateComplianceAlerts(applicationData, finsightReport, index));
+                alerts.push(...this._generateGarnishmentAlerts(finsightReport, index));
                 alerts.push(...this._generateDataQualityAlerts(applicationData, finsightReport, index));
                 alerts.push(...this._generateFraudIndicatorAlerts(finsightReport, index));
                 alerts.push(...this._generateDebtServiceAlerts(applicationData, finsightReport, index));
@@ -864,10 +866,82 @@ class AlertsEngineService {
     static _generateBusinessVerificationAlerts(sosData) {
         const alerts = [];
         
-        if (!sosData) return alerts;
+        if (!sosData || Object.keys(sosData).length === 0) return alerts;
 
-        // Business not found
-        if (!sosData.found) {
+        if (sosData.skipped) {
+            if (sosData.reason === 'SOS_DISABLED') return alerts;
+            if (sosData.alertCode === 'SOS_STATE_MISSING' || sosData.reason === 'SOS_STATE_MISSING') {
+                alerts.push({
+                    code: 'SOS_STATE_MISSING',
+                    type: 'COMPLIANCE',
+                    severity: 'MEDIUM',
+                    message: 'Registration state not found on application — Secretary of State verification skipped',
+                    data: { businessName: sosData.businessName, timestamp: sosData.timestamp },
+                    timestamp: new Date()
+                });
+                return alerts;
+            }
+            if (sosData.onboarding || sosData.alertCode === 'SOS_ONBOARDING' || sosData.reason === 'SOS_ONBOARDING') {
+                alerts.push({
+                    code: 'SOS_ONBOARDING',
+                    type: 'COMPLIANCE',
+                    severity: 'LOW',
+                    message: `Secretary of State verification for ${sosData.state || 'this state'} is being onboarded`,
+                    data: { state: sosData.state, businessName: sosData.businessName },
+                    timestamp: new Date()
+                });
+                return alerts;
+            }
+            if (sosData.alertCode === 'SOS_CREDENTIALS_REQUIRED' || sosData.reason === 'SOS_CREDENTIALS_REQUIRED') {
+                alerts.push({
+                    code: 'SOS_CREDENTIALS_REQUIRED',
+                    type: 'COMPLIANCE',
+                    severity: 'MEDIUM',
+                    message: 'State registry portal requires account credentials — use Vera to add credits or sign up',
+                    data: {
+                        state: sosData.state,
+                        portalSignupUrl: sosData.portalSignupUrl,
+                        accessTier: sosData.accessTier
+                    },
+                    timestamp: new Date()
+                });
+                return alerts;
+            }
+            if (sosData.alertCode === 'SOS_MANUAL_REVIEW' || sosData.reason === 'SOS_MANUAL_REVIEW') {
+                alerts.push({
+                    code: 'SOS_MANUAL_REVIEW',
+                    type: 'COMPLIANCE',
+                    severity: 'MEDIUM',
+                    message: 'Manual Secretary of State review required for this state',
+                    data: { state: sosData.state },
+                    timestamp: new Date()
+                });
+                return alerts;
+            }
+            if (
+                sosData.alertCode === 'SOS_VERIFICATION_ERROR' ||
+                sosData.reason === 'SOS_VERIFICATION_ERROR'
+            ) {
+                alerts.push({
+                    code: 'SOS_VERIFICATION_ERROR',
+                    type: 'COMPLIANCE',
+                    severity: 'LOW',
+                    message:
+                        'Secretary of State verification temporarily unavailable — automated repair queued',
+                    data: {
+                        state: sosData.state,
+                        businessName: sosData.businessName,
+                        reason: sosData.reason
+                    },
+                    timestamp: new Date()
+                });
+                return alerts;
+            }
+            return alerts;
+        }
+
+        // Business not found after real verification attempt
+        if (!sosData.found && sosData.verificationAttempted) {
             alerts.push({
                 code: 'BUSINESS_NOT_VERIFIED',
                 severity: 'HIGH',
@@ -1156,6 +1230,50 @@ class AlertsEngineService {
                     weekendTransactionCount: weekendTransactions.length,
                     totalTransactions: transactions.length,
                     weekendPercentage: (weekendTransactions.length / transactions.length * 100).toFixed(1)
+                },
+                timestamp: new Date()
+            });
+        }
+
+        return alerts;
+    }
+
+    /**
+     * Generate garnishment and levy alerts from transaction descriptions.
+     * @private
+     */
+    static _generateGarnishmentAlerts(finsightReport, reportIndex = 0) {
+        const alerts = [];
+
+        if (!finsightReport?.transactions) return alerts;
+
+        const { flags, hasGarnishment } = detectGarnishments(finsightReport.transactions);
+        if (!hasGarnishment) return alerts;
+
+        const severityByCode = {
+            CHILD_SUPPORT_GARNISHMENT: 'HIGH',
+            TAX_LEVY_DETECTED: 'CRITICAL',
+            WAGE_GARNISHMENT_DETECTED: 'HIGH'
+        };
+
+        const titleByCode = {
+            CHILD_SUPPORT_GARNISHMENT: 'Child support garnishment detected',
+            TAX_LEVY_DETECTED: 'Tax levy detected',
+            WAGE_GARNISHMENT_DETECTED: 'Wage garnishment detected'
+        };
+
+        for (const flag of flags) {
+            alerts.push({
+                code: flag.code,
+                type: 'COMPLIANCE',
+                severity: severityByCode[flag.code] || 'HIGH',
+                title: titleByCode[flag.code] || 'Garnishment detected',
+                message: `${flag.count} garnishment-related transaction(s) totaling $${flag.totalAmount.toFixed(2)}`,
+                data: {
+                    count: flag.count,
+                    totalAmount: flag.totalAmount,
+                    examples: flag.examples,
+                    reportIndex
                 },
                 timestamp: new Date()
             });

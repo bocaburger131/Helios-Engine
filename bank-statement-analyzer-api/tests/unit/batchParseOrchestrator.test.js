@@ -73,6 +73,7 @@ vi.mock('../../src/services/llm/aiLayoutService.js', () => ({
 import {
   enhanceBatchParsesWithTeacher,
   hasChecksumBleed,
+  needsTemplateRescue,
   batchUseVisionRowFallback,
   detectProgrammaticAnomalies
 } from '../../src/services/batchParseOrchestrator.js';
@@ -253,6 +254,46 @@ describe('enhanceBatchParsesWithTeacher', () => {
 
     expect(shouldRejectStoredMongoTemplate).toHaveBeenCalled();
     expect(learnTemplateLayout).toHaveBeenCalled();
+  });
+});
+
+describe('needsTemplateRescue', () => {
+  it('returns true for checksum failure with txns even without AGGREGATE_MISMATCH probe', () => {
+    const stmt = {
+      parseQuality: 'FAILED_CHECKSUM',
+      checksumRecon: { ok: false, delta: '12.0000' },
+      checksumDeltaProbe: { probeHint: 'CLOSING_MISMATCH' },
+      transactions: [{ date: '2025-01-01', description: 'Deposit', amount: 100, type: 'credit' }],
+      parseResult: { metadata: { extractionTier: 2 } }
+    };
+    expect(needsTemplateRescue(stmt)).toBe(true);
+  });
+
+  it('returns false for tier-1 profile-reconciled statements', () => {
+    const stmt = {
+      parseQuality: 'FAILED_CHECKSUM',
+      checksumRecon: { ok: false },
+      transactions: [{ amount: 100, type: 'credit' }],
+      parseResult: {
+        metadata: {
+          extractionTier: 1,
+          profileReconciliation: { checksumOk: true }
+        }
+      }
+    };
+    expect(needsTemplateRescue(stmt)).toBe(false);
+  });
+
+  it('returns true for zero-txn layout misalignment', () => {
+    const stmt = {
+      parseQuality: 'FAILED_CHECKSUM',
+      checksumRecon: { ok: false },
+      transactions: [],
+      openingBalance: 1000,
+      closingBalance: 2000,
+      parseResult: { metadata: {} }
+    };
+    expect(needsTemplateRescue(stmt)).toBe(true);
   });
 });
 

@@ -223,6 +223,109 @@ function computeDepositVelocity(monthlyBreakdown) {
   };
 }
 
+const RUNWAY_HORIZON_DAYS = 30;
+const STRESSED_BURN_MULTIPLIER = 1.2;
+// A positive net daily flow under 5% of daily burn is a knife-edge surplus, not safety.
+const FRAGILE_POSITIVE_NET_RATIO = 0.05;
+
+/**
+ * 30-Day Cash Runway stress test. Projects days until cash depletion under three
+ * scenarios: current burn, +20% burn, and full revenue stop.
+ * @param {{ monthlyBreakdown: Array<object>, cashPosition: number|null, daysCovered: number, fallbackDeposits?: number, fallbackWithdrawals?: number }} params
+ */
+export function computeCashRunwayStress({
+  monthlyBreakdown = [],
+  cashPosition = null,
+  daysCovered = 90,
+  fallbackDeposits = 0,
+  fallbackWithdrawals = 0
+} = {}) {
+  let windowDeposits = 0;
+  let windowWithdrawals = 0;
+  for (const m of monthlyBreakdown) {
+    windowDeposits += Number(m.deposits) || 0;
+    windowWithdrawals += Number(m.withdrawals) || 0;
+  }
+  // Source symmetry: never mix the monthly window with statement-summary fallbacks.
+  // The window pair is trusted only when it observed burn; a deposits-only window
+  // (partial bucketing) must not mask fallback withdrawals as NO_BURN_OBSERVED.
+  const useWindowPair = windowWithdrawals > 0;
+  const totalDeposits = useWindowPair ? windowDeposits : Number(fallbackDeposits) || 0;
+  const totalWithdrawals = useWindowPair ? windowWithdrawals : Number(fallbackWithdrawals) || 0;
+  const days = Number(daysCovered) > 0 ? Number(daysCovered) : 90;
+
+  const dailyInflow = totalDeposits / days;
+  const dailyBurn = totalWithdrawals / days;
+  const cash =
+    cashPosition != null && Number.isFinite(Number(cashPosition)) ? Number(cashPosition) : null;
+
+  if (cash === null || dailyBurn <= 0) {
+    return {
+      available: false,
+      reason: cash === null ? 'NO_CASH_POSITION' : 'NO_BURN_OBSERVED',
+      horizonDays: RUNWAY_HORIZON_DAYS,
+      cashPosition: cash,
+      dailyInflow: round(dailyInflow, 2),
+      dailyBurn: round(dailyBurn, 2),
+      scenarios: null,
+      riskBand: null
+    };
+  }
+
+  /** Days until cash hits zero at a net daily flow; null = not depleting. */
+  const projectRunway = (netDailyFlow) => {
+    if (netDailyFlow >= 0) {
+      return {
+        runwayDays: null,
+        netDailyFlow: round(netDailyFlow, 2),
+        survivesHorizon: true,
+        fragilePositive: netDailyFlow < FRAGILE_POSITIVE_NET_RATIO * dailyBurn
+      };
+    }
+    const runwayDays = cash <= 0 ? 0 : Math.floor(cash / -netDailyFlow);
+    return {
+      runwayDays,
+      netDailyFlow: round(netDailyFlow, 2),
+      survivesHorizon: runwayDays >= RUNWAY_HORIZON_DAYS,
+      fragilePositive: false
+    };
+  };
+
+  const scenarios = {
+    currentBurn: projectRunway(dailyInflow - dailyBurn),
+    stressedBurn20: {
+      ...projectRunway(dailyInflow - dailyBurn * STRESSED_BURN_MULTIPLIER),
+      burnMultiplier: STRESSED_BURN_MULTIPLIER
+    },
+    revenueStop: projectRunway(-dailyBurn)
+  };
+
+  const failsHorizon = (s) => !s.survivesHorizon;
+  const under = (s, d) => s.runwayDays !== null && s.runwayDays < d;
+
+  let riskBand = 'LOW';
+  if (under(scenarios.currentBurn, 15) || cash <= 0) {
+    riskBand = 'CRITICAL';
+  } else if (failsHorizon(scenarios.currentBurn) || under(scenarios.stressedBurn20, 15)) {
+    riskBand = 'HIGH';
+  } else if (failsHorizon(scenarios.stressedBurn20) || failsHorizon(scenarios.revenueStop)) {
+    riskBand = 'MODERATE';
+  } else if (scenarios.currentBurn.fragilePositive) {
+    // Cash-positive on a razor's edge: don't let a $0.01/day surplus read as safe.
+    riskBand = 'MODERATE';
+  }
+
+  return {
+    available: true,
+    horizonDays: RUNWAY_HORIZON_DAYS,
+    cashPosition: round(cash, 2),
+    dailyInflow: round(dailyInflow, 2),
+    dailyBurn: round(dailyBurn, 2),
+    scenarios,
+    riskBand
+  };
+}
+
 function computeLiquidityFloor(financialSummary, balanceAnalysis) {
   const adb = Number(balanceAnalysis?.averageDailyBalance) || 0;
   const opening = Number(financialSummary?.openingBalance) || 0;
@@ -272,9 +375,27 @@ export function computeForensicIntelligence({
   const liquidityFloor = computeLiquidityFloor(financialSummary, balanceAnalysis);
   const depositVelocity = computeDepositVelocity(bucket.monthlyBreakdown);
 
+  // Cash position preference: printed closing balance, then opening + net change, then ADB.
+  const closing = Number(financialSummary?.closingBalance);
+  const opening = Number(financialSummary?.openingBalance);
+  const netChange = Number(financialSummary?.netChange);
+  let cashPosition = null;
+  if (Number.isFinite(closing)) cashPosition = closing;
+  else if (Number.isFinite(opening) && Number.isFinite(netChange)) cashPosition = opening + netChange;
+  else if (adb > 0) cashPosition = adb;
+
+  const cashRunwayStress = computeCashRunwayStress({
+    monthlyBreakdown: bucket.monthlyBreakdown,
+    cashPosition,
+    daysCovered,
+    fallbackDeposits: Number(financialSummary?.totalDeposits) || 0,
+    fallbackWithdrawals: Number(financialSummary?.totalWithdrawals) || 0
+  });
+
   return {
     prospectiveDSCR,
     daysCashOnHand,
+    cashRunwayStress,
     depositConsistencyScore,
     momentum,
     liquidityFloor,

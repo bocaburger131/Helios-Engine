@@ -91,6 +91,25 @@
       padding: 24px 0;
     }
     .helios-list-error { color: #dc2626; }
+    .helios-warnings-panel {
+      margin: 0 24px 16px;
+      padding: 14px 16px;
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 12px;
+      color: #92400e;
+    }
+    .helios-warnings-panel h2 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: #b45309;
+    }
+    .helios-warnings-panel ul {
+      margin: 0;
+      padding-left: 1.2rem;
+      font-size: 0.88rem;
+    }
+    .helios-warnings-panel li { margin: 4px 0; }
     body.helios-app .helios-report { min-height: auto; }
     .helios-main-compact { padding: 0 24px 100px; }
   </style>
@@ -125,6 +144,7 @@
       <a class="helios-btn helios-btn-ghost" href="./manual-upload.html">New upload</a>
     </div>
     <p id="helios-batch-status" class="helios-batch-status" hidden role="status"></p>
+    <div id="helios-warnings-panel" class="helios-warnings-panel" hidden role="alert"></div>
     <div id="batch-picker" hidden></div>
     <div id="helios-report-root" data-compact="true" data-manual-init hidden></div>
   </div>

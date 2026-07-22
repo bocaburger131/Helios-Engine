@@ -11,7 +11,8 @@
  * @property {string|null} dbaName
  * @property {string|null} ein
  * @property {number|null} requestedAmount
- * @property {number|null} grossAnnualRevenue
+ * @property {string|null} grossAnnualRevenue
+ * @property {string|null} registrationState
  * @property {ExtractionMethod} extractionMethod
  * @property {string|null} templateId
  * @property {Record<string, { method: string, confidence: number }>} fieldProvenance
@@ -22,7 +23,8 @@ export const PARSED_APPLICATION_FIELDS = [
   'dbaName',
   'ein',
   'requestedAmount',
-  'grossAnnualRevenue'
+  'grossAnnualRevenue',
+  'registrationState'
 ];
 
 /** @returns {ParsedApplication} */
@@ -33,6 +35,7 @@ export function createEmptyParsedApplication() {
     ein: null,
     requestedAmount: null,
     grossAnnualRevenue: null,
+    registrationState: null,
     extractionMethod: 'none',
     templateId: null,
     fieldProvenance: {}
@@ -50,6 +53,7 @@ export function normalizeParsedApplication(raw = {}) {
   out.ein = normalizeEin(raw.ein);
   out.requestedAmount = parseCurrency(raw.requestedAmount);
   out.grossAnnualRevenue = parseCurrency(raw.grossAnnualRevenue);
+  out.registrationState = sanitizeString(raw.registrationState);
   out.extractionMethod = raw.extractionMethod || 'none';
   out.templateId = raw.templateId || null;
   out.fieldProvenance =

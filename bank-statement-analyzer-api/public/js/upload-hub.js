@@ -48,20 +48,20 @@
 
   function resultsDashboardUrl(id, options) {
     options = options || {};
-    const base = dashboardBaseUrl();
     const token = getToken();
+    if (options.warnings) {
+      let url = './manual-results.html?id=' + encodeURIComponent(id) + '&warnings=1';
+      if (token) url += '&token=' + encodeURIComponent(token);
+      return url;
+    }
+    const base = dashboardBaseUrl();
     const params = new URLSearchParams();
-    if (options.warnings) params.set('warnings', '1');
     if (token) params.set('token', token);
     const qs = params.toString();
     if (base) {
       return base + '/dashboard/' + encodeURIComponent(id) + (qs ? '?' + qs : '');
     }
-    return (
-      './manual-results.html?id=' +
-      encodeURIComponent(id) +
-      (options.warnings ? '&warnings=1' : '')
-    );
+    return './manual-results.html?id=' + encodeURIComponent(id);
   }
 
   function getToken() {
@@ -889,7 +889,8 @@
     if (res.status !== 201) return false;
     const id = extractStatementId(json);
     if (!id) return false;
-    window.location.href = resultsDashboardUrl(id);
+    const warnings = json.businessStatus === 'COMPLETED_WITH_WARNINGS';
+    window.location.href = resultsDashboardUrl(id, { warnings });
     return true;
   }
 
@@ -1134,8 +1135,13 @@
 
     if (res.status === 201 && id) {
       state.lastResultId = id;
+      const warnings = json.businessStatus === 'COMPLETED_WITH_WARNINGS';
+      const diagnosticSummaries = Array.isArray(json.diagnosticSummaries) ? json.diagnosticSummaries : [];
       try {
         sessionStorage.setItem('macroResult', JSON.stringify(json));
+        if (warnings && diagnosticSummaries.length) {
+          sessionStorage.setItem('macroDiagnosticSummaries', JSON.stringify(diagnosticSummaries));
+        }
       } catch {
         /* ignore */
       }
@@ -1152,9 +1158,9 @@
         '<a href="./helios-report.html?id=' +
         encodeURIComponent(id) +
         '">Open Forensic Report</a> · <a href="' +
-        escapeHtml(resultsDashboardUrl(id)) +
+        escapeHtml(resultsDashboardUrl(id, { warnings })) +
         '">Results dashboard</a>';
-      appendSystemBubble(recoveryNote + 'Macro analysis complete. ' + link, 'is-success');
+      appendSystemBubble(recoveryNote + 'Macro analysis complete. ' + link, warnings ? 'is-warning' : 'is-success');
       clearTriage();
       state.uploading = false;
       els.dropZone.classList.remove('is-busy');

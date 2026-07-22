@@ -48,4 +48,42 @@ describe('envelope-shape contract', () => {
       expect(envelope.data).toHaveProperty(key);
     }
   });
+
+  it('buildMacroResponseEnvelope attaches a composed intelligenceSummary', () => {
+    const envelope = buildMacroResponseEnvelope({
+      statementId: '507f1f77bcf86cd799439011',
+      consolidatedMacroAnalysis: {
+        summary: { totalAccountGroups: 1 },
+        forensicIntelligence: {
+          cashRunwayStress: {
+            available: true,
+            riskBand: 'HIGH',
+            cashPosition: 1000,
+            scenarios: {
+              currentBurn: { runwayDays: 20, survivesHorizon: false },
+              stressedBurn20: { runwayDays: 16, survivesHorizon: false },
+              revenueStop: { runwayDays: 10, survivesHorizon: false }
+            }
+          },
+          prospectiveDSCR: 1.2
+        },
+        underwritingVitals: {
+          ownerDraw: { totalDraws: 3000, drawCount: 2, drawToRevenueRatio: 0.35 }
+        }
+      },
+      macroAgg: {},
+      allAlerts: [{ code: 'CHILD_SUPPORT_GARNISHMENT', severity: 'HIGH', message: 'x' }],
+      accountGroupResults: [{ veritasScore: 700 }],
+      applicationData: { companyName: 'Test Co' }
+    });
+
+    const summary = envelope.data.intelligenceSummary;
+    expect(summary).toBeTruthy();
+    expect(summary.headlineRiskBand).toBe('HIGH');
+    expect(summary.cashRunway.riskBand).toBe('HIGH');
+    expect(summary.ownerDraw.drawToRevenueRatio).toBe(0.35);
+    expect(summary.garnishmentFlags.map((f) => f.code)).toContain('CHILD_SUPPORT_GARNISHMENT');
+    expect(summary.veritas.averageScore).toBe(700);
+    expect(summary.narrative).toMatch(/Intelligence Summary/);
+  });
 });

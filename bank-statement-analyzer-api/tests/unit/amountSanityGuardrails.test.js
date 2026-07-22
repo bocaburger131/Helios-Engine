@@ -111,4 +111,30 @@ describe('applyParseQualityPipeline', () => {
     const { parseQuality } = applyParseQualityPipeline(stmt, {});
     expect(parseQuality).toBe('FAILED_CHECKSUM');
   });
+
+  it('marks FAILED_CHECKSUM when printed deposit totals drift despite closing match', () => {
+    const stmt = {
+      fileName: 'drift.pdf',
+      openingBalance: 1000,
+      closingBalance: 1200,
+      transactions: [
+        { date: '2024-01-15', description: 'Deposit', amount: 200, type: 'credit', rawAmount: '200.00' }
+      ],
+      stitcher: {
+        typeA: {
+          printed: {
+            opening: 1000,
+            closing: 1200,
+            totalDeposits: 500,
+            totalWithdrawals: 0
+          }
+        }
+      },
+      parseResult: {}
+    };
+    const { parseQuality, checksumRecon } = applyParseQualityPipeline(stmt, {});
+    expect(parseQuality).toBe('FAILED_CHECKSUM');
+    expect(checksumRecon.depositsMatch).toBe(false);
+    expect(checksumRecon.closingMatch).toBe(true);
+  });
 });

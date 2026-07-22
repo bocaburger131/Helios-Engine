@@ -6,6 +6,7 @@
 import crypto from 'crypto';
 import { Queue } from 'bullmq';
 import { getBullMqConnection } from '../config/bullMqConnection.js';
+import { isRedisDisabled } from '../config/redisConnection.js';
 import logger from '../utils/logger.js';
 
 export const STATEMENT_PROCESSING_QUEUE = 'statement-processing';
@@ -27,6 +28,39 @@ export function getStatementProcessingQueue() {
   return queueInstance;
 }
 
+/** Close the producer-side queue connection (API graceful shutdown). */
+export async function closeStatementProcessingQueue() {
+  if (!queueInstance) return;
+  try {
+    await queueInstance.close();
+    logger.info('[STATEMENT_QUEUE] Queue connection closed');
+  } catch (err) {
+    logger.warn(`[STATEMENT_QUEUE] Queue close failed: ${err.message}`);
+  } finally {
+    queueInstance = null;
+  }
+}
+
+/**
+ * Best-effort guard: find a not-yet-finished job already queued for a session.
+ * Prevents concurrent POST /batch + confirm-bank from double-processing one
+ * triage session. Fails open if the queue cannot be inspected.
+ * @param {string} uploadSessionId
+ */
+export async function findActiveJobForSession(uploadSessionId) {
+  if (!uploadSessionId) return null;
+  try {
+    const queue = getStatementProcessingQueue();
+    if (typeof queue.getJobs !== 'function') return null;
+    const jobs = await queue.getJobs(['active', 'waiting', 'delayed', 'prioritized'], 0, 200);
+    return (
+      (jobs || []).find((j) => j?.data?.uploadSessionId === uploadSessionId) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param {object} jobData
  * @param {string} jobData.jobId
@@ -36,6 +70,16 @@ export async function enqueueStatementBatchJob(jobData) {
   const jobId = String(jobData.jobId || crypto.randomUUID());
   const queue = getStatementProcessingQueue();
   const payload = { ...jobData, jobId };
+
+  const activeJob = await findActiveJobForSession(payload.uploadSessionId);
+  if (activeJob && String(activeJob.id) !== jobId) {
+    const err = new Error(
+      `A batch job (${activeJob.id}) is already queued or running for session ${payload.uploadSessionId}`
+    );
+    err.code = 'SESSION_JOB_ACTIVE';
+    err.existingJobId = String(activeJob.id);
+    throw err;
+  }
 
   try {
     const job = await queue.add('parse-and-macro', payload, { jobId });
@@ -109,7 +153,7 @@ export async function getStatementJobStatus(jobId) {
 }
 
 export async function isStatementQueueAvailable() {
-  if (process.env.USE_REDIS === 'false') return false;
+  if (isRedisDisabled()) return false;
   try {
     const queue = getStatementProcessingQueue();
     const client = await queue.client;
@@ -126,6 +170,8 @@ export async function isStatementQueueAvailable() {
 export default {
   STATEMENT_PROCESSING_QUEUE,
   getStatementProcessingQueue,
+  closeStatementProcessingQueue,
+  findActiveJobForSession,
   enqueueStatementBatchJob,
   getStatementJobStatus,
   isStatementQueueAvailable

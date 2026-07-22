@@ -9,6 +9,7 @@ import { normalizeInstitutionName } from './identityMethodRank.js';
 import { resolveLayoutTemplateForParse } from '../services/institutionalTemplatePersist.js';
 import { buildDocumentMap } from '../services/extraction/layoutPipeline/layoutMapperService.js';
 import { buildLayoutDiscoveryPayload } from '../services/extraction/layoutPipeline/layoutDiscoveryHelper.js';
+import { isDemoMode } from '../config/appMode.js';
 
 /**
  * Build parseResult-shaped object from sidecar adapter output.
@@ -76,8 +77,9 @@ export async function parseOneStatementPdfForBatch({
 
     let parseResult;
     const batchRtn = finalAnchorData?.rtn ?? identitySources?.rtn ?? null;
+    const demoMode = isDemoMode();
     let templateHint = null;
-    if (batchRtn) {
+    if (batchRtn && !demoMode) {
       try {
         templateHint = await resolveLayoutTemplateForParse(batchRtn);
       } catch (hintErr) {
@@ -91,7 +93,7 @@ export async function parseOneStatementPdfForBatch({
         fileBuffer,
         { extractionMode: EXTRACTION_MODES.SCAN },
         {
-          bankName: confirmedBankName || sessionConfirmedBank?.bankName,
+          // No extraction profile is resolved pre-OCR; sidecar runs the generic layout.
           fileName: file.originalname
         }
       );
@@ -134,7 +136,7 @@ export async function parseOneStatementPdfForBatch({
         correlationId,
         fileName: file.originalname,
         extractionMode: modeInfo.extractionMode,
-        forceLayoutFirstPrimary: true,
+        forceLayoutFirstPrimary: !demoMode,
         layoutTemplate: templateHint?.mapping ?? null,
         templateHintMeta: templateHint
       });

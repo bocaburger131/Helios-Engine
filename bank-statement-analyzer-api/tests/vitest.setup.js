@@ -1,9 +1,9 @@
 import { vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { EventEmitter } from 'events';
 import { Readable } from 'stream';
 import Redis from 'ioredis';
+import { createTestMongoServer } from './utils/mongoMemory.js';
 
 // Minimal valid 1-page PDF bytes used as the default readFileSync return value
 // so that upload controllers that read from disk don't crash with undefined.
@@ -16,45 +16,77 @@ const MINIMAL_PDF_BUFFER = Buffer.from(
   'trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF\n'
 );
 
-// Mock the fs module globally
-vi.mock('fs', () => ({
-  default: {
-    existsSync: vi.fn().mockReturnValue(true),
-    rmSync: vi.fn(),
-    writeFileSync: vi.fn(),
-    readFileSync: vi.fn().mockReturnValue(MINIMAL_PDF_BUFFER),
-    mkdirSync: vi.fn(),
-    readdirSync: vi.fn().mockReturnValue([]),
-    statSync: vi.fn().mockReturnValue({ size: 1024, isFile: () => true }),
-  createWriteStream: vi.fn(),
-  createReadStream: vi.fn(() => {
-    const readable = new Readable();
-    readable.push(MINIMAL_PDF_BUFFER);
-    readable.push(null);
-    return readable;
-  }),
-  promises: {
-    readFile: vi.fn().mockResolvedValue(MINIMAL_PDF_BUFFER),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    unlink: vi.fn().mockResolvedValue(undefined),
-    mkdir: vi.fn().mockResolvedValue(undefined)
+function wantsPdfBuffer(filePath) {
+  const p = String(filePath).replace(/\\/g, '/');
+  return (
+    p.endsWith('.pdf') ||
+    p.includes('/triage/') ||
+    p.includes('/uploads/') ||
+    p.includes('statement') && p.endsWith('.pdf')
+  );
+}
+
+// Mock fs — delegate to real fs for JSON/schemas; PDF buffer only for upload/triage paths
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  const actualFs = actual.default ?? actual;
+
+  const readFileSync = vi.fn((filePath, options) => {
+    if (wantsPdfBuffer(filePath)) return MINIMAL_PDF_BUFFER;
+    return actualFs.readFileSync(filePath, options);
+  });
+
+  const createReadStream = vi.fn((filePath, options) => {
+    if (wantsPdfBuffer(filePath)) {
+      const readable = new Readable();
+      readable.push(MINIMAL_PDF_BUFFER);
+      readable.push(null);
+      return readable;
+    }
+    return actualFs.createReadStream(filePath, options);
+  });
+
+  const readFile = vi.fn(async (filePath, options) => {
+    if (wantsPdfBuffer(filePath)) return MINIMAL_PDF_BUFFER;
+    return actualFs.promises.readFile(filePath, options);
+  });
+
+  const fsMock = {
+    ...actualFs,
+    readFileSync,
+    createReadStream,
+    promises: {
+      ...actualFs.promises,
+      readFile
+    }
+  };
+
+  return {
+    ...actual,
+    default: fsMock,
+    readFileSync,
+    createReadStream,
+    existsSync: actualFs.existsSync.bind(actualFs),
+    rmSync: actualFs.rmSync?.bind(actualFs) ?? vi.fn(),
+    writeFileSync: actualFs.writeFileSync?.bind(actualFs) ?? vi.fn(),
+    mkdirSync: actualFs.mkdirSync?.bind(actualFs) ?? vi.fn(),
+    readdirSync: actualFs.readdirSync?.bind(actualFs) ?? vi.fn(() => []),
+    statSync: actualFs.statSync?.bind(actualFs) ?? vi.fn(() => ({ size: 1024, isFile: () => true })),
+    createWriteStream: actualFs.createWriteStream?.bind(actualFs) ?? vi.fn()
+  };
+});
+
+vi.mock('../src/services/perplexityService.js', () => {
+  class MockPerplexityService {
+    constructor() {
+      this.analyzeText = vi.fn().mockResolvedValue({ analysis: { text: 'mock perplexity' } });
+    }
   }
-},
-existsSync: vi.fn().mockReturnValue(true),
-rmSync: vi.fn(),
-writeFileSync: vi.fn(),
-readFileSync: vi.fn().mockReturnValue(MINIMAL_PDF_BUFFER),
-mkdirSync: vi.fn(),
-readdirSync: vi.fn().mockReturnValue([]),
-statSync: vi.fn().mockReturnValue({ size: 1024, isFile: () => true }),
-createWriteStream: vi.fn(),
-createReadStream: vi.fn(() => {
-  const readable = new Readable();
-  readable.push(MINIMAL_PDF_BUFFER);
-  readable.push(null);
-  return readable;
-})
-}));
+  return {
+    PerplexityService: MockPerplexityService,
+    default: MockPerplexityService
+  };
+});
 
 // Mock the logger globally
 vi.mock('../src/utils/logger.js', () => ({
@@ -72,7 +104,7 @@ let mongoAvailable = false;
 // MongoDB Memory Server Setup (optional — pure unit tests run if binary download fails)
 beforeAll(async () => {
   try {
-    mongoServer = await MongoMemoryServer.create();
+    mongoServer = await createTestMongoServer();
     const mongoUri = mongoServer.getUri();
     await mongoose.connect(mongoUri, {
       useNewUrlParser: true,

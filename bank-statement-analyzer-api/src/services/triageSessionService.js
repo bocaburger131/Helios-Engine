@@ -93,6 +93,46 @@ export function getConfirmedBankForFile(uploadSessionId, fileOriginalName) {
   return session.manifest.meta.confirmedBanks[fileOriginalName] || null;
 }
 
+/**
+ * Verify caller may access a triage session (owner user id or session access token).
+ * @param {import('express').Request} req
+ * @param {{ manifest?: { meta?: Record<string, unknown> } }|null} session
+ */
+export function assertTriageSessionAccess(req, session) {
+  if (!session?.manifest) {
+    return { ok: false, status: 404, error: 'Upload session expired or not found' };
+  }
+
+  const meta = session.manifest.meta || {};
+  const requestUserId = String(req.user?.id ?? 'anonymous');
+  const accessToken = String(
+    req.headers?.['x-triage-access-token'] ?? req.body?.triageAccessToken ?? ''
+  ).trim();
+  const publicOwnerIds = new Set(['public-submit', 'anonymous']);
+
+  if (meta.sessionAccessToken && accessToken === meta.sessionAccessToken) {
+    return { ok: true };
+  }
+  if (meta.ownerUserId && !publicOwnerIds.has(String(meta.ownerUserId))) {
+    if (requestUserId === String(meta.ownerUserId)) {
+      return { ok: true };
+    }
+    return { ok: false, status: 403, error: 'Triage session access denied' };
+  }
+  if (meta.ownerUserId && publicOwnerIds.has(String(meta.ownerUserId))) {
+    return { ok: false, status: 403, error: 'Triage session access denied' };
+  }
+  if (!meta.ownerUserId && !meta.sessionAccessToken) {
+    return { ok: true };
+  }
+
+  return { ok: false, status: 403, error: 'Triage session access denied' };
+}
+
+export function createSessionAccessToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 export function loadTriageSession(uploadSessionId) {
   const dir = sessionDir(uploadSessionId);
   const manifestPath = path.join(dir, 'manifest.json');
@@ -103,15 +143,21 @@ export function loadTriageSession(uploadSessionId) {
     return null;
   }
 
+  // Lazy file handles: sessions can hold hundreds of MB of PDFs, and most
+  // callers (access checks, enqueue, manifest reads) never touch the bytes.
   const files = (manifest.files || []).map((f) => {
     const filePath = path.join(dir, f.storedName);
-    const buffer = fs.readFileSync(filePath);
+    const readBuffer = () => fs.readFileSync(filePath);
     return {
       originalname: f.originalName,
       mimetype: f.mimetype,
       size: f.size,
       path: filePath,
-      buffer
+      readBuffer,
+      // Compatibility with multer-shaped consumers; reads on demand, caches nothing.
+      get buffer() {
+        return readBuffer();
+      }
     };
   });
 
@@ -120,11 +166,13 @@ export function loadTriageSession(uploadSessionId) {
 
 export default {
   createUploadSessionId,
+  createSessionAccessToken,
   saveTriageSession,
   updateTriageSessionMeta,
   saveConfirmedBankForSession,
   getConfirmedBankForFile,
   loadTriageSession,
+  assertTriageSessionAccess,
   TRIAGE_ROOT,
   SESSION_TTL_MS
 };

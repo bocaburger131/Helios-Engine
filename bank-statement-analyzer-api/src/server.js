@@ -14,8 +14,12 @@ import mongoose from 'mongoose';
 import app from './app.js';
 import logger from './utils/logger.js';
 import { connectRedis, disconnectRedis } from './config/redis.js';
+import { closeStatementProcessingQueue } from './services/statementProcessingQueue.js';
+import cleanupService from './services/cleanupService.js';
 import { getMongoUri, getMongoUriSource, sanitizeMongoUri } from './config/mongoUri.js';
 import './models/InstitutionalProfile.js';
+import './models/StateRegistryProfile.js';
+import { seedStateRegistryProfiles } from './services/businessRegistry/seedProfiles.js';
 
 const PORT = process.env.PORT || 3000;
 
@@ -38,6 +42,11 @@ const connectDB = async () => {
       socketTimeoutMS: 45000
     });
     logger.info('Connected to MongoDB');
+    try {
+      await seedStateRegistryProfiles();
+    } catch (seedErr) {
+      logger.warn(`State registry seed skipped: ${seedErr.message}`);
+    }
   } catch (error) {
     logger.error(`MongoDB connection error: ${error.message || error.code || 'unknown error'}`);
     logger.warn('Continuing without database connection');
@@ -69,6 +78,7 @@ const startServer = async () => {
     validateModeConfig();
     await connectDB();
     await connectRedis();
+    cleanupService.start();
     
     const server = app.listen(PORT, () => {
       logger.info(`🚀 Helios Engine Server is successfully running on port ${PORT}`);
@@ -90,25 +100,21 @@ const startServer = async () => {
     });
     
     // Handle process termination
-    process.on('SIGTERM', () => {
-      logger.info('Received SIGTERM, shutting down...');
+    const gracefulShutdown = (signal) => {
+      logger.info(`Received ${signal}, shutting down...`);
+      cleanupService.stop();
       server.close(() => {
         logger.info('Server closed');
-        disconnectRedis().finally(() => {
-          process.exit(0);
-        });
+        closeStatementProcessingQueue()
+          .then(() => disconnectRedis())
+          .finally(() => {
+            process.exit(0);
+          });
       });
-    });
+    };
 
-    process.on('SIGINT', () => {
-      logger.info('Received SIGINT, shutting down...');
-      server.close(() => {
-        logger.info('Server closed');
-        disconnectRedis().finally(() => {
-          process.exit(0);
-        });
-      });
-    });
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
     
   } catch (error) {
     logger.error('Failed to start server:', error);

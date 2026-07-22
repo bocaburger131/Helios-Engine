@@ -13,12 +13,15 @@ import UploadPrimaryButton, {
   type PrimaryActionMode,
 } from "@/components/upload/UploadPrimaryButton";
 import {
+  BankConfirmationRequiredError,
+  confirmBankAndResumeBatch,
   extractStatementId,
   formatBatchError,
   pollBatchJob,
   redirectToDashboard,
   runBatchAnalysis,
   triageStatements,
+  type BatchJobStatus,
   type BatchProgress,
   type TriageResult,
 } from "@/lib/batchUploadClient";
@@ -49,6 +52,8 @@ export default function UploadHubPage() {
   const [institutionGate, setInstitutionGate] = useState<
     TriageResult["institutionProfileGate"] | null
   >(null);
+  const [pendingBankConfirmation, setPendingBankConfirmation] =
+    useState<BatchJobStatus | null>(null);
 
   const triageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triageGen = useRef(0);
@@ -114,10 +119,12 @@ export default function UploadHubPage() {
               `Profile: <code>${escapeHtml(g.codeProfileId || "unknown")}</code> · ` +
               `Status: <strong>${escapeHtml(status)}</strong> · ` +
               `Layout discovery: <strong>${escapeHtml(layoutStatus)}</strong>` +
-              (g.step1Required
-                ? `<br/><span class="text-amber-700">Layout mapping or institution profile incomplete before production underwriting.</span>`
-                : `<br/><span class="text-emerald-700">Institution profile ready for production analysis.</span>`),
-            g.step1Required ? "warning" : "success"
+              (g.layoutLearningActive
+                ? `<br/><span class="text-amber-700">Layout learning active (demo) — metrics are probe-grade until templates graduate.</span>`
+                : g.step1Required
+                  ? `<br/><span class="text-amber-700">Layout mapping or institution profile incomplete before production underwriting.</span>`
+                  : `<br/><span class="text-emerald-700">Institution profile ready for production analysis.</span>`),
+            g.layoutLearningActive || g.step1Required ? "warning" : "success"
           );
         }
 
@@ -159,6 +166,51 @@ export default function UploadHubPage() {
       }, AUTO_TRIAGE_DEBOUNCE_MS);
     },
     [append, runTriage]
+  );
+
+  const resumeAfterBankConfirm = useCallback(
+    async (payload: BatchJobStatus, bankName: string) => {
+      if (!uploadSessionId || !payload.fileName) {
+        append("Missing session or file for bank confirmation.", "error");
+        return;
+      }
+      setBusy(true);
+      setPendingBankConfirmation(null);
+      append(`Confirming <strong>${escapeHtml(bankName)}</strong> and resuming batch…`, "system");
+      try {
+        const { jobId, correlationId } = await confirmBankAndResumeBatch({
+          uploadSessionId,
+          fileName: payload.fileName,
+          confirmedBankName: bankName,
+        });
+        append(`Job <code>${jobId.slice(0, 8)}…</code> running.`, "system");
+        const token = getStoredToken();
+        const resultJson = await pollBatchJob(jobId, {
+          correlationId: correlationId || jobId,
+          onProgress: (p) => {
+            setProgress(p);
+            if (p?.message) append(escapeHtml(p.message), "warning");
+          },
+        });
+        const statementId = extractStatementId(resultJson);
+        if (!statementId) throw new Error("No statement ID returned");
+        append("Analysis complete. Redirecting to dashboard…", "success");
+        redirectToDashboard(statementId, token);
+      } catch (e) {
+        if (e instanceof BankConfirmationRequiredError) {
+          setPendingBankConfirmation(e.payload);
+          append(
+            escapeHtml(e.message || "Additional bank confirmation required."),
+            "warning"
+          );
+        } else {
+          append(escapeHtml(e instanceof Error ? e.message : "Resume failed"), "error");
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [uploadSessionId, append]
   );
 
   const handlePrimary = useCallback(async () => {
@@ -216,7 +268,20 @@ export default function UploadHubPage() {
       append(`Analysis complete. Redirecting to dashboard…`, "success");
       redirectToDashboard(statementId, token);
     } catch (e) {
-      append(escapeHtml(e instanceof Error ? e.message : "Analysis failed"), "error");
+      if (e instanceof BankConfirmationRequiredError) {
+        setPendingBankConfirmation(e.payload);
+        const bank =
+          e.payload.detectedBankName ||
+          e.payload.bankNameCandidates?.[0] ||
+          "Unknown Bank";
+        append(
+          `Bank confirmation required for <strong>${escapeHtml(e.payload.fileName ?? "statement")}</strong>. ` +
+            `Detected: <strong>${escapeHtml(bank)}</strong>. Confirm below to continue.`,
+          "warning"
+        );
+      } else {
+        append(escapeHtml(e instanceof Error ? e.message : "Analysis failed"), "error");
+      }
     } finally {
       setBusy(false);
     }
@@ -229,6 +294,7 @@ export default function UploadHubPage() {
     dealId,
     append,
     runTriage,
+    resumeAfterBankConfirm,
   ]);
 
   const phase =
@@ -269,19 +335,58 @@ export default function UploadHubPage() {
           </div>
         )}
 
-        {institutionGate?.step1Required && (
+        {(institutionGate?.layoutLearningActive || institutionGate?.step1Required) && (
           <div
-            className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+            className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
             role="status"
           >
             <p className="font-semibold">
-              Layout learning active — {institutionGate.bankName || "Institution"} (
-              {institutionGate.profileStatus || "LEARNING"})
+              {institutionGate.layoutLearningActive
+                ? `Layout learning active (demo) — ${institutionGate.bankName || "Institution"}`
+                : `Layout learning active — ${institutionGate.bankName || "Institution"} (${institutionGate.profileStatus || "LEARNING"})`}
             </p>
-            <p className="mt-1 text-sky-800">
+            <p className="mt-1 text-amber-900">
               {institutionGate.recommendation ||
                 "Checksums improve as templates graduate to VERIFIED. Macro analysis runs while learning is in progress."}
             </p>
+          </div>
+        )}
+
+        {pendingBankConfirmation && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <p className="font-semibold">Confirm bank institution</p>
+            <p className="mt-1">
+              {pendingBankConfirmation.message ||
+                `Confirm the bank for ${pendingBankConfirmation.fileName ?? "this statement"} to resume analysis.`}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                onClick={() =>
+                  resumeAfterBankConfirm(
+                    pendingBankConfirmation,
+                    pendingBankConfirmation.detectedBankName ||
+                      pendingBankConfirmation.bankNameCandidates?.[0] ||
+                      "Regions Bank"
+                  )
+                }
+              >
+                Confirm{" "}
+                {pendingBankConfirmation.detectedBankName ||
+                  pendingBankConfirmation.bankNameCandidates?.[0] ||
+                  "bank"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                onClick={() => setPendingBankConfirmation(null)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 

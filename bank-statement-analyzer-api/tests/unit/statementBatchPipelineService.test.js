@@ -22,4 +22,21 @@ describe('createPipelineOutcomeCollector', () => {
       diagnosticSummaries: envelope.diagnosticSummaries
     });
   });
+
+  it('marks institution profile gate 202 as failed (not completed)', () => {
+    const settle = vi.fn();
+    const res = createPipelineOutcomeCollector(settle);
+    res.status(202).json({
+      success: false,
+      error: 'INSTITUTION_PROFILE_STEP1_REQUIRED',
+      institutionProfileGate: { step1Required: true }
+    });
+
+    expect(settle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        error: 'INSTITUTION_PROFILE_STEP1_REQUIRED'
+      })
+    );
+  });
 });

@@ -5,10 +5,13 @@ import ForensicChart from "@/components/charts/ForensicChart";
 import DocumentProvenance from "@/components/provenance/DocumentProvenance";
 import HeroGrid from "@/components/results/HeroGrid";
 import IdentityBadge from "@/components/results/IdentityBadge";
+import AlertsPanel from "@/components/results/AlertsPanel";
 import JsonInspectorModal from "@/components/results/JsonInspectorModal";
 import MetricsRow from "@/components/results/MetricsRow";
 import ProjectionsPanel from "@/components/results/ProjectionsPanel";
+import RegistryVerificationBadge from "@/components/results/RegistryVerificationBadge";
 import ResultsToolbar from "@/components/results/ResultsToolbar";
+import SpendingMetricsPanel from "@/components/results/SpendingMetricsPanel";
 import VeraBriefingPanel from "@/components/results/VeraBriefingPanel";
 import VeraFloatingDock from "@/components/results/VeraFloatingDock";
 import VeraFixModal from "@/components/results/VeraFixModal";
@@ -20,6 +23,7 @@ import {
   getChecksumFailures,
   getLayoutShadowEntries,
   parseQualityLabel,
+  resolveDefaultHorizon,
   statementPeriodLabel,
   type HeliosStatementPayload,
 } from "@/lib/analysisAdapter";
@@ -44,6 +48,12 @@ export default function UnderwritingDashboard({
   const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
   const vera = payload.data?.statement?.analysis?.vera;
   const identityCrossCheck = vera?.identityCrossCheck ?? null;
+  const sosVerification =
+    (payload.data?.statement?.analysis?.metadata as { sosVerification?: Record<string, unknown> })
+      ?.sosVerification ??
+    (payload.data as { sosVerification?: Record<string, unknown> })?.sosVerification ??
+    null;
+  const defaultHorizon = useMemo(() => resolveDefaultHorizon(payload), [payload]);
   const deltaFixes = vera?.deltaFixes ?? [];
   const pdfUrl =
     (payload.data as { vera?: { pdfUrl?: string } })?.vera?.pdfUrl ?? null;
@@ -95,6 +105,19 @@ export default function UnderwritingDashboard({
         </div>
       )}
 
+      {!view.parseTrusted && (
+        <div
+          role="status"
+          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+        >
+          <p className="font-medium">Unverified parse — metrics withheld</p>
+          <p className="mt-1 text-amber-900/90">
+            Headline underwriting metrics are hidden until all statements pass checksum
+            reconciliation and transaction-level data is available.
+          </p>
+        </div>
+      )}
+
       <ResultsToolbar
         statementId={statementId}
         onViewJson={() => setJsonOpen(true)}
@@ -105,12 +128,17 @@ export default function UnderwritingDashboard({
         <div className="space-y-4">
           <VeritasScoreCard view={view} />
           <IdentityBadge crossCheck={identityCrossCheck} />
+          <RegistryVerificationBadge sos={sosVerification as Parameters<typeof RegistryVerificationBadge>[0]["sos"]} />
         </div>
       </div>
 
       <MetricsRow view={view} />
 
-      <ForensicChart payload={payload} defaultHorizon="l3m" />
+      <SpendingMetricsPanel payload={payload} parseTrusted={view.parseTrusted} />
+
+      <ForensicChart payload={payload} defaultHorizon={defaultHorizon} />
+
+      <AlertsPanel alerts={view.alerts} />
 
       <ProjectionsPanel payload={payload} />
 
@@ -191,6 +219,17 @@ export default function UnderwritingDashboard({
         statementId={statementId}
         decision={view.veraDecision}
         score={view.veraScore}
+        registryHint={
+          sosVerification?.alertCode === "SOS_CREDENTIALS_REQUIRED" ||
+          sosVerification?.reason === "SOS_CREDENTIALS_REQUIRED"
+            ? "Ohio SOS may require portal credentials. Add credits or create an account, then ask Vera to retry verification."
+            : null
+        }
+        registryPortalUrl={
+          typeof sosVerification?.portalSignupUrl === "string"
+            ? sosVerification.portalSignupUrl
+            : null
+        }
       />
 
       <JsonInspectorModal

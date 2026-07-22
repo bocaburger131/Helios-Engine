@@ -40,6 +40,10 @@ const alertSchema = new mongoose.Schema({
       // Compliance
       'HIGH_VOLUME_ACTIVITY',
       'OFAC_SCREENING_REQUIRED',
+      // Garnishments & Levies
+      'WAGE_GARNISHMENT_DETECTED',
+      'CHILD_SUPPORT_GARNISHMENT',
+      'TAX_LEVY_DETECTED',
       // Data Quality
       'INCOMPLETE_APPLICATION_DATA',
       'DATA_INCONSISTENCY',
@@ -55,6 +59,15 @@ const alertSchema = new mongoose.Schema({
       'CASH_INTENSIVE_HIGH_VELOCITY',
       // Macro Quarterly Engine — Balance Continuity
       'CRITICAL_TAMPERING_ALERT',
+      // Institution Profile Onboarding
+      'INSTITUTION_PROFILE_REQUIRED',
+      'INSTITUTION_PROFILE_STEP1',
+      // Secretary of State / business registry (AlertsEngineService)
+      'SOS_STATE_MISSING',
+      'SOS_ONBOARDING',
+      'SOS_CREDENTIALS_REQUIRED',
+      'SOS_MANUAL_REVIEW',
+      'SOS_VERIFICATION_ERROR',
       // System
       'ALERT_GENERATION_ERROR'
     ],
@@ -318,6 +331,7 @@ const statementSchema = new mongoose.Schema({
     verificationData: { type: Schema.Types.Mixed, default: {} },
     originalAiData: { type: Schema.Types.Mixed, default: {} },
     mismatchDetails: { type: String, trim: true, default: '' },
+    registryCredentialRequest: { type: Schema.Types.Mixed, default: null },
     geminiConfidence: { type: Number, min: 0, max: 1, default: null },
     triggeredAt: { type: Date },
     veraVerifiedBy: { type: Schema.Types.ObjectId, ref: 'User' },

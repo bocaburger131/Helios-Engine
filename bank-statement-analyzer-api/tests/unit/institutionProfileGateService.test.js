@@ -65,7 +65,24 @@ describe('institutionProfileGateService', () => {
     expect(gate.layoutDiscoveryStatus).toBe('complete');
   });
 
-  it('step1Required when layout map missing even with VERIFIED template', () => {
+  it('productionReady when batch checksum pass ratio is 1.0 even if template still learning', () => {
+    const text = 'Chase Business Complete Checking deposits and additions';
+    const gate = assessInstitutionProfileGate({
+      text,
+      rtn: '021000021',
+      bankName: 'Chase',
+      institutionalProfile: {
+        _id: 'prof2',
+        legalName: 'Chase',
+        templates: [{ version: 1, status: 'LEARNING', mapping: {} }]
+      },
+      layoutDiscoveryPresent: true,
+      checksumPassRatio: 1
+    });
+    expect(gate.productionReady).toBe(true);
+  });
+
+  it('step1Required when layout map missing but productionReady when batch fully reconciled', () => {
     const text = 'Chase Business Complete Checking deposits and additions';
     const gate = assessInstitutionProfileGate({
       text,
@@ -80,7 +97,7 @@ describe('institutionProfileGateService', () => {
       checksumPassRatio: 1
     });
     expect(gate.step1Required).toBe(true);
-    expect(gate.productionReady).toBe(false);
+    expect(gate.productionReady).toBe(true);
     expect(gate.layoutDiscoveryStatus).toBe('failed');
   });
 });

@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import logger from '../utils/logger.js';
+import { isRedisDisabled } from './redisConnection.js';
 
 /** Avoid Windows IPv6 localhost (::1) hangs against Docker-mapped Redis. */
 function normalizeRedisUrl(url) {
@@ -10,7 +11,7 @@ function normalizeRedisUrl(url) {
 let redisClient = null;
 
 // Skip Redis initialization in test environment
-if (process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false') {
+if (isRedisDisabled()) {
   // Create a mock Redis client for testing
   redisClient = {
     connect: async () => Promise.resolve(),
@@ -83,7 +84,7 @@ if (process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false') {
 }
 
 export const connectRedis = async () => {
-  if (process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false') {
+  if (isRedisDisabled()) {
     logger.info('Redis mocked for testing');
     return;
   }
@@ -98,7 +99,7 @@ export const connectRedis = async () => {
 };
 
 export const disconnectRedis = async () => {
-  if (process.env.NODE_ENV === 'test' || process.env.USE_REDIS === 'false') {
+  if (isRedisDisabled()) {
     return;
   }
   

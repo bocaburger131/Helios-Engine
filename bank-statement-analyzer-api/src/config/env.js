@@ -4,6 +4,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isRedisDisabled } from './redisConnection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, '../..');
@@ -23,9 +24,9 @@ const config = {
   JWT_SECRET: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
   JWT_EXPIRE: process.env.JWT_EXPIRE || '30d',
   
-  // Redis
+  // Redis — unified semantics: enabled unless tests or USE_REDIS=false (see redisConnection.js)
   REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6380',
-  USE_REDIS: process.env.USE_REDIS === 'true',
+  USE_REDIS: !isRedisDisabled(),
   
   // API
   API_BASE_URL: process.env.API_BASE_URL || 'http://localhost:3000',

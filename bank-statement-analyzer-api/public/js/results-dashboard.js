@@ -662,11 +662,25 @@
         });
       });
 
+      const statementId = this.envelope?.id || this.envelope?.data?.id;
+      const company =
+        this.envelope?.data?.deal?.companyName ||
+        this.envelope?.applicationData?.companyName ||
+        'this analysis';
+
       document.getElementById('vera-chat-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const input = e.target.querySelector('input');
         const q = input?.value?.trim();
         if (!q || !veraBody) return;
+        if (!statementId) {
+          const errP = document.createElement('p');
+          errP.style.marginTop = '8px';
+          errP.innerHTML =
+            '<strong>Vera:</strong> <span style="color:#b91c1c">No statement id available for chat.</span>';
+          veraBody.appendChild(errP);
+          return;
+        }
         const note = document.createElement('p');
         note.style.marginTop = '10px';
         note.innerHTML = '<em>You:</em> ' + escapeHtml(q);
@@ -697,12 +711,6 @@
           veraBody.appendChild(errP);
         }
       });
-
-      const statementId = this.envelope?.id || this.envelope?.data?.id;
-      const company =
-        this.envelope?.data?.deal?.companyName ||
-        this.envelope?.applicationData?.companyName ||
-        'this analysis';
 
       this.root.querySelector('[data-action="view-json"]')?.addEventListener('click', () => {
         if (global.HeliosAnalysisJsonModal && statementId) {

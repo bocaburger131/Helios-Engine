@@ -58,7 +58,10 @@ describe('statementStitcher', () => {
 
     const svc = new PDFParserService();
     const parser = svc.bankParsers.get('DEFAULT');
-    const txns = await svc._extractTransactions(text, parser, { stitcher });
+    const txns = await svc._extractTransactions(text, parser, {
+      stitcher,
+      sectionAnchorMode: 'transaction_history_strict'
+    });
     expect(txns.length).toBe(2);
 
     const depSum = txns.filter((t) => Number(t.amount) > 0).reduce((s, t) => s + Number(t.amount), 0);

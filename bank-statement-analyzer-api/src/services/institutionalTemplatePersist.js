@@ -3,6 +3,7 @@
  */
 import InstitutionalProfile from '../models/InstitutionalProfile.js';
 import logger from '../utils/logger.js';
+import { isDemoMode } from '../config/appMode.js';
 import { withLayoutFingerprint } from './extraction/layoutFingerprintService.js';
 
 /**
@@ -12,6 +13,9 @@ import { withLayoutFingerprint } from './extraction/layoutFingerprintService.js'
  * @returns {Promise<{ mapping: object, templateVersion: number, templateStatus: string, templateUsedAsHint: true } | null>}
  */
 export async function resolveLayoutTemplateForParse(rtn, institutionalProfile = null) {
+  // Demo never consumes cached templates — all banks parse as layout-learning.
+  if (isDemoMode()) return null;
+
   const cleanedRtn = String(rtn || '').replace(/\D/g, '');
   if (cleanedRtn.length !== 9) return null;
 

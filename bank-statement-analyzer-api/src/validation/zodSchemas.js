@@ -1,6 +1,29 @@
 import { z } from 'zod';
 import { ValidationError } from '../utils/errors.js';
 
+const jsonPreprocess = (val) => {
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+};
+
+const optionalNumberPreprocess = (val) => {
+  if (val === '' || val == null) return null;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : val;
+};
+
+const optionalBooleanPreprocess = (val) => {
+  if (val === 'true' || val === true) return true;
+  if (val === 'false' || val === false) return false;
+  return val;
+};
+
 // API Key Schema
 export const apiKeySchema = z.object({
   'x-api-key': z.string()
@@ -50,6 +73,29 @@ export const fileValidationSchema = z.object({
   })
 });
 
+export const batchUploadBodySchema = z.object({
+  uploadSessionId: z.string().min(1, 'uploadSessionId is required'),
+  dealId: z.string().optional().nullable(),
+  businessName: z.string().optional().nullable(),
+  openingBalance: z.preprocess(optionalNumberPreprocess, z.number().nullable().optional()),
+  applicationData: z.preprocess(jsonPreprocess, z.record(z.unknown()).optional()),
+  confirmedBankName: z.string().optional().nullable(),
+  confirmedBankFileName: z.string().optional().nullable(),
+  assumeSingleUnknownAccount: z.preprocess(optionalBooleanPreprocess, z.boolean().optional()),
+  triageAccessToken: z.string().optional().nullable()
+});
+
+export const confirmBankBodySchema = z.object({
+  uploadSessionId: z.string().min(1, 'uploadSessionId is required'),
+  fileName: z.string().min(1, 'fileName is required'),
+  confirmedBankName: z.string().min(1, 'confirmedBankName is required'),
+  dealId: z.string().optional().nullable(),
+  businessName: z.string().optional().nullable(),
+  openingBalance: z.preprocess(optionalNumberPreprocess, z.number().nullable().optional()),
+  applicationData: z.preprocess(jsonPreprocess, z.record(z.unknown()).optional()),
+  triageAccessToken: z.string().optional().nullable()
+});
+
 // Validation Middleware
 export const validateRequest = (schema) => (req, res, next) => {
   try {
@@ -68,3 +114,6 @@ export const validateRequest = (schema) => (req, res, next) => {
     }
   }
 };
+
+/** Alias for route wiring after multer — validates coerced multipart body fields. */
+export const validateBody = validateRequest;

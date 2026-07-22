@@ -4,7 +4,10 @@ import {
   batchHasUsableTransactions,
   buildChecksumGateBestEffortAlert,
   deriveBestEffortChecksumMode,
-  tagMacroTransactionsFromStatement
+  tagMacroTransactionsFromStatement,
+  buildDiagnosticSummaries,
+  attachWarningsToEnvelope,
+  filterStaleReconciliationAlerts
 } from '../../src/utils/macroBestEffort.js';
 import { normalizeBankNameForMacro, buildMacroAccountGroupKey } from '../../src/utils/macroAccountGrouping.js';
 
@@ -119,5 +122,77 @@ describe('normalizeBankNameForMacro Chase canonicalization', () => {
     );
     expect(janKey).toBe(febKey);
     expect(janKey.startsWith('CHASE-')).toBe(true);
+  });
+});
+
+describe('buildDiagnosticSummaries', () => {
+  it('includes statements with aiDiagnostic or failed checksum in best-effort mode', () => {
+    const parsed = [
+      { fileName: 'a.pdf', parseQuality: 'OK', transactions: [{ amount: 1 }] },
+      {
+        fileName: 'b.pdf',
+        parseQuality: 'FAILED_CHECKSUM',
+        transactions: [{ amount: -5 }],
+        checksumRecon: { delta: 12.5 }
+      },
+      {
+        fileName: 'c.pdf',
+        parseQuality: 'OK',
+        aiDiagnostic: { diagnosis: 'COLUMN_SHIFT', explanation: 'Amount column misaligned.' }
+      }
+    ];
+    const summaries = buildDiagnosticSummaries(parsed, true);
+    expect(summaries).toHaveLength(2);
+    expect(summaries.find((s) => s.fileName === 'b.pdf')?.diagnosis).toBe('CHECKSUM_MISMATCH');
+    expect(summaries.find((s) => s.fileName === 'c.pdf')?.explanation).toMatch(/misaligned/i);
+  });
+});
+
+describe('attachWarningsToEnvelope', () => {
+  it('sets businessStatus and diagnosticSummaries on envelope before persist', () => {
+    const envelope = { data: { statementId: 'abc123' } };
+    const parsed = [
+      {
+        fileName: 'warn.pdf',
+        parseQuality: 'FAILED_CHECKSUM',
+        transactions: [{ amount: 10 }],
+        checksumRecon: { delta: 3 }
+      }
+    ];
+    const summaries = attachWarningsToEnvelope(envelope, parsed, true);
+    expect(envelope.businessStatus).toBe('COMPLETED_WITH_WARNINGS');
+    expect(envelope.diagnosticSummaries).toEqual(summaries);
+    expect(envelope.analysisQuality.checksumValidated).toBe(false);
+    expect(envelope.analysisQuality.statementsRequiringReview).toBe(1);
+  });
+
+  it('leaves envelope unchanged when no warnings apply', () => {
+    const envelope = { data: {} };
+    attachWarningsToEnvelope(
+      envelope,
+      [{ fileName: 'ok.pdf', parseQuality: 'OK', transactions: [{ amount: 1 }] }],
+      false
+    );
+    expect(envelope.businessStatus).toBeUndefined();
+    expect(envelope.diagnosticSummaries).toBeUndefined();
+  });
+});
+
+describe('filterStaleReconciliationAlerts', () => {
+  it('drops per-file reconciliation alerts when checksum rescue recovered the file', () => {
+    const alerts = [
+      {
+        code: 'RECONCILIATION_MISMATCH',
+        data: { fileName: 'Jan_2025_Capri.pdf', delta: '76.25' }
+      },
+      { code: 'INCOME_INSTABILITY', data: {} }
+    ];
+    const parsed = [
+      { fileName: 'Jan_2025_Capri.pdf', parseQuality: 'OK' },
+      { fileName: 'feb_2025_Capri_.pdf', parseQuality: 'FAILED_CHECKSUM' }
+    ];
+    const filtered = filterStaleReconciliationAlerts(alerts, parsed);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].code).toBe('INCOME_INSTABILITY');
   });
 });

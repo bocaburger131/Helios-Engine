@@ -45,18 +45,26 @@ function extractMeta(info) {
   return meta;
 }
 
+function coerceMessage(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value instanceof Error) return value.message || value.name || 'Error';
+  try {
+    return safeStringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function resolveHeadline(info) {
   if (typeof info.message === 'string' && info.message) return info.message;
   if (typeof info.msg === 'string' && info.msg) return info.msg;
-  if (info.message && typeof info.message === 'object') {
-    const m = info.message;
-    if (typeof m.msg === 'string') return m.msg;
-    if (typeof m.message === 'string') return m.message;
-    try {
-      return safeStringify(m);
-    } catch {
-      return String(m);
-    }
+  if (info.message != null && typeof info.message !== 'string') {
+    return coerceMessage(info.message);
+  }
+  if (info.msg != null && typeof info.msg !== 'string') {
+    return coerceMessage(info.msg);
   }
   return '';
 }

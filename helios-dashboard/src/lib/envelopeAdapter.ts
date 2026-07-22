@@ -122,10 +122,11 @@ export function buildEnvelopeViewModel(
 
   const variance = revenueVariance(stated, totalDeposits);
   const veraScore = num(vera?.bankabilityScore);
-  const veritasScore =
+  const rawVeritasScore =
     veraScore ??
     num((analysis as { veritasScore?: number })?.veritasScore) ??
     null;
+  const veritasScore = integrity.trustedForMetrics ? rawVeritasScore : null;
 
   const avgWithdrawals = totalWithdrawals / monthCount;
 
@@ -160,8 +161,10 @@ export function buildEnvelopeViewModel(
     dealId: (statement?.applicationContext as { dealId?: string })?.dealId ?? null,
     requestedLoanAmount: meta.requestedLoanAmount,
     statedRevenue: stated,
-    revenueVariancePct: variance.pct,
-    revenueVarianceLabel: variance.label,
+    revenueVariancePct: integrity.trustedForMetrics ? variance.pct : null,
+    revenueVarianceLabel: integrity.trustedForMetrics
+      ? variance.label
+      : "Parse not verified",
     veritasScore,
     veritasBadge: integrity.trustedForMetrics
       ? veritasBadgeFromScore(veritasScore, vera?.decision)
@@ -177,10 +180,12 @@ export function buildEnvelopeViewModel(
       daysCashOnHand: integrity.trustedForMetrics
         ? daysCashOnHand(l3mAdb, avgWithdrawals)
         : null,
-      consistencyScore: consistencyFromSummaries(summaries),
+      consistencyScore: integrity.trustedForMetrics
+        ? consistencyFromSummaries(summaries)
+        : null,
     },
-    veraDecision: vera?.decision ?? null,
-    veraScore,
+    veraDecision: integrity.trustedForMetrics ? vera?.decision ?? null : null,
+    veraScore: integrity.trustedForMetrics ? veraScore : null,
     veraBriefing: vera?.briefingMarkdown ?? null,
     coverageMonths: summaries.length || monthlyRows.length,
     alerts: (statement?.alerts as EnvelopeViewModel["alerts"]) ?? [],

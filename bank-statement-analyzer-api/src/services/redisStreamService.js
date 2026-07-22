@@ -8,6 +8,7 @@
 import redis from '../config/redis.js';
 import logger from '../utils/logger.js';
 import Statement from '../models/Statement.js';
+import businessRegistryOrchestrator from './businessRegistry/orchestrator.js';
 
 const STREAM_KEY = 'analysis-jobs';
 const CONSUMER_GROUP = 'analysis-workers';
@@ -213,7 +214,34 @@ class RedisStreamService {
 
               if (veritasScore >= 600 && criticalAlerts === 0) {
                 logger.info(`[WORKER] Score ${veritasScore} meets criteria. Queuing Junior Underwriting...`);
-                // TODO: Hook up AddressVerificationService and SOS checks here
+
+                if (process.env.USE_SOS_VERIFICATION === 'true') {
+                  const ctx = statement.applicationContext || {};
+                  const sosData = await businessRegistryOrchestrator.verify({
+                    businessName: ctx.companyName,
+                    registrationState: ctx.registrationState,
+                    businessAddress: ctx.businessAddress,
+                    jobId: `worker-${job.payload.statementId}`,
+                    userId: statement.user ? String(statement.user) : null
+                  });
+                  await Statement.findByIdAndUpdate(job.payload.statementId, {
+                    $set: {
+                      'analysis.metadata.sosVerification': sosData,
+                      ...(sosData.alertCode === 'SOS_CREDENTIALS_REQUIRED'
+                        ? {
+                            'veraVerification.registryCredentialRequest': {
+                              stateCode: sosData.state,
+                              portalSignupUrl: sosData.portalSignupUrl || null,
+                              message:
+                                'This state registry requires portal credentials. Use Vera to add credits or create an account, then retry verification.',
+                              requestedAt: new Date().toISOString()
+                            }
+                          }
+                        : {})
+                    }
+                  });
+                  logger.info(`[WORKER] Registry verification for ${ctx.registrationState || 'unknown'}: found=${sosData.found}`);
+                }
               } else {
                 logger.info(`[WORKER] Score ${veritasScore} or Critical Alerts (${criticalAlerts}) failed criteria. Halting.`);
               }

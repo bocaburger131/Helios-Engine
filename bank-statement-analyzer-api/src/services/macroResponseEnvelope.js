@@ -1,6 +1,7 @@
 import { loadContractMocks, useMockServices } from '../contracts/loadContractMocks.js';
 import { evaluateJuniorUnderwriterOrMock } from './juniorUnderwriterService.js';
 import { generateVeraBriefingDeterministic } from './veraBriefingService.js';
+import { composeIntelligenceSummary } from './intelligenceSummaryService.js';
 
 /**
  * Build deal header from application / anchor data.
@@ -26,6 +27,7 @@ function buildDealContext(applicationData = {}, body = {}) {
       applicationData.annualRevenue ??
       applicationData.statedGAR ??
       null,
+    registrationState: applicationData.registrationState || null,
     dealId: body.dealId || applicationData.dealId || null
   };
 }
@@ -163,6 +165,7 @@ export function buildMacroResponseEnvelope({
       briefingMarkdown
     },
     applicationData: appData,
+    sosVerification: consolidatedMacroAnalysis?.metadata?.sosVerification ?? null,
     legacy: {
       report: briefingMarkdown
     },
@@ -184,6 +187,12 @@ export function buildMacroResponseEnvelope({
   data.metrics = buildMetrics(macroAgg, consolidatedMacroAnalysis);
   data.alerts = alertsBlock;
   data.accountGroups = accountGroupResults;
+  data.intelligenceSummary = composeIntelligenceSummary({
+    forensicIntelligence: consolidatedMacroAnalysis?.forensicIntelligence ?? null,
+    underwritingVitals: consolidatedMacroAnalysis?.underwritingVitals ?? null,
+    veritasScores: accountGroupResults.map((g) => g?.veritasScore),
+    alerts: allAlerts
+  });
   if (parseQualityByFile?.length) {
     data.parseQualityByFile = parseQualityByFile;
   }

@@ -204,7 +204,11 @@ async function writeLayoutCache(rtn, bankName, layout, sectionCount = 0) {
     if (!redisService.isConnected || !layout) return;
     const ttl = Number(process.env.GEMINI_VISION_CACHE_TTL_SEC) || 2592000;
     const sc = sectionCount || layout?.transactionSections?.length || 0;
-    await redisService.set(visionCacheKey(rtn, bankName, sc), JSON.stringify(layout), ttl);
+    const serialized = JSON.stringify(layout);
+    await redisService.set(visionCacheKey(rtn, bankName, 0), serialized, ttl);
+    if (sc > 0) {
+      await redisService.set(visionCacheKey(rtn, bankName, sc), serialized, ttl);
+    }
   } catch {
     /* non-fatal */
   }

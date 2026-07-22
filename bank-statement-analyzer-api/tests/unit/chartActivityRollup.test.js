@@ -41,4 +41,41 @@ describe('buildChartActivityRollup', () => {
     expect(rollup.weekly).toEqual([]);
     expect(rollup.openingBalance).toBe(500);
   });
+
+  it('includes L3M window summary', () => {
+    const rollup = buildChartActivityRollup(txns, 0);
+    expect(rollup.windows?.l3m).toBeTruthy();
+    expect(rollup.windows.l3m.deposits).toBe(150);
+    expect(rollup.windows.l3m.withdrawals).toBe(40);
+    expect(rollup.windows.l3m.net).toBe(110);
+  });
+
+  it('uses calendar days for L3M averages when monthly summaries provided', () => {
+    const monthlyRows = [
+      {
+        monthKey: '2024-12',
+        totalDeposits: 150,
+        totalWithdrawals: 40,
+        coveragePeriod: { startDate: '2024-12-01', endDate: '2024-12-31' }
+      }
+    ];
+    const rollup = buildChartActivityRollup(txns, 0, monthlyRows);
+    expect(rollup.windows.l3m.calendarDays).toBe(31);
+    expect(rollup.windows.l3m.avgDailyDeposits).toBeCloseTo(150 / 31, 2);
+    expect(rollup.windows.l3m.reconciliation?.withinTolerance).toBe(true);
+  });
+
+  it('flags reconciliation mismatch when chart totals diverge from summaries', () => {
+    const monthlyRows = [
+      {
+        monthKey: '2024-12',
+        totalDeposits: 999,
+        totalWithdrawals: 40,
+        coveragePeriod: { startDate: '2024-12-01', endDate: '2024-12-31' }
+      }
+    ];
+    const rollup = buildChartActivityRollup(txns, 0, monthlyRows);
+    expect(rollup.windows.l3m.reconciliation?.withinTolerance).toBe(false);
+    expect(rollup.windows.l3m.reconciliation?.deltaDeposits).toBe(150 - 999);
+  });
 });

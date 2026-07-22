@@ -33,6 +33,25 @@ describe('pdfPlumberService', () => {
     expect(mapped.transactions[0].amount).toBe(1500);
   });
 
+  it('resolveSidecarLayoutProfile maps profileId to structural layout profile', () => {
+    expect(
+      pdfPlumberService.resolveSidecarLayoutProfile({ profileId: 'wells_initiate_checking' })
+    ).toBe('txn_history_dual_amount');
+    expect(
+      pdfPlumberService.resolveSidecarLayoutProfile({ profileId: 'chase_business_complete' })
+    ).toBe('section_typed_activity');
+    expect(
+      pdfPlumberService.resolveSidecarLayoutProfile({ profileId: 'regions_business_checking' })
+    ).toBe('multi_table_sections');
+    expect(pdfPlumberService.resolveSidecarLayoutProfile({ profileId: 'unknown_id' })).toBe(
+      'generic'
+    );
+    expect(pdfPlumberService.resolveSidecarLayoutProfile({})).toBe('generic');
+    expect(
+      pdfPlumberService.resolveSidecarLayoutProfile({ layoutProfile: 'section_typed_activity' })
+    ).toBe('section_typed_activity');
+  });
+
   it('parseStdoutJson rejects Python traceback in stdout', () => {
     const { json, parseError } = pdfPlumberService.parseStdoutJson(
       'Traceback (most recent call last):\n  File "extract_tables.py", line 1'
@@ -82,7 +101,7 @@ describe('pdfPlumberService', () => {
     const result = await pdfPlumberService.extractTransactionsFromPdfBuffer(
       Buffer.from('%PDF-1.4'),
       {
-        bankName: 'Wells Fargo',
+        profileId: 'wells_initiate_checking',
         fileName: 'feb.pdf',
         defaultYear: 2025
       }

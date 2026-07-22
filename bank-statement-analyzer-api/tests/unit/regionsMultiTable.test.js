@@ -56,7 +56,7 @@ describe('Regions multi-table extraction', () => {
   });
 });
 
-describe('Wells strict section gate', () => {
+describe('strict transaction-history section gate', () => {
   it('does not parse dated amounts before Transaction history', async () => {
     const svc = new PDFParserService();
     const text = [
@@ -73,7 +73,9 @@ describe('Wells strict section gate', () => {
     ].join('\n');
 
     const parser = svc.bankParsers.get('DEFAULT');
-    const txns = await svc._extractTransactions(text, parser, {});
+    const txns = await svc._extractTransactions(text, parser, {
+      sectionAnchorMode: 'transaction_history_strict'
+    });
     expect(txns.length).toBe(2);
     const descs = txns.map((t) => String(t.description).toLowerCase());
     expect(descs.some((d) => d.includes('marketing'))).toBe(false);

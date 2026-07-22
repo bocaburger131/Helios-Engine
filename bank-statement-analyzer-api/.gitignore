@@ -39,3 +39,5 @@ node_modules/
 dist/
 uploads/
 *.log
+tmp/
+tmp-*.err

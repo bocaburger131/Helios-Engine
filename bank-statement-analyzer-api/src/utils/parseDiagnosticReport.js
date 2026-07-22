@@ -17,7 +17,14 @@ export function txnFingerprint(tx) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 40);
-  return `${date}|${amountKey}|${desc}`;
+  // rawLine disambiguates same-day same-amount rows whose descriptions collide
+  // (e.g. two card payments differing only by confirmation number).
+  const raw = String(tx?.rawLine || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  return `${date}|${amountKey}|${desc}|${raw}`;
 }
 
 /** Remove exact duplicate rows (same date, amount, description prefix). */

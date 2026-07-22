@@ -84,3 +84,60 @@ export function tagMacroTransactionsFromStatement(stmt, transactions) {
     ...(bestEffort ? { macroBestEffort: true } : {})
   }));
 }
+
+/**
+ * @param {Array<object>} parsedStatements
+ * @param {boolean} bestEffortChecksumMode
+ * @returns {Array<object>}
+ */
+export function buildDiagnosticSummaries(parsedStatements, bestEffortChecksumMode) {
+  return (parsedStatements || [])
+    .filter(
+      (s) =>
+        s.aiDiagnostic ||
+        (s.parseQuality !== 'OK' && includeStatementInMacro(s, bestEffortChecksumMode))
+    )
+    .map((s) => ({
+      fileName: s.fileName,
+      diagnosis: s.aiDiagnostic?.diagnosis ?? 'CHECKSUM_MISMATCH',
+      explanation:
+        s.aiDiagnostic?.explanation ??
+        `Checksum did not reconcile (delta ${s.checksumRecon?.delta ?? 'n/a'}).`,
+      confidenceScore: s.aiDiagnostic?.confidenceScore ?? null,
+      autoCorrected: Boolean(s.aiDiagnostic?.autoCorrected)
+    }));
+}
+
+/**
+ * Attach COMPLETED_WITH_WARNINGS fields to envelope before Mongo persist.
+ * @returns {Array<object>} diagnosticSummaries
+ */
+export function attachWarningsToEnvelope(envelope, parsedStatements, bestEffortChecksumMode) {
+  const diagnosticSummaries = buildDiagnosticSummaries(parsedStatements, bestEffortChecksumMode);
+  if (bestEffortChecksumMode || diagnosticSummaries.length > 0) {
+    envelope.businessStatus = 'COMPLETED_WITH_WARNINGS';
+    envelope.diagnosticSummaries = diagnosticSummaries;
+    envelope.analysisQuality = {
+      checksumValidated: false,
+      flags: [...new Set(['CHECKSUM_MISMATCH', ...diagnosticSummaries.map((d) => d.diagnosis)])],
+      statementsRequiringReview: diagnosticSummaries.length
+    };
+  }
+  return diagnosticSummaries;
+}
+
+/**
+ * Drop per-file RECONCILIATION_MISMATCH alerts when checksum rescue recovered that file.
+ * @param {Array<object>} batchAlerts
+ * @param {Array<{ fileName?: string, parseQuality?: string }>} parsedStatements
+ */
+export function filterStaleReconciliationAlerts(batchAlerts, parsedStatements = []) {
+  const recoveredFiles = new Set(
+    parsedStatements.filter((s) => s.parseQuality === 'OK').map((s) => s.fileName)
+  );
+  return (batchAlerts || []).filter((alert) => {
+    if (alert?.code !== 'RECONCILIATION_MISMATCH') return true;
+    const fileName = alert?.data?.fileName;
+    return !(fileName && recoveredFiles.has(fileName));
+  });
+}

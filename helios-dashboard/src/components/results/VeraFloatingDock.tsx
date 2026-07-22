@@ -12,9 +12,11 @@ type Props = {
   statementId: string;
   decision: string | null;
   score: number | null;
+  registryHint?: string | null;
+  registryPortalUrl?: string | null;
 };
 
-export default function VeraFloatingDock({ statementId, decision, score }: Props) {
+export default function VeraFloatingDock({ statementId, decision, score, registryHint, registryPortalUrl }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<VeraChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -107,6 +109,21 @@ export default function VeraFloatingDock({ statementId, decision, score }: Props
           <p className="text-slate-500">
             Ask about deposits, NSF, bankability, or gaps in this deal.
           </p>
+        )}
+        {registryHint && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            <p>{registryHint}</p>
+            {registryPortalUrl && (
+              <a
+                href={registryPortalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs font-medium text-blue-700 underline"
+              >
+                Open state portal to add credits
+              </a>
+            )}
+          </div>
         )}
         {messages.map((m, i) => (
           <div

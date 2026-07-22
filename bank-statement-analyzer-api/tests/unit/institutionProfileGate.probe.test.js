@@ -64,6 +64,27 @@ describe('assessInstitutionProfileGate layoutLearningActive', () => {
     });
     expect(gate.step1Required).toBe(true);
     expect(gate.layoutLearningActive).toBe(true);
-    expect(gate.recommendation).toMatch(/Layout learning active/i);
+    expect(gate.recommendation).toMatch(/Demo mode/i);
+  });
+
+  it('forces learning stage for all banks in demo even with VERIFIED template and full checksum', () => {
+    process.env.DEMO_MODE = 'true';
+    const text = 'Chase Business Complete Checking deposits and additions';
+    const gate = assessInstitutionProfileGate({
+      text,
+      rtn: '021000021',
+      bankName: 'Chase',
+      institutionalProfile: {
+        _id: 'prof2',
+        legalName: 'Chase',
+        templates: [{ version: 2, status: 'VERIFIED', mapping: { headerAnchors: [] } }]
+      },
+      layoutDiscoveryPresent: true,
+      checksumPassRatio: 1
+    });
+    expect(gate.step1Required).toBe(true);
+    expect(gate.productionReady).toBe(false);
+    expect(gate.layoutLearningActive).toBe(true);
+    expect(gate.recommendation).toMatch(/Demo mode/i);
   });
 });

@@ -7,7 +7,8 @@
 import express from 'express';
 import sosVerificationController from '../controllers/sosVerificationController.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { validateRequest } from '../middleware/validation.js';
+import { saveRegistryCredentials } from '../services/businessRegistry/registryCredentialVault.js';
+import businessRegistryOrchestrator from '../services/businessRegistry/orchestrator.js';
 import rateLimit from 'express-rate-limit';
 
 const router = express.Router();
@@ -24,31 +25,7 @@ const sosRateLimit = rateLimit({
     legacyHeaders: false,
 });
 
-// Validation schemas
-const verificationSchema = {
-    businessName: {
-        type: 'string',
-        required: true,
-        minLength: 2,
-        maxLength: 200,
-        trim: true
-    },
-    state: {
-        type: 'string',
-        required: true,
-        enum: ['California', 'CA', 'california', 'ca'],
-        trim: true
-    }
-};
-
-const bulkVerificationSchema = {
-    businesses: {
-        type: 'array',
-        required: true,
-        maxItems: 50,
-        items: verificationSchema
-    }
-};
+// Validation removed CA-only gate — orchestrator resolves any onboarded state
 
 /**
  * @route   POST /api/sos/verify
@@ -57,7 +34,6 @@ const bulkVerificationSchema = {
  */
 router.post('/verify',
     sosRateLimit,
-    validateRequest(verificationSchema),
     asyncHandler(sosVerificationController.submitVerification)
 );
 
@@ -77,7 +53,6 @@ router.get('/verify/:jobId',
  */
 router.post('/verify-sync',
     sosRateLimit,
-    validateRequest(verificationSchema),
     asyncHandler(sosVerificationController.verifySynchronously)
 );
 
@@ -88,9 +63,38 @@ router.post('/verify-sync',
  */
 router.post('/verify-bulk',
     sosRateLimit,
-    validateRequest(bulkVerificationSchema),
     asyncHandler(sosVerificationController.submitBulkVerification)
 );
+
+/**
+ * @route   POST /api/sos/credentials
+ * @desc    Store encrypted state portal credentials (Vera paywall flow)
+ */
+router.post('/credentials', sosRateLimit, asyncHandler(async (req, res) => {
+    const userId = req.user?.id || req.body.userId;
+    const { stateCode, credentials, businessName, businessAddress, retryVerification } = req.body;
+    if (!userId || !stateCode || !credentials) {
+        return res.status(400).json({ success: false, error: 'userId, stateCode, and credentials required' });
+    }
+    await saveRegistryCredentials(userId, stateCode, credentials);
+
+    let verification = null;
+    if (retryVerification !== false && process.env.USE_SOS_VERIFICATION === 'true' && businessName) {
+        verification = await businessRegistryOrchestrator.verify({
+            businessName,
+            registrationState: stateCode,
+            businessAddress,
+            jobId: `credentials-retry-${Date.now()}`,
+            userId
+        });
+    }
+
+    res.json({
+        success: true,
+        message: 'Credentials saved',
+        verification
+    });
+}));
 
 /**
  * @route   GET /api/sos/status

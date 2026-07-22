@@ -22,7 +22,7 @@ export function resolveRequiresBankConfirmation({
   profileConfidence
 }) {
   const profileConf = Number(profileConfidence);
-  if (Number.isFinite(profileConf) && profileConf >= 0.9 && bankName) {
+  if (Number.isFinite(profileConf) && profileConf >= 0.85 && bankName) {
     return false;
   }
 

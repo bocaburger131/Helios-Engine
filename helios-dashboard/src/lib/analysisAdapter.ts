@@ -7,11 +7,13 @@ import type { LayoutPipelineShadow } from "@/lib/apiClient";
 import {
   bucketByDay,
   bucketByWeek,
+  filterDailyByL3mMonths,
   filterDailyByMonth,
   getChartActivityFromPayload,
   getOpeningBalanceFromSummaries,
   getTransactionsFromPayload,
   hasChartActivityData,
+  resolveL3mMonthKeys,
   rollupDailyToActivityRows,
   rollupWeeklyToActivityRows,
   type ChartActivity,
@@ -526,6 +528,8 @@ export function buildBaseMonthlyRows(payload: HeliosStatementPayload): ChartRow[
           monthKey,
           deposits: Number(summary.totalDeposits) || 0,
           withdrawals: Number(summary.totalWithdrawals) || 0,
+          net:
+            (Number(summary.totalDeposits) || 0) - (Number(summary.totalWithdrawals) || 0),
           adb: adbMap.has(monthKey) ? (adbMap.get(monthKey) ?? null) : null,
         };
       })
@@ -542,6 +546,7 @@ export function buildBaseMonthlyRows(payload: HeliosStatementPayload): ChartRow[
         monthKey,
         deposits: Number(m.deposits) || 0,
         withdrawals: Number(m.withdrawals) || 0,
+        net: (Number(m.deposits) || 0) - (Number(m.withdrawals) || 0),
         adb: adbMap.has(monthKey) ? (adbMap.get(monthKey) ?? null) : null,
       };
     })
@@ -592,11 +597,35 @@ function aggregateQuarterly(rows: ChartRow[]): ChartRow[] {
       monthKey: quarterKey,
       deposits: bucket.deposits,
       withdrawals: bucket.withdrawals,
+      net: bucket.deposits - bucket.withdrawals,
       adb:
         bucket.adbValues.length > 0
           ? bucket.adbValues.reduce((s, v) => s + v, 0) / bucket.adbValues.length
           : null,
     }));
+}
+
+/**
+ * Pick default chart horizon from statement coverage.
+ */
+export function resolveDefaultHorizon(payload: HeliosStatementPayload): Horizon {
+  const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
+  const count = summaries.length;
+  if (count <= 0) return "l3m";
+  if (count <= 2) return "monthly";
+  if (count === 3) return "l3m";
+
+  const monthKeys = summaries
+    .map((s) => monthKeyFromSummary(s))
+    .filter((k): k is string => Boolean(k));
+  const quarters = new Set(monthKeys.map((mk) => toQuarterKey(mk)));
+  if (count >= 4 || quarters.size >= 2) return "quarterly";
+  return "l3m";
+}
+
+export function getSpendingWindowSummary(payload: HeliosStatementPayload) {
+  const chartActivity = getChartActivityFromPayload(payload);
+  return chartActivity?.windows?.l3m ?? null;
 }
 
 /**
@@ -661,7 +690,22 @@ export function buildChartRows(
   }
 
   if (horizon === "l3m") {
-    return base.slice(-3);
+    const l3mMonthKeys = resolveL3mMonthKeys(payload);
+    let daily =
+      transactions.length > 0
+        ? bucketByDay(transactions, opening)
+        : rollupDailyToActivityRows(chartActivity?.daily ?? []);
+    daily = filterDailyByL3mMonths(daily, l3mMonthKeys);
+    return daily.map((d) => ({
+      label: d.label,
+      monthKey: d.date,
+      deposits: d.deposits,
+      withdrawals: d.withdrawals,
+      net: d.net,
+      adb: null,
+      balance: d.balance,
+      txnCount: d.txnCount,
+    }));
   }
 
   return aggregateQuarterly(base);
@@ -678,7 +722,7 @@ export function usesRollupOnlyTransactions(payload: HeliosStatementPayload): boo
   );
 }
 
-const METRICS_TRUST_MIN_CHECKSUM_RATE = 0.8;
+const METRICS_TRUST_MIN_CHECKSUM_RATE = 1;
 const ADB_CLOSING_MULTIPLIER_CAP = 10;
 
 function isAbsurdAdb(adb: number | null, closingBalance: number | null): boolean {
@@ -740,7 +784,7 @@ export function parseIntegrity(payload: HeliosStatementPayload): ParseIntegrity 
     !absurdVitals &&
     !parseDegraded &&
     !profileNotProductionReady &&
-    (hasTransactionLevelData(payload) || checksumPassRate === 1);
+    hasTransactionLevelData(payload);
 
   return {
     checksumPassRate,
@@ -762,7 +806,7 @@ export function chartUsesEstimatedData(
 ): boolean {
   const integrity = parseIntegrity(payload);
   if (!integrity.trustedForMetrics) return true;
-  if (horizon === "daily" || horizon === "weekly") {
+  if (horizon === "daily" || horizon === "weekly" || horizon === "l3m") {
     return !hasTransactionLevelData(payload);
   }
   return false;

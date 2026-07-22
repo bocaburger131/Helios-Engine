@@ -21,6 +21,8 @@
     "workers:categorization": "node src/workers/transactionCategorizationWorker.js",
     "workers:risk": "node src/workers/riskAnalysisWorker.js",
     "workers:manager": "node src/workers/workerManager.js",
+    "workers:registry-health": "node src/workers/runRegistryHealthCron.js",
+    "workers:registry-discovery": "cross-env ENABLE_REGISTRY_DISCOVERY_WORKER=true node -e \"import('./src/services/businessRegistry/registryDiscoveryQueue.js')\"",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",

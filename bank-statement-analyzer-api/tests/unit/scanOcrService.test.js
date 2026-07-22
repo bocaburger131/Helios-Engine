@@ -70,7 +70,7 @@ describe('scanOcrService', () => {
 
     const result = await extractTransactionsFromPdfBuffer(Buffer.from('%PDF'), {
       fileName: 'scan.pdf',
-      bankName: 'Wells Fargo',
+      profileId: 'wells_initiate_checking',
       defaultYear: 2025
     });
 

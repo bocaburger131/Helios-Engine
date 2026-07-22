@@ -79,19 +79,34 @@ export function assessInstitutionProfileGate(input = {}) {
   const checksumRateOk =
     checksumPassRatio == null || Number(checksumPassRatio) >= 0.8;
 
+  const batchFullyReconciled = Number(checksumPassRatio) >= 1;
+
   const layoutMapped = layoutDiscoveryPresent === true;
 
-  const productionReady =
-    tier1CodeProfile && templateVerified && layoutMapped && checksumRateOk;
+  const demoMode = isDemoMode();
 
-  const step1Required =
+  let productionReady =
+    batchFullyReconciled ||
+    (tier1CodeProfile && templateVerified && layoutMapped && checksumRateOk);
+
+  let step1Required =
     !resolvedRtn || !layoutMapped || genericLowConfidence;
 
-  const layoutLearningActive = isDemoMode() && step1Required;
+  let layoutLearningActive = demoMode && step1Required;
+
+  // Demo treats every institution as layout-learning — never production-ready.
+  if (demoMode) {
+    step1Required = true;
+    productionReady = false;
+    layoutLearningActive = true;
+  }
 
   let layoutDiscoveryStatus = 'unknown';
   if (layoutDiscoveryPresent === true) layoutDiscoveryStatus = 'complete';
   else if (layoutDiscoveryPresent === false) layoutDiscoveryStatus = 'failed';
+
+  const demoRecommendation =
+    'Demo mode — layout learning active for all institutions. Metrics are probe-grade until templates graduate.';
 
   return {
     step: 1,
@@ -112,19 +127,21 @@ export function assessInstitutionProfileGate(input = {}) {
     institutionalProfileId: institutionalProfile?._id
       ? String(institutionalProfile._id)
       : null,
-    recommendation: productionReady
-      ? null
-      : layoutLearningActive
-        ? 'Layout learning active — checksums improve as templates graduate to VERIFIED.'
-        : !layoutMapped
-          ? 'Run layout discovery on every statement before production underwriting.'
-          : probeOnly
-            ? 'Create institution profile (Step 1): scaffold Tier-1 code profile + Python slug + golden tests before production underwriting.'
-            : templateVerified
-              ? checksumRateOk
-                ? null
-                : 'Improve checksum pass rate to at least 80% before production underwriting.'
-              : 'Complete template graduation (5 consecutive checksum passes) to VERIFIED before production underwriting.'
+    recommendation: demoMode
+      ? demoRecommendation
+      : productionReady
+        ? null
+        : layoutLearningActive
+          ? 'Layout learning active — checksums improve as templates graduate to VERIFIED.'
+          : !layoutMapped
+            ? 'Run layout discovery on every statement before production underwriting.'
+            : probeOnly
+              ? 'Create institution profile (Step 1): scaffold Tier-1 code profile + Python slug + golden tests before production underwriting.'
+              : templateVerified
+                ? checksumRateOk
+                  ? null
+                  : 'Improve checksum pass rate to at least 80% before production underwriting.'
+                : 'Complete template graduation (5 consecutive checksum passes) to VERIFIED before production underwriting.'
   };
 }
 

@@ -32,8 +32,10 @@ export function authHeaders(token?: string | null): HeadersInit {
 
 export function getDashboardUrl(statementId: string, token?: string | null): string {
   const base = DASHBOARD_BASE;
-  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${base}/dashboard/${encodeURIComponent(statementId)}${qs}`;
+  if (token && typeof window !== "undefined") {
+    setStoredToken(token);
+  }
+  return `${base}/dashboard/${encodeURIComponent(statementId)}`;
 }
 
 export async function fetchStatementById(

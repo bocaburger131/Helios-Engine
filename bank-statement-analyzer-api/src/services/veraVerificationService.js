@@ -488,3 +488,21 @@ export async function completeHumanVerification(statementId, actorUserId, body) 
 
   return statement.toObject ? statement.toObject() : statement;
 }
+
+/**
+ * Attach Vera paywall guidance when state registry credentials are required.
+ * @param {object} sosData
+ * @returns {object|null}
+ */
+export function buildRegistryCredentialRequest(sosData) {
+  if (!sosData || sosData.alertCode !== 'SOS_CREDENTIALS_REQUIRED') {
+    if (sosData?.reason !== 'SOS_CREDENTIALS_REQUIRED') return null;
+  }
+  return {
+    stateCode: sosData.state,
+    portalSignupUrl: sosData.portalSignupUrl || null,
+    message:
+      'This state registry requires portal credentials. Use Vera to add credits or create an account, then retry verification.',
+    requestedAt: new Date().toISOString()
+  };
+}

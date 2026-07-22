@@ -18,11 +18,17 @@ import {
   chartUsesEstimatedData,
   formatCurrency,
   getMonthOptions,
+  getSpendingWindowSummary,
   hasTransactionLevelData,
+  resolveDefaultHorizon,
   usesRollupOnlyTransactions,
   type HeliosStatementPayload,
   type Horizon,
 } from "@/lib/analysisAdapter";
+import {
+  formatL3mWindowLabel,
+  resolveL3mMonthKeys,
+} from "@/lib/dailyActivityAdapter";
 
 const HORIZONS: { id: Horizon; label: string }[] = [
   { id: "daily", label: "Daily" },
@@ -32,12 +38,13 @@ const HORIZONS: { id: Horizon; label: string }[] = [
   { id: "quarterly", label: "Quarterly" },
 ];
 
-export type ChartMode = "cashFlow" | "liquidity" | "netVelocity";
+export type ChartMode = "cashFlow" | "liquidity" | "netVelocity" | "activity";
 
 const MODES: { id: ChartMode; label: string; title: string }[] = [
   { id: "cashFlow", label: "Cash Flow", title: "Cash flow" },
   { id: "liquidity", label: "Liquidity", title: "Average daily balance" },
   { id: "netVelocity", label: "Net Velocity", title: "Net velocity" },
+  { id: "activity", label: "Activity", title: "Daily activity" },
 ];
 
 type Props = {
@@ -74,7 +81,7 @@ function ChartTooltip({
 }
 
 function isTxnHorizon(h: Horizon): boolean {
-  return h === "daily" || h === "weekly";
+  return h === "daily" || h === "weekly" || h === "l3m";
 }
 
 export default function ForensicChart({
@@ -86,20 +93,28 @@ export default function ForensicChart({
   const monthOptions = useMemo(() => getMonthOptions(payload), [payload]);
   const hasTxns = hasTransactionLevelData(payload);
 
-  const [chartMode, setChartMode] = useState<ChartMode>("cashFlow");
-  const [horizon, setHorizon] = useState<Horizon>(() =>
-    hasTxns ? "daily" : defaultHorizon === "daily" ? "l3m" : defaultHorizon
+  const resolvedDefault = useMemo(
+    () => defaultHorizon ?? resolveDefaultHorizon(payload),
+    [payload, defaultHorizon]
   );
+  const l3mMonthKeys = useMemo(() => resolveL3mMonthKeys(payload), [payload]);
+  const isL3mBatch = resolvedDefault === "l3m";
+  const [chartMode, setChartMode] = useState<ChartMode>(() =>
+    isL3mBatch ? "activity" : "cashFlow"
+  );
+  const [horizon, setHorizon] = useState<Horizon>(() => resolvedDefault);
   const [selectedMonthKey, setSelectedMonthKey] = useState(
     () => monthOptions[monthOptions.length - 1]?.monthKey ?? ""
   );
 
   const selectMode = (mode: ChartMode) => {
     setChartMode(mode);
-    if (hasTxns && !isTxnHorizon(horizon)) {
-      setHorizon("daily");
+    if (mode === "activity" && hasTxns && !isTxnHorizon(horizon)) {
+      setHorizon(isL3mBatch ? "l3m" : "daily");
     }
   };
+
+  const windowSummary = useMemo(() => getSpendingWindowSummary(payload), [payload]);
 
   const chartRows = useMemo(
     () => buildChartRows(payload, horizon, selectedMonthKey),
@@ -108,6 +123,11 @@ export default function ForensicChart({
 
   const estimated = chartUsesEstimatedData(payload, horizon);
   const modeMeta = MODES.find((m) => m.id === chartMode) ?? MODES[0];
+  const l3mLabel = formatL3mWindowLabel(l3mMonthKeys);
+  const chartTitle =
+    horizon === "l3m" && chartMode === "activity"
+      ? `Daily activity — L3M (${l3mLabel})`
+      : modeMeta.title;
 
   const emptyMessage =
     isTxnHorizon(horizon) && !hasTxns
@@ -125,7 +145,12 @@ export default function ForensicChart({
       <div className="mb-4 flex flex-col gap-4">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{modeMeta.title}</h2>
+            <h2 className="text-lg font-semibold text-slate-900">{chartTitle}</h2>
+            {horizon === "l3m" && (
+              <p className="mt-0.5 text-xs text-slate-500">
+                Last {l3mMonthKeys.length || 3} statement months · {windowSummary?.calendarDays ?? windowSummary?.daysInWindow ?? "—"} calendar days
+              </p>
+            )}
             {estimated && (
               <p className="mt-1 text-xs text-amber-700">
                 Unreliable or estimated — checksum failed or no transaction detail
@@ -180,7 +205,43 @@ export default function ForensicChart({
         </div>
       </div>
 
+      {(horizon === "l3m" || horizon === "quarterly") && windowSummary && (
+        <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-3">
+          {windowSummary.reconciliation?.withinTolerance === false && (
+            <div className="sm:col-span-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Chart totals differ from statement summaries by{" "}
+              {formatCurrency(Math.abs(windowSummary.reconciliation.deltaDeposits ?? 0))} deposits /{" "}
+              {formatCurrency(Math.abs(windowSummary.reconciliation.deltaWithdrawals ?? 0))} withdrawals — review parse.
+            </div>
+          )}
+          <div>
+            <p className="text-xs uppercase text-slate-500">L3M withdrawals</p>
+            <p className="font-semibold text-slate-900">{formatCurrency(windowSummary.withdrawals ?? null)}</p>
+            <p className="text-xs text-slate-500">
+              {formatCurrency(windowSummary.avgDailyWithdrawals ?? null)}/day avg
+              {windowSummary.calendarDays != null && ` · ${windowSummary.calendarDays} cal. days`}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase text-slate-500">L3M deposits</p>
+            <p className="font-semibold text-slate-900">{formatCurrency(windowSummary.deposits ?? null)}</p>
+            <p className="text-xs text-slate-500">
+              {formatCurrency(windowSummary.avgDailyDeposits ?? null)}/day avg
+              {windowSummary.calendarDays != null && ` · ${windowSummary.calendarDays} cal. days`}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase text-slate-500">Activity</p>
+            <p className="font-semibold text-slate-900">
+              {(windowSummary.avgTxnPerDay ?? 0).toFixed(1)} txns/day
+            </p>
+            <p className="text-xs text-slate-500">Net {formatCurrency(windowSummary.net ?? null)}</p>
+          </div>
+        </div>
+      )}
+
       {showMonthDrill &&
+        horizon !== "l3m" &&
         (horizon === "daily" || horizon === "single") &&
         monthOptions.length > 0 && (
           <div className="mb-4">
@@ -216,7 +277,7 @@ export default function ForensicChart({
                 dataKey="label"
                 tick={{ fill: "#64748b", fontSize: 11 }}
                 axisLine={{ stroke: "#cbd5e1" }}
-                interval={horizon === "daily" ? "preserveStartEnd" : 0}
+                interval={horizon === "daily" || horizon === "l3m" ? "preserveStartEnd" : 0}
               />
               <YAxis
                 yAxisId="left"
@@ -295,6 +356,29 @@ export default function ForensicChart({
                   dot={isTxnHorizon(horizon) ? { r: 2 } : false}
                   connectNulls
                 />
+              )}
+
+              {chartMode === "activity" && (
+                <>
+                  <Bar
+                    yAxisId="left"
+                    dataKey="txnCount"
+                    name="Transactions"
+                    fill="#6366f1"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={40}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="withdrawals"
+                    name="Withdrawals"
+                    stroke="#dc2626"
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                </>
               )}
             </ComposedChart>
           </ResponsiveContainer>

@@ -30,7 +30,7 @@ describe("parseIntegrity — checksum failed fixture", () => {
     expect(vm.metrics.l3mAdb).toBeNull();
     expect(vm.metrics.dscr).toBeNull();
     expect(vm.metrics.nsfCount).toBeNull();
-    expect(vm.veraDecision).toBe("DECLINE");
+    expect(vm.veraDecision).toBeNull();
     expect(vm.bankabilityLabel).toBe("Unverified parse");
     expect(vm.veritasBadge).toBe("Review");
   });

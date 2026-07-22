@@ -42,11 +42,13 @@ export function buildWorkerRequest(jobData) {
       applicationData: JSON.stringify(applicationData),
       confirmedBankName: jobData.confirmedBankName || null,
       confirmedBankFileName: jobData.confirmedBankFileName || null,
-      assumeSingleUnknownAccount: jobData.assumeSingleUnknownAccount
+      assumeSingleUnknownAccount: jobData.assumeSingleUnknownAccount,
+      triageAccessToken: jobData.triageAccessToken || null
     },
     user: { id: jobData.userId || 'anonymous' },
     headers: {
-      'x-correlation-id': jobData.correlationId || jobData.jobId || ''
+      'x-correlation-id': jobData.correlationId || jobData.jobId || '',
+      'x-triage-access-token': jobData.triageAccessToken || ''
     }
   };
 }
@@ -87,6 +89,24 @@ export function createPipelineOutcomeCollector(settle) {
           });
           return res;
         }
+        if (
+          payload?.error === 'INSTITUTION_PROFILE_STEP1_REQUIRED' ||
+          payload?.code === 'INSTITUTION_PROFILE_STEP1'
+        ) {
+          settle({
+            status: 'failed',
+            error: payload.error || 'INSTITUTION_PROFILE_STEP1_REQUIRED',
+            institutionProfileGate: payload.institutionProfileGate,
+            details: payload
+          });
+          return res;
+        }
+        settle({
+          status: 'failed',
+          error: payload?.error || payload?.message || 'BATCH_DEFERRED',
+          details: payload
+        });
+        return res;
       }
       if (statusCode === 201) {
         if (payload?.businessStatus === 'COMPLETED_WITH_WARNINGS') {

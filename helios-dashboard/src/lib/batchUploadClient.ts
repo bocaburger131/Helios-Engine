@@ -8,6 +8,7 @@ import {
 export type TriageResult = {
   success?: boolean;
   uploadSessionId?: string;
+  triageAccessToken?: string;
   triage?: {
     statements?: Array<{ name?: string }>;
     applications?: Array<{ name?: string }>;
@@ -22,6 +23,7 @@ export type TriageResult = {
   institutionProfileGate?: {
     step1Required?: boolean;
     productionReady?: boolean;
+    layoutLearningActive?: boolean;
     profileStatus?: string;
     codeProfileId?: string;
     bankName?: string | null;
@@ -51,9 +53,63 @@ export type BatchJobStatus = {
   requiresBankConfirmation?: boolean;
   uploadSessionId?: string;
   fileName?: string;
+  fileIndex?: number;
   detectedBankName?: string;
+  bankNameCandidates?: string[];
+  previewUrl?: string;
+  batchContext?: {
+    totalStatementFiles?: number;
+    parsedBeforePause?: number;
+    pendingFileName?: string;
+  };
   message?: string;
 };
+
+export class BankConfirmationRequiredError extends Error {
+  readonly payload: BatchJobStatus;
+
+  constructor(payload: BatchJobStatus) {
+    super(payload.message || `Bank confirmation required for ${payload.fileName ?? "statement"}`);
+    this.name = "BankConfirmationRequiredError";
+    this.payload = payload;
+  }
+}
+
+function confirmBankPath(publicUpload?: boolean) {
+  const pub = publicUpload ?? USE_PUBLIC;
+  return pub
+    ? "/api/statements/batch/confirm-bank/public"
+    : "/api/statements/batch/confirm-bank";
+}
+
+export async function confirmBankAndResumeBatch(
+  input: {
+    uploadSessionId: string;
+    fileName: string;
+    confirmedBankName: string;
+  },
+  usePublicUpload?: boolean
+): Promise<{ jobId: string; correlationId?: string }> {
+  const res = await fetch(`${API_BASE}${confirmBankPath(usePublicUpload)}`, {
+    method: "POST",
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    jobId?: string;
+    correlationId?: string;
+    error?: string;
+    message?: string;
+  };
+  if (!res.ok || !json.jobId) {
+    throw new Error(json.error || json.message || `Confirm bank failed (${res.status})`);
+  }
+  return { jobId: String(json.jobId), correlationId: json.correlationId };
+}
 
 export type UploadContext = {
   companyName?: string;
@@ -66,6 +122,27 @@ export type UploadContext = {
 
 const USE_PUBLIC =
   process.env.NEXT_PUBLIC_USE_PUBLIC_UPLOAD === "true";
+
+const TRIAGE_ACCESS_PREFIX = "bsaTriageAccess:";
+
+export function storeTriageAccess(uploadSessionId: string, token: string): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(`${TRIAGE_ACCESS_PREFIX}${uploadSessionId}`, token);
+}
+
+export function getTriageAccess(uploadSessionId: string): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem(`${TRIAGE_ACCESS_PREFIX}${uploadSessionId}`);
+}
+
+function triageAccessHeaders(uploadSessionId?: string): HeadersInit {
+  const headers = { ...authHeaders() } as Record<string, string>;
+  if (uploadSessionId) {
+    const token = getTriageAccess(uploadSessionId);
+    if (token) headers["X-Triage-Access-Token"] = token;
+  }
+  return headers;
+}
 
 function triagePath(publicUpload?: boolean) {
   const pub = publicUpload ?? USE_PUBLIC;
@@ -104,6 +181,8 @@ export function buildBatchFormData(
   }
   if (ctx.uploadSessionId) {
     fd.append("uploadSessionId", ctx.uploadSessionId);
+    const triageToken = getTriageAccess(ctx.uploadSessionId);
+    if (triageToken) fd.append("triageAccessToken", triageToken);
   } else {
     for (const file of files) {
       fd.append("statements", file, file.name);
@@ -182,6 +261,9 @@ export async function triageStatements(
   if (!res.ok || json.success === false) {
     throw new Error(json.error || json.message || `Triage failed (${res.status})`);
   }
+  if (json.uploadSessionId && json.triageAccessToken) {
+    storeTriageAccess(json.uploadSessionId, json.triageAccessToken);
+  }
   return json;
 }
 
@@ -200,7 +282,7 @@ export async function runBatchAnalysis(
   const res = await fetch(`${API_BASE}${batchPath(ctx.usePublicUpload)}`, {
     method: "POST",
     headers: {
-      ...authHeaders(),
+      ...triageAccessHeaders(ctx.uploadSessionId),
       "X-Correlation-Id": correlationId,
     },
     body: buildBatchFormData(files, ctx),
@@ -273,10 +355,7 @@ export async function pollBatchJob(
       throw new Error(payload.error || "Macro analysis failed");
     }
     if (payload.status === "requires_bank_confirmation") {
-      throw new Error(
-        payload.message ||
-          `Bank confirmation required for ${payload.fileName ?? "statement"}`
-      );
+      throw new BankConfirmationRequiredError(payload);
     }
 
     await new Promise((r) => setTimeout(r, interval));

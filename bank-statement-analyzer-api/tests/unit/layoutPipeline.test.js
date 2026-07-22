@@ -33,7 +33,7 @@ import {
 import { crossCheckIdentity, reconcileWithVera } from '../../src/services/extraction/layoutPipeline/veraReconciliationFallback.js';
 import {
   shouldBlockLegacyExtract,
-  STRICT_PROFILE_IDS
+  getStrictProfileIds
 } from '../../src/services/extraction/layoutPipeline/toxicFallbackGuard.js';
 import { comparePipelineShadow } from '../../src/services/extraction/layoutPipeline/pipelineShadowComparator.js';
 import { runVeraDeltaAnalysis, parseVeraDeltaResponse } from '../../src/services/veraDeltaService.js';
@@ -298,8 +298,11 @@ describe('toxicFallbackGuard', () => {
     ).toBe(false);
   });
 
-  it('STRICT_PROFILE_IDS includes wells and chase', () => {
-    expect(STRICT_PROFILE_IDS).toContain('wells_initiate_checking');
+  it('strict profile ids derive from PROFILE_META', () => {
+    expect(getStrictProfileIds()).toContain('wells_initiate_checking');
+    expect(getStrictProfileIds()).toContain('chase_business_complete');
+    expect(getStrictProfileIds()).toContain('regions_business_checking');
+    expect(getStrictProfileIds()).not.toContain('generic_digital');
   });
 });
 
