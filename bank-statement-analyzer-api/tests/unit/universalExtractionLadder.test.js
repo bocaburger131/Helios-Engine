@@ -347,6 +347,40 @@ describe('document class → engines', () => {
     expect(r.terminalStatus).toBe('NEEDS_REUPLOAD');
     expect(r.engines).toEqual([]);
   });
+
+  it('isEngineAllowed respects classification allow-list', async () => {
+    const { isEngineAllowed, canonicalEngineName } = await import(
+      '../../src/services/extraction/documentClassifier.js'
+    );
+    expect(canonicalEngineName('pdfplumber')).toBe('plumber');
+    const scanned = { engines: ['marker'], documentClass: 'scanned' };
+    expect(isEngineAllowed(scanned, 'plumber')).toBe(false);
+    expect(isEngineAllowed(scanned, 'marker')).toBe(true);
+    const native = { engines: ['plumber', 'text'], documentClass: 'native_text' };
+    expect(isEngineAllowed(native, 'pdf_parse')).toBe(true);
+  });
+});
+
+describe('resolveBasicCandidateBundle (Phase 1 — no repair)', () => {
+  it('selects verified plumber without applying repairs', async () => {
+    const { resolveBasicCandidateBundle } = await import(
+      '../../src/services/extraction/candidateOrchestrator.js'
+    );
+    const meta = balancedLedger().meta;
+    const good = balancedLedger().transactions;
+    const bundle = resolveBasicCandidateBundle({
+      engineResults: [
+        { engine: 'plumber', transactions: good },
+        { engine: 'text', transactions: good }
+      ],
+      meta,
+      documentClass: 'native_text',
+      buffer: Buffer.from('pdf')
+    });
+    expect(bundle.repairs).toEqual([]);
+    expect(bundle.selected?.engine).toBe('plumber');
+    expect(bundle.manifest.repairApplied).toBeNull();
+  });
 });
 
 describe('gemini circuit breaker', () => {

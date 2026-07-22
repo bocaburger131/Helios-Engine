@@ -23,7 +23,8 @@ import {
   dualEngineParseEnabled,
   applyDualEngineToParseResult
 } from './extraction/dualEnginePdfParse.js';
-import { classifyDocument } from './extraction/documentClassifier.js';
+import { classifyDocument, isEngineAllowed, markBrokenGeometry } from './extraction/documentClassifier.js';
+import { resolveBasicCandidateBundle } from './extraction/candidateOrchestrator.js';
 import { resolveProfile, getProfileMeta } from './extraction/bankProfileRegistry.js';
 import { runStatementExtractionPipeline } from './extraction/statementExtractionPipeline.js';
 import { reconcileStatement } from './extraction/statementReconciliation.js';
@@ -469,11 +470,27 @@ export class PDFParserService {
       };
       let plumberResult = null;
       let plumberTransactions = null;
-      if (dualEngineParseEnabled()) {
+      const docClass = options._documentClassification;
+      const allowPlumber =
+        dualEngineParseEnabled() && isEngineAllowed(docClass, 'plumber');
+      if (allowPlumber) {
         plumberResult = await extractTransactionsFromPdfBuffer(buffer, plumberOptions);
         if (plumberResult?.success && plumberResult.transactions?.length) {
           plumberTransactions = plumberResult.transactions;
+        } else if (
+          docClass?.documentClass === 'native_text' ||
+          !docClass?.documentClass
+        ) {
+          // Plumber empty/fail on native text → treat as broken geometry for later engines.
+          options._documentClassification = markBrokenGeometry(
+            docClass || { documentClass: 'native_text', engines: ['plumber', 'text'] }
+          );
         }
+      } else if (dualEngineParseEnabled() && docClass) {
+        logger.info('[PDF_PARSER] Skipping pdfplumber — not in allowedEngines', {
+          documentClass: docClass.documentClass,
+          engines: docClass.engines
+        });
       }
 
       let transactions = [];
@@ -993,24 +1010,93 @@ export class PDFParserService {
         return baseResult;
       }
 
-      const plumberResultResolved = plumberResult;
+      const plumberResultResolved =
+        isEngineAllowed(options._documentClassification, 'plumber') ? plumberResult : null;
       const dualStitcherPrinted = mergePrintedTotals(
         stitcher.typeA?.printed ?? null,
         stitcher.typeA?.text || data.text
       );
-      return applyDualEngineToParseResult(baseResult, plumberResultResolved, {
-        fileName: options?.fileName,
-        correlationId: options?.correlationId,
-        onProgress: options?.correlationId
-          ? (payload) => setBatchProgress(options.correlationId, payload)
-          : undefined,
-        text: data.text,
-        defaultYear,
-        rtn: waterfallResult.rtn ?? null,
-        accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
-        stitcherPrinted: dualStitcherPrinted,
-        typeAText: stitcher.typeA?.text ?? null
-      });
+
+      let merged = baseResult;
+      if (plumberResultResolved) {
+        merged = applyDualEngineToParseResult(baseResult, plumberResultResolved, {
+          fileName: options?.fileName,
+          correlationId: options?.correlationId,
+          onProgress: options?.correlationId
+            ? (payload) => setBatchProgress(options.correlationId, payload)
+            : undefined,
+          text: data.text,
+          defaultYear,
+          rtn: waterfallResult.rtn ?? null,
+          accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
+          stitcherPrinted: dualStitcherPrinted,
+          typeAText: stitcher.typeA?.text ?? null
+        });
+      }
+
+      // Phase 1 basic ladder: independent candidates → verify → select (no repairs).
+      const sharedMeta = {
+        openingBalance: merged.openingBalance ?? merged.balances?.opening,
+        closingBalance: merged.closingBalance ?? merged.balances?.closing,
+        printedDeposits:
+          merged.metadata?.profileReconciliation?.printedDeposits ??
+          dualStitcherPrinted?.totalDeposits ??
+          null,
+        printedWithdrawals:
+          merged.metadata?.profileReconciliation?.printedWithdrawals ??
+          dualStitcherPrinted?.totalWithdrawals ??
+          null,
+        printedLines: merged.metadata?.profileReconciliation?.printedLines ?? null,
+        reconciliationSpec: getProfileMeta(profile.id).reconciliationSpec ?? null,
+        accountNumber: accountInfo.accountNumber || indicators.accountNumber || null
+      };
+
+      const engineResults = [];
+      if (isEngineAllowed(options._documentClassification, 'text')) {
+        engineResults.push({
+          engine: 'text',
+          transactions: baseResult.transactions || []
+        });
+      }
+      if (
+        plumberResultResolved?.success &&
+        Array.isArray(plumberResultResolved.transactions) &&
+        plumberResultResolved.transactions.length > 0 &&
+        isEngineAllowed(options._documentClassification, 'plumber')
+      ) {
+        engineResults.push({
+          engine: 'plumber',
+          transactions: plumberResultResolved.transactions
+        });
+      }
+
+      if (engineResults.length > 0) {
+        const bundle = resolveBasicCandidateBundle({
+          engineResults,
+          meta: sharedMeta,
+          documentClass: options._documentClassification?.documentClass ?? null,
+          buffer,
+          profileId: profile.id,
+          profileVersion: getProfileMeta(profile.id).profileVersion ?? null
+        });
+        merged.metadata = merged.metadata || {};
+        merged.metadata.parseManifest = bundle.manifest;
+        merged.metadata.reviewPacket = bundle.reviewPacket;
+        merged.metadata.parseFinalStatus = bundle.finalStatus;
+        merged.metadata.ladderPhase = 'phase1_basic';
+        if (bundle.selected?.transactions?.length) {
+          merged.transactions = bundle.selected.transactions;
+          merged.metadata.dualEngine = {
+            ...(merged.metadata.dualEngine || {}),
+            chosenEngine:
+              bundle.selected.engine === 'plumber' ? 'pdfplumber' : 'pdf_parse',
+            selectionRule: 'basic_ladder_selectBestVerified',
+            ladderFinalStatus: bundle.finalStatus
+          };
+        }
+      }
+
+      return merged;
     } catch (error) {
       // Let DocumentTriageError propagate as-is so callers can distinguish non-statement files
       if (error instanceof DocumentTriageError) {

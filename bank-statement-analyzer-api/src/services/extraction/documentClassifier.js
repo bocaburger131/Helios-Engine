@@ -76,6 +76,35 @@ export function allowedEnginesForClass(documentClass) {
 }
 
 /**
+ * Normalize engine aliases (pdfplumber → plumber, pdf_parse → text).
+ * @param {string} engine
+ * @returns {string}
+ */
+export function canonicalEngineName(engine) {
+  const e = String(engine || '').toLowerCase();
+  if (e === 'pdfplumber' || e === 'plumber') return 'plumber';
+  if (e === 'pdf_parse' || e === 'text') return 'text';
+  if (e === 'marker') return 'marker';
+  if (e === 'native') return 'native';
+  return e;
+}
+
+/**
+ * @param {object|null|undefined} classification — classifyDocument result
+ * @param {string} engine
+ * @returns {boolean}
+ */
+export function isEngineAllowed(classification, engine) {
+  const engines = classification?.engines;
+  if (!Array.isArray(engines) || engines.length === 0) {
+    // No classification → allow deterministic defaults (native_text set)
+    const def = allowedEnginesForClass(DOCUMENT_CLASSES.NATIVE_TEXT).engines;
+    return def.includes(canonicalEngineName(engine));
+  }
+  return engines.includes(canonicalEngineName(engine));
+}
+
+/**
  * @param {Buffer} buffer
  * @returns {{ encrypted: boolean, malformed: boolean, headerOk: boolean }}
  */
@@ -237,6 +266,8 @@ export function markBrokenGeometry(classification) {
 export default {
   classifyDocument,
   allowedEnginesForClass,
+  isEngineAllowed,
+  canonicalEngineName,
   markBrokenGeometry,
   DOCUMENT_CLASSES
 };

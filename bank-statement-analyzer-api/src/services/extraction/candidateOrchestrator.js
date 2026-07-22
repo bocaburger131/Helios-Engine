@@ -148,20 +148,20 @@ export function applyBoundedRepair(candidate, opts = {}) {
 
 /**
  * Full select path: verify → reject inflation → optional one repair → select best VERIFIED.
+ * Phase 3 owns repairs; Phase 1 callers should use resolveBasicCandidateBundle.
  * @param {object} input
  */
 export function resolveVerifiedCandidateBundle(input = {}) {
+  const basic = resolveBasicCandidateBundle(input);
+  if (basic.selected || input.skipRepair) {
+    return basic;
+  }
+
   const {
-    engineResults = [],
-    meta = {},
-    documentClass = null,
-    buffer = null,
-    profileId = null,
-    profileVersion = null,
     sectionRowBags = null
   } = input;
 
-  let candidates = buildAndVerifyCandidates(engineResults, meta, documentClass);
+  let candidates = basic.candidates;
   const { selectable, rejected } = partitionInflation(candidates);
   const tracker = createRepairTracker();
   const repairs = [];
@@ -170,7 +170,6 @@ export function resolveVerifiedCandidateBundle(input = {}) {
   let selected = selectBestVerifiedCandidate(working);
 
   if (!selected) {
-    // One repair attempt on the first non-inflation candidate with a recon.
     const target = working.find((c) => c.verification && !c.verification.isVerified);
     if (target) {
       const repairResult = applyBoundedRepair(target, { tracker, sectionRowBags });
@@ -192,17 +191,17 @@ export function resolveVerifiedCandidateBundle(input = {}) {
   }
 
   const finalStatus = selected?.finalStatus || deriveTerminalClass(working, rejected);
-  const hash = buffer ? documentHash(buffer) : null;
+  const hash = input.buffer ? documentHash(input.buffer) : basic.manifest?.documentHash;
   const manifest = buildParseManifest({
     documentHash: hash,
-    documentClass,
+    documentClass: input.documentClass ?? null,
     candidates,
     selectedCandidate: selected,
     repairApplied: repairs[0]?.action || null,
     repairs,
     finalStatus,
-    profileId,
-    profileVersion,
+    profileId: input.profileId || null,
+    profileVersion: input.profileVersion || null,
     parserVersion: PARSER_VERSION
   });
 
@@ -226,6 +225,62 @@ export function resolveVerifiedCandidateBundle(input = {}) {
     manifest,
     reviewPacket,
     repairs
+  };
+}
+
+/**
+ * Phase 1 core ladder: verify → reject inflation → select best VERIFIED → manifest.
+ * Does NOT run bounded repairs (Phase 3).
+ * @param {object} input
+ */
+export function resolveBasicCandidateBundle(input = {}) {
+  const {
+    engineResults = [],
+    meta = {},
+    documentClass = null,
+    buffer = null,
+    profileId = null,
+    profileVersion = null
+  } = input;
+
+  const candidates = buildAndVerifyCandidates(engineResults, meta, documentClass);
+  const { selectable, rejected } = partitionInflation(candidates);
+  const selected = selectBestVerifiedCandidate(selectable);
+  const finalStatus = selected?.finalStatus || deriveTerminalClass(selectable, rejected);
+  const hash = buffer ? documentHash(buffer) : null;
+  const manifest = buildParseManifest({
+    documentHash: hash,
+    documentClass,
+    candidates,
+    selectedCandidate: selected,
+    repairApplied: null,
+    repairs: [],
+    finalStatus,
+    profileId,
+    profileVersion,
+    parserVersion: PARSER_VERSION
+  });
+
+  const reviewPacket =
+    finalStatus === 'VERIFIED'
+      ? null
+      : buildReviewPacket({
+          finalStatus,
+          failureClass: finalStatus,
+          candidates,
+          selectedCandidate: selected || selectable[0],
+          missingSections: inferMissingSections(selectable[0]),
+          recon: (selected || selectable[0])?.verification?.recon
+        });
+
+  return {
+    selected,
+    candidates,
+    rejectedInflation: rejected,
+    finalStatus,
+    manifest,
+    reviewPacket,
+    repairs: []
   };
 }
 
@@ -257,4 +312,8 @@ export {
   createRepairTracker
 };
 
-export default { resolveVerifiedCandidateBundle, buildAndVerifyCandidates };
+export default {
+  resolveVerifiedCandidateBundle,
+  resolveBasicCandidateBundle,
+  buildAndVerifyCandidates
+};
