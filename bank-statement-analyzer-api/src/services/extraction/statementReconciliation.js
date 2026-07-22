@@ -146,12 +146,11 @@ export function reconcileStatement(meta, transactions) {
     spec
   );
 
-  // Spec profiles with a parsed multi-line SUMMARY: the bank's own printed
-  // summary is the authoritative reconciliation. The closing identity
-  // (opening + Σprinted credits − Σprinted debits = closing) is the universal
-  // checksum. Parsed section totals (lineDeltas) remain as a tamper signal but
-  // do not hard-fail the checksum, since some row sources (glued pdf-parse text)
-  // are noisy compared to column-aware extraction.
+  // Universal ledger gate (any bank / any company):
+  // 1) Ledger quality: Tier-A closing on parsed rows OR printed activity match
+  // 2) Closing integrity: printed SUMMARY identity when multi-line SUMMARY exists,
+  //    else Tier-A/closingMatch on the stated ending balance
+  // Printed identity alone never passes — empty/wrong ledgers always self-reconcile on paper.
   const hasSpecLines =
     Boolean(spec) && printedLines != null && Object.keys(printedLines).length > 0;
 
@@ -159,12 +158,72 @@ export function reconcileStatement(meta, transactions) {
     ? Object.values(lineDeltas).every((d) => d.match)
     : null;
 
-  const checksumOk = hasSpecLines
-    ? printedClosingMatch
-    : Boolean(checksumRecon.ok) && depositsMatch && withdrawalsMatch && closingMatch;
+  const activityOk = depositsMatch && withdrawalsMatch;
+  const tierAOk = Boolean(checksumRecon.ok);
+  const ledgerQualityOk = tierAOk || activityOk;
+  const hasPrintedActivity =
+    (printedDeposits != null && Number.isFinite(Number(printedDeposits))) ||
+    (printedWithdrawals != null && Number.isFinite(Number(printedWithdrawals)));
+
+  let checksumOk;
+  if (hasSpecLines) {
+    checksumOk = ledgerQualityOk && printedClosingMatch;
+  } else if (hasPrintedActivity) {
+    checksumOk = ledgerQualityOk && closingMatch;
+  } else {
+    checksumOk = tierAOk && closingMatch;
+  }
+  const ledgerOk = checksumOk;
+
+  // #region agent log
+  {
+    const topOutflows = [...txs]
+      .filter((t) => Number(t?.amount) < 0)
+      .sort((a, b) => Math.abs(Number(b.amount)) - Math.abs(Number(a.amount)))
+      .slice(0, 5)
+      .map((t) => ({
+        amount: Number(t.amount),
+        section: t.section || t.sectionLabel || null,
+        desc: String(t.description || '').slice(0, 50)
+      }));
+    fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '05b151' },
+      body: JSON.stringify({
+        sessionId: '05b151',
+        runId: 'pre-fix',
+        hypothesisId: 'A,B',
+        location: 'statementReconciliation.js:gate',
+        message: 'universal checksum gate decision',
+        data: {
+          checksumOk,
+          hasSpecLines,
+          printedClosingMatch,
+          activityOk,
+          tierAOk,
+          closingMatch,
+          depositsMatch,
+          withdrawalsMatch,
+          parsedDeposits,
+          printedDeposits: printedDeposits != null ? Number(printedDeposits) : null,
+          parsedWithdrawals,
+          printedWithdrawals: printedWithdrawals != null ? Number(printedWithdrawals) : null,
+          opening,
+          closing,
+          txnCount: txs.length,
+          topOutflows
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+  }
+  // #endregion
 
   return {
     checksumOk,
+    ledgerOk,
+    activityOk,
+    tierAOk,
     parsedDeposits,
     parsedWithdrawals,
     computedClosing,

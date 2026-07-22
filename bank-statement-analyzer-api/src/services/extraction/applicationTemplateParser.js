@@ -12,6 +12,7 @@ import {
   normalizeEin,
   parseCurrency
 } from '../../schemas/parsedApplication.schema.js';
+import { parseStateFromAddress, resolveStateCode } from '../businessRegistry/stateResolver.js';
 import {
   ACROFORM_FIELD_ALIASES,
   detectApplicationTemplate
@@ -207,7 +208,15 @@ function extractByLabelProximity(text) {
   );
   if (revMatch) grossAnnualRevenue = parseCurrency(revMatch[1]);
 
-  return { legalName, dbaName, ein, requestedAmount, grossAnnualRevenue };
+  let registrationState = field([
+    /(?:state\s+of\s+)?(?:incorporation|formation)[\s*:]*\n?\s*([A-Za-z]{2,20})/i,
+    /(?:registration|registered)\s+state[\s*:]*\n?\s*([A-Za-z]{2,20})/i
+  ]);
+  if (registrationState) {
+    registrationState = resolveStateCode(registrationState) || registrationState;
+  }
+
+  return { legalName, dbaName, ein, requestedAmount, grossAnnualRevenue, registrationState };
 }
 
 /**
@@ -230,6 +239,13 @@ function mergeFields(target, source, method) {
  * @param {import('../../schemas/parsedApplication.schema.js').ParsedApplication} parsed
  */
 export function toLegacyApplicationShape(parsed) {
+  let registrationState = parsed.registrationState || null;
+  if (!registrationState && parsed.businessAddress) {
+    registrationState = parseStateFromAddress(parsed.businessAddress);
+  }
+  if (registrationState) {
+    registrationState = resolveStateCode(registrationState) || registrationState;
+  }
   return {
     companyName: parsed.legalName,
     dbaName: parsed.dbaName,
@@ -237,6 +253,7 @@ export function toLegacyApplicationShape(parsed) {
     requestedAmount: parsed.requestedAmount,
     annualRevenue: parsed.grossAnnualRevenue,
     statedRevenue: parsed.grossAnnualRevenue,
+    registrationState,
     extractionMethod: parsed.extractionMethod,
     templateId: parsed.templateId
   };

@@ -11,7 +11,11 @@ import {
   summarizePrintedLines
 } from '../printedVitalsService.js';
 import { getReconciliationSpec } from '../reconciliationSpec.js';
-import { parseRegionsSections, REGIONS_SECTIONS } from './regionsSectionExtractor.js';
+import {
+  parseRegionsSections,
+  enforceSectionTotal,
+  REGIONS_SECTIONS
+} from './regionsSectionExtractor.js';
 import { mergePrintedTotals, stitchStatement } from '../../statementStitcher.js';
 import { normalizePlumberJson } from '../plumberRowNormalizer.js';
 import logger from '../../../utils/logger.js';
@@ -20,6 +24,7 @@ export const PROFILE_ID = 'regions_business_checking';
 
 const MONEY_RE = /\$?\s*([\d,]+\.\d{2})/;
 const ROUTING_BLEED_RE = /\b\d{8,}\b/;
+const MONEY_TOKEN_RE = /\d{1,3}(?:,\d{3})*\.\d{2}/g;
 
 export class RegionsParseReconciliationError extends Error {
   constructor(reconciliation) {
@@ -140,16 +145,58 @@ export function mapToLedgerTransactions(normalized) {
 
 function rejectBleedRow(row) {
   const desc = String(row.description || '');
-  if (ROUTING_BLEED_RE.test(desc) && desc.length > 40) return true;
+  const absAmt = Math.abs(Number(row.amount) || 0);
+  // Long digit runs are normal ACH/MCC/trace refs. Only treat as bleed when
+  // paired with an implausibly large amount (same bar as plumberRowNormalizer).
+  if (ROUTING_BLEED_RE.test(desc) && absAmt > 25_000) return true;
   // Bleed = a date with 3+ digits after the slash (day glued to trailing
   // numbers, e.g. "12/051234"). A clean "MM/DD" must NOT be rejected.
   if (/^\d{1,2}\/\d{3,}/.test(String(row.dateRaw || ''))) return true;
+  // Amount tokens left in the description usually mean column bleed
+  // (balance/amount glued into the memo). Keep rows with a single token.
+  const moneyTokens = desc.match(MONEY_TOKEN_RE);
+  if (moneyTokens && moneyTokens.length >= 2) return true;
+  // Daily-balance grid bleed: short numeric noise + large amount.
+  if (/^\d{1,4}(\s+\d{1,4}){0,3}$/.test(desc.trim()) && absAmt > 1000) {
+    return true;
+  }
   return false;
 }
 
-function mapPlumberRowsToRegionsNormalized(plumberTransactions, defaultYear) {
+function isPlumberChecksSection(row) {
+  const s = String(row.section || row.sectionLabel || '').toLowerCase();
+  return s === 'checks' || s === 'checkspaid' || /^checks?\b/.test(s);
+}
+
+function mapPlumberRowsToRegionsNormalized(plumberTransactions, defaultYear, printedLines = null) {
   const { transactions } = normalizePlumberJson({ transactions: plumberTransactions }, defaultYear);
-  return transactions.filter((t) => !rejectBleedRow(t));
+  // Text CHECKS grid is authoritative; drop plumber check rows to avoid double-count.
+  let rows = transactions.filter((t) => !rejectBleedRow(t) && !isPlumberChecksSection(t));
+  if (!printedLines) return rows;
+
+  const deposits = [];
+  const withdrawals = [];
+  const other = [];
+  for (const t of rows) {
+    const s = String(t.section || '').toLowerCase();
+    if (s === 'deposits' || s === 'electronic_deposits') deposits.push(t);
+    else if (
+      s === 'withdrawals' ||
+      s === 'other_withdrawals' ||
+      s === 'fees' ||
+      s === 'atm_debit' ||
+      s === 'card'
+    ) {
+      withdrawals.push(t);
+    } else {
+      other.push(t);
+    }
+  }
+  return [
+    ...enforceSectionTotal(deposits, printedLines.deposits),
+    ...enforceSectionTotal(withdrawals, printedLines.withdrawals),
+    ...other
+  ];
 }
 
 /** Ledger-shaped CHECKS grid rows (signed debits, section-tagged). */
@@ -158,19 +205,47 @@ export function buildRegionsChecksLedger(text, year) {
   return mapToLedgerTransactions(bySection?.[REGIONS_SECTIONS.CHECKS] ?? []);
 }
 
-/** Merge check rows into a ledger that lacks them; dedupe by date+amount. */
+/** Returned checks (credits) + fees (debits) from labeled text sections. */
+export function buildRegionsSupplementalLedgers(text, year) {
+  const { bySection } = parseRegionsSections(String(text || ''), year);
+  return {
+    checks: mapToLedgerTransactions(bySection?.[REGIONS_SECTIONS.CHECKS] ?? []),
+    returnedChecks: mapToLedgerTransactions(
+      bySection?.[REGIONS_SECTIONS.RETURNED_CHECKS] ?? []
+    ),
+    fees: mapToLedgerTransactions(bySection?.[REGIONS_SECTIONS.FEES] ?? [])
+  };
+}
+
+/** Merge check/returned/fee rows into a ledger; dedupe by date + amount + desc. */
+function appendSupplementalLedgers(ledger, text, year) {
+  const { checks, returnedChecks, fees } = buildRegionsSupplementalLedgers(text, year);
+  let out = appendChecksLedger(ledger, checks);
+  out = appendChecksLedger(out, returnedChecks);
+  out = appendChecksLedger(out, fees);
+  return out;
+}
+
+/** Dedupe key for check rows — includes check number when available. */
+function checkDedupeKey(t) {
+  const checkNo =
+    t.checkNo ??
+    (String(t.description || '').match(/Check\s+#?(\d+)/i) || [])[1] ??
+    null;
+  const date = t.date ?? t.postedDate ?? '';
+  const amt = Math.abs(Number(t.amount) || 0).toFixed(2);
+  if (checkNo) return `${date}|check|${checkNo}|${amt}`;
+  const desc = String(t.description || '')
+    .slice(0, 40)
+    .toLowerCase();
+  return `${date}|${amt}|${desc}`;
+}
+
+/** Merge check rows into a ledger; dedupe by check number + date + amount. */
 function appendChecksLedger(ledger, checksLedger) {
   if (!checksLedger?.length) return ledger;
-  const hasChecks = (ledger ?? []).some(
-    (t) => (t.sectionLabel ?? t.section) === REGIONS_SECTIONS.CHECKS
-  );
-  if (hasChecks) return ledger;
-  const seen = new Set(
-    (ledger ?? []).map((t) => `${t.date ?? t.postedDate}|${Math.abs(Number(t.amount) || 0)}`)
-  );
-  const additions = checksLedger.filter(
-    (t) => !seen.has(`${t.date ?? t.postedDate}|${Math.abs(Number(t.amount) || 0)}`)
-  );
+  const seen = new Set((ledger ?? []).map(checkDedupeKey));
+  const additions = checksLedger.filter((t) => !seen.has(checkDedupeKey(t)));
   return [...(ledger ?? []), ...additions];
 }
 
@@ -208,19 +283,77 @@ export function tryRecoverRegionsFromPlumber(params = {}) {
     statementYear: year
   };
 
-  const normalized = mapPlumberRowsToRegionsNormalized(plumberTransactions, year);
+  const normalized = mapPlumberRowsToRegionsNormalized(
+    plumberTransactions,
+    year,
+    summary.printedLines
+  );
   let transactions = mapToLedgerTransactions(normalized);
   if (!transactions.length) return null;
 
-  // Plumber rows cover deposits/withdrawals; fold in the CHECKS grid so the
-  // ledger matches printedWithdrawals (which now includes checks via spec).
-  transactions = appendChecksLedger(transactions, buildRegionsChecksLedger(fullText, year));
+  // Plumber covers deposits/withdrawals; fold in CHECKS + RETURNED CHECKS + FEES
+  // from the text grid (pdfplumber routinely misses these sections).
+  transactions = appendSupplementalLedgers(transactions, fullText, year);
 
   const reconciliation = reconcileStatement(meta, transactions);
-  const tierAOk = Boolean(reconciliation.checksumRecon?.ok);
+  // reconcileStatement.checksumOk is already the universal ledger gate
+  // (Tier-A or activity match). printedClosingMatch is identity-only.
+  const ledgerOk = Boolean(reconciliation.checksumOk);
+  const printedIdentityOk = Boolean(reconciliation.printedClosingMatch);
+
+  // #region agent log
+  {
+    const topOutflows = [...transactions]
+      .filter((t) => Number(t?.amount) < 0)
+      .sort((a, b) => Math.abs(Number(b.amount)) - Math.abs(Number(a.amount)))
+      .slice(0, 6)
+      .map((t) => ({
+        amount: Number(t.amount),
+        section: t.section || t.sectionLabel || null,
+        desc: String(t.description || '').slice(0, 50)
+      }));
+    fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '05b151' },
+      body: JSON.stringify({
+        sessionId: '05b151',
+        runId: 'pre-fix',
+        hypothesisId: 'A,C,E',
+        location: 'regionsBusinessCheckingProfile.js:tryRecover',
+        message: 'regions plumber recovery result',
+        data: {
+          plumberIn: plumberTransactions.length,
+          normalizedOut: normalized.length,
+          txnCount: transactions.length,
+          checksAppended: true,
+          ledgerOk,
+          printedIdentityOk,
+          depositsMatch: reconciliation.depositsMatch,
+          withdrawalsMatch: reconciliation.withdrawalsMatch,
+          parsedDeposits: reconciliation.parsedDeposits,
+          printedDeposits: reconciliation.printedDeposits,
+          parsedWithdrawals: reconciliation.parsedWithdrawals,
+          printedWithdrawals: reconciliation.printedWithdrawals,
+          returnedChecksRows: transactions.filter(
+            (t) => String(t.section || t.sectionLabel || '') === 'returnedChecks'
+          ).length,
+          checksRows: transactions.filter(
+            (t) => String(t.section || t.sectionLabel || '') === 'checks'
+          ).length,
+          feesRows: transactions.filter(
+            (t) => String(t.section || t.sectionLabel || '') === 'fees'
+          ).length,
+          topOutflows
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+  }
+  // #endregion
 
   return {
-    checksumOk: reconciliation.checksumOk || tierAOk,
+    checksumOk: ledgerOk,
+    printedIdentityOk,
     reconciliation,
     transactions,
     normalized,
@@ -248,21 +381,23 @@ export function extractRaw(ctx) {
   const year = defaultYear ?? inferStatementYear(fullText);
   const accountNumber = ctxAccount ?? extractAccountNumber(fullText);
 
-  // Section-aware ledger: deposits + withdrawals + the CHECKS grid, each row
-  // signed and tagged by section so reconciliation can compare per-line.
-  // Prefer column-aware pdfplumber rows for deposits/withdrawals (pdf-parse text
-  // glues reference digits to amounts); always fold in the text CHECKS grid,
-  // which pdfplumber routinely misses.
+  // Prefer column-aware pdfplumber rows for deposits/withdrawals; always fold in
+  // text CHECKS + RETURNED CHECKS + FEES (pdfplumber routinely misses these).
   const sections = parseRegionsSections(fullText, year);
-  const checksLedger = mapToLedgerTransactions(
-    sections.bySection?.[REGIONS_SECTIONS.CHECKS] ?? []
-  );
 
   let normalized;
   let transactions;
   if (Array.isArray(plumberTransactions) && plumberTransactions.length > 0) {
-    normalized = mapPlumberRowsToRegionsNormalized(plumberTransactions, year);
-    transactions = appendChecksLedger(mapToLedgerTransactions(normalized), checksLedger);
+    normalized = mapPlumberRowsToRegionsNormalized(
+      plumberTransactions,
+      year,
+      summary.printedLines
+    );
+    transactions = appendSupplementalLedgers(
+      mapToLedgerTransactions(normalized),
+      fullText,
+      year
+    );
   } else {
     normalized = sections.transactions;
     transactions = mapToLedgerTransactions(normalized);
@@ -310,7 +445,15 @@ export async function extract(ctx) {
     options
   } = ctx;
 
-  const raw = extractRaw({ text, defaultYear, rtn, accountNumber, stitcherPrinted, typeAText });
+  const raw = extractRaw({
+    text,
+    defaultYear,
+    rtn,
+    accountNumber,
+    stitcherPrinted,
+    typeAText,
+    plumberTransactions
+  });
   const { meta } = raw;
   let normalized = raw.normalizedTransactions;
   let ledgerTransactions = raw.transactions;
@@ -332,20 +475,24 @@ export async function extract(ctx) {
     if (recovered?.transactions?.length) {
       regionsPlumberTransactions = recovered.transactions;
       const tierAOk = Boolean(recovered.reconciliation?.checksumRecon?.ok);
+      // recovered.checksumOk is ledger-quality (Tier A or activity match), not printed identity.
       if (recovered.checksumOk || tierAOk) {
         normalized = recovered.normalized;
         ledgerTransactions = recovered.transactions;
         reconciliation = recovered.reconciliation;
         logger.info(
-          tierAOk && !recovered.checksumOk
+          tierAOk && !recovered.printedIdentityOk
             ? '[REGIONS_BUSINESS] accepted pdfplumber on Tier A (printed section drift)'
             : '[REGIONS_BUSINESS] accepted pdfplumber rows (primary)',
           {
             txnCount: ledgerTransactions.length,
             tierAOk,
-            tierBOk: recovered.checksumOk,
+            tierBOk: Boolean(recovered.printedIdentityOk),
+            ledgerOk: Boolean(recovered.checksumOk),
             parsedDeposits: reconciliation.parsedDeposits,
-            printedDeposits: reconciliation.printedDeposits
+            printedDeposits: reconciliation.printedDeposits,
+            parsedWithdrawals: reconciliation.parsedWithdrawals,
+            printedWithdrawals: reconciliation.printedWithdrawals
           }
         );
       } else {
@@ -353,6 +500,8 @@ export async function extract(ctx) {
           fileName: options?.fileName ?? null,
           plumberIn: plumberTransactions.length,
           mappedOut: recovered.normalized?.length ?? 0,
+          tierAOk,
+          printedIdentityOk: Boolean(recovered.printedIdentityOk),
           parsedDeposits: recovered.reconciliation?.parsedDeposits,
           printedDeposits: recovered.reconciliation?.printedDeposits,
           parsedWithdrawals: recovered.reconciliation?.parsedWithdrawals,
@@ -377,9 +526,10 @@ export async function extract(ctx) {
       layoutTemplate: options?.layoutTemplate
     });
     normalized = (Array.isArray(rawTx) ? rawTx : []).filter((t) => !rejectBleedRow(t));
-    ledgerTransactions = appendChecksLedger(
+    ledgerTransactions = appendSupplementalLedgers(
       mapToLedgerTransactions(normalized),
-      buildRegionsChecksLedger(fullText, year)
+      fullText,
+      year
     );
     reconciliation = reconcileStatement(meta, ledgerTransactions);
   }
@@ -387,8 +537,7 @@ export async function extract(ctx) {
   if (
     !reconciliation.checksumOk &&
     Array.isArray(plumberTransactions) &&
-    plumberTransactions.length > 0 &&
-    !regionsPlumberTransactions
+    plumberTransactions.length > 0
   ) {
     const recovered = tryRecoverRegionsFromPlumber({
       plumberTransactions,
@@ -399,7 +548,7 @@ export async function extract(ctx) {
       stitcherPrinted,
       typeAText
     });
-    if (recovered?.transactions?.length) {
+    if (recovered?.checksumOk && recovered.transactions?.length) {
       normalized = recovered.normalized;
       ledgerTransactions = recovered.transactions;
       reconciliation = recovered.reconciliation;
@@ -421,6 +570,34 @@ export async function extract(ctx) {
       closing: reconciliation.closing,
       txnCount: ledgerTransactions.length
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '05b151' },
+      body: JSON.stringify({
+        sessionId: '05b151',
+        runId: 'pre-fix',
+        hypothesisId: 'C,D',
+        location: 'regionsBusinessCheckingProfile.js:extract-reject',
+        message: 'regions extract threw reconciliation error',
+        data: {
+          fileName: options?.fileName ?? null,
+          hadPlumber: Array.isArray(plumberTransactions) && plumberTransactions.length > 0,
+          plumberAccepted: Boolean(regionsPlumberTransactions),
+          txnCount: ledgerTransactions.length,
+          checksumOk: reconciliation.checksumOk,
+          printedClosingMatch: reconciliation.printedClosingMatch,
+          activityOk: reconciliation.activityOk,
+          tierAOk: reconciliation.tierAOk,
+          parsedDeposits: reconciliation.parsedDeposits,
+          printedDeposits: reconciliation.printedDeposits,
+          parsedWithdrawals: reconciliation.parsedWithdrawals,
+          printedWithdrawals: reconciliation.printedWithdrawals
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
     const err = new RegionsParseReconciliationError(reconciliation);
     err.regionsPlumberTransactions = regionsPlumberTransactions;
     throw err;
@@ -431,7 +608,9 @@ export async function extract(ctx) {
     printedDeposits: meta.printedDeposits,
     opening: meta.openingBalance,
     closing: meta.closingBalance,
-    checksumOk: true
+    checksumOk: true,
+    tierAOk: Boolean(reconciliation.tierAOk ?? reconciliation.checksumRecon?.ok),
+    activityOk: Boolean(reconciliation.activityOk)
   });
 
   return {

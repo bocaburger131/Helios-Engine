@@ -89,9 +89,11 @@ export function detect(text) {
 
   if (!/business\s+complete\s+checking/i.test(t) && !/chase\s+business/i.test(t)) {
 
+    // Structural anchor pair earns detection on page text alone — no bankName
+    // hint boost in the registry (removed in the generic-first refactor).
     if (/jpmorgan\s+chase/i.test(t) && /deposits?\s+and\s+additions?/i.test(t)) {
 
-      return 0.86;
+      return 0.87;
 
     }
 
@@ -393,13 +395,8 @@ export function extractChaseSummarySlice(text) {
   return t.slice(0, 4500);
 }
 
-function amountAfterSectionLabel(text, labelRe) {
-  const t = String(text || '');
-  const m = t.match(labelRe);
-  if (!m || m.index == null) return null;
-  const tailLine = t
-    .slice(m.index + m[0].length, m.index + m[0].length + 32)
-    .split('\n')[0];
+function amountAfterLabelMatch(t, matchIndex, matchLength) {
+  const tailLine = t.slice(matchIndex + matchLength, matchIndex + matchLength + 32).split('\n')[0];
   const glued = parseGluedInstanceAmount(tailLine);
   if (glued != null) return glued;
   const amounts = [];
@@ -410,6 +407,20 @@ function amountAfterSectionLabel(text, labelRe) {
     if (abs >= 1 && abs <= 500_000) amounts.push(abs);
   }
   return amounts.length ? Math.max(...amounts) : null;
+}
+
+function amountAfterSectionLabel(text, labelRe) {
+  const t = String(text || '');
+  // Scan every label occurrence: prose mentions ("monthly service fee was
+  // waived") can precede the actual summary row and carry no amount.
+  const flags = labelRe.flags.includes('g') ? labelRe.flags : labelRe.flags + 'g';
+  const re = new RegExp(labelRe.source, flags);
+  for (const m of t.matchAll(re)) {
+    if (m.index == null) continue;
+    const v = amountAfterLabelMatch(t, m.index, m[0].length);
+    if (v != null) return v;
+  }
+  return null;
 }
 
 /**
@@ -437,7 +448,9 @@ function sumChaseWithdrawalSections(t) {
     /electronic\s+withdrawals?/i,
     /atm\s+(?:&|and)\s+debit/i,
     /other\s+withdrawals?/i,
-    /\bfee?s?\b/i
+    // Lookahead instead of \b: glued INSTANCES rows print "Fees16-424.80"
+    // with no word boundary between the label and the count.
+    /\bfee?s?(?=[\s\d:]|$)/i
   ];
   let sum = 0;
   let any = false;
@@ -874,10 +887,9 @@ export function mapPlumberRowsToChaseNormalized(plumberRows, year, logContext = 
 
     if (absAmt > 1_000_000) continue;
 
-    if (
-      ROUTING_TRACE_BLEED_RE.test(description) &&
-      (absAmt > 25_000 || /\b(?:trn|trace|orig\s+co|ind\s+name)\b/i.test(description))
-    ) {
+    // Trace digits + implausibly large amount = numeric bleed. ACH rows with
+    // trace keywords but normal amounts are legitimate transactions.
+    if (ROUTING_TRACE_BLEED_RE.test(description) && absAmt > 25_000) {
       continue;
     }
 
@@ -896,6 +908,10 @@ export function mapPlumberRowsToChaseNormalized(plumberRows, year, logContext = 
 
     const signed = isCredit ? absAmt : -absAmt;
 
+    // rowIndex tag keeps legitimate identical rows distinct through
+    // fingerprint dedupe (same day, amount, and truncated description).
+    const rowTag = Number.isFinite(Number(row.rowIndex)) ? `#${Number(row.rowIndex)}` : '';
+
     out.push({
 
       postedDate: isoDate,
@@ -906,7 +922,7 @@ export function mapPlumberRowsToChaseNormalized(plumberRows, year, logContext = 
 
       sectionId,
 
-      rawLine: `[PDF_PLUMBER] ${description}`
+      rawLine: `[PDF_PLUMBER]${rowTag} ${description}`
 
     });
 

@@ -2,7 +2,7 @@
  * Pass 1 — build DocumentMap from stitched statement text.
  */
 
-import { resolveProfile } from '../bankProfileRegistry.js';
+import { resolveProfile, getProfileMeta } from '../bankProfileRegistry.js';
 import {
   ANCHOR_STATUSES,
   createDocumentMap,
@@ -199,11 +199,7 @@ export function buildDocumentMap(input = {}) {
     }),
     profileId: profile.id,
     pageCount: input.pageCount ?? 0,
-    recoveryEligible:
-      profile.id === 'wells_initiate_checking' ||
-      profile.id === 'chase_business_complete' ||
-      profile.id === 'regions_business_checking' ||
-      profile.id === 'generic_digital',
+    recoveryEligible: getProfileMeta(profile.id).recoveryEligible === true,
     identity,
     regions,
     blocks,

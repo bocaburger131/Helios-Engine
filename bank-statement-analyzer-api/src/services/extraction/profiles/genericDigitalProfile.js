@@ -413,7 +413,11 @@ export async function extractRaw(ctx) {
   if (vitals?.openingBalance != null) balances.opening = vitals.openingBalance;
   if (vitals?.closingBalance != null) balances.closing = vitals.closingBalance;
 
-  const generic = buildGenericPrintedLines(fullText);
+  const generic = buildGenericPrintedLines(
+    fullText,
+    getEffectiveReconciliationSpec(PROFILE_ID, options?.layoutTemplate)
+  );
+  const reconSpec = generic.spec;
   if (balances.opening == null && generic.openingBalance != null) {
     balances.opening = generic.openingBalance;
   }

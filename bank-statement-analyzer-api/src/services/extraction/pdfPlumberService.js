@@ -1,5 +1,6 @@
 import path from 'node:path';
 import logger from '../../utils/logger.js';
+import { getProfileMeta } from './bankProfileRegistry.js';
 import { normalizePlumberJson } from './plumberRowNormalizer.js';
 import {
   API_ROOT,
@@ -33,14 +34,15 @@ function plumberTimeoutMs() {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 }
 
-function bankSlug(bankName, rtn) {
-  const n = String(bankName || '').toLowerCase();
-  if (/wells/.test(n)) return 'wells';
-  if (/regions/.test(n)) return 'regions';
-  if (/chase|jpmorgan/.test(n)) return 'chase';
-  const cleanedRtn = String(rtn || '').replace(/\D/g, '');
-  if (cleanedRtn.length === 9) return 'generic';
-  return 'generic';
+/**
+ * Structural layout profile for the Python sidecar, resolved from the extraction
+ * profile's declarative metadata — never sniffed from a bank display name.
+ * @param {{ profileId?: string, layoutProfile?: string }} [options]
+ */
+export function resolveSidecarLayoutProfile(options = {}) {
+  if (options.layoutProfile) return String(options.layoutProfile);
+  const meta = getProfileMeta(options.profileId);
+  return meta?.plumberLayoutProfile || 'generic';
 }
 
 /**
@@ -147,7 +149,7 @@ export const runPlumberChildProcess = runPythonChildProcess;
 
 /**
  * @param {Buffer} pdfBuffer
- * @param {{ bankName?: string, fileName?: string, defaultYear?: number, rtn?: string, layoutTemplate?: object }} [options]
+ * @param {{ profileId?: string, layoutProfile?: string, fileName?: string, defaultYear?: number, layoutTemplate?: object }} [options]
  */
 export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) {
   if (!pdfPlumberEnabled()) {
@@ -160,14 +162,18 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
   const started = Date.now();
   const fileName = options.fileName || 'statement.pdf';
   const scriptPath = resolveScriptPath();
-  const slug = bankSlug(options.bankName, options.rtn);
-  const scriptArgs = ['--bank', slug];
+  const layoutProfile = resolveSidecarLayoutProfile(options);
+  const scriptArgs = ['--layout-profile', layoutProfile];
   const hintsJson = columnHintsArg(options.layoutTemplate);
   if (hintsJson) {
     scriptArgs.push('--column-hints', hintsJson);
   }
 
-  logger.info('[PDF_PLUMBER] start', { fileName, bank: slug, columnHints: Boolean(hintsJson) });
+  logger.info('[PDF_PLUMBER] start', {
+    fileName,
+    layoutProfile,
+    columnHints: Boolean(hintsJson)
+  });
 
   try {
     const { stdout, stderr } = await runPythonScriptOnPdfBuffer(pdfBuffer, {

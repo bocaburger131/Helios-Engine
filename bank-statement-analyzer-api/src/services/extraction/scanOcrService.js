@@ -3,6 +3,7 @@
  */
 import path from 'node:path';
 import logger from '../../utils/logger.js';
+import { resolveSidecarLayoutProfile } from './pdfPlumberService.js';
 import { normalizePlumberJson } from './plumberRowNormalizer.js';
 import {
   API_ROOT,
@@ -34,13 +35,6 @@ function ocrTimeoutMs() {
   return Number.isFinite(n) && n > 0 ? n : 180_000;
 }
 
-function bankSlug(bankName) {
-  const n = String(bankName || '').toLowerCase();
-  if (/wells/.test(n)) return 'wells';
-  if (/regions/.test(n)) return 'regions';
-  if (/chase|jpmorgan/.test(n)) return 'chase';
-  return 'generic';
-}
 
 /**
  * @param {string} stderr
@@ -105,7 +99,7 @@ function softFail(partial) {
 
 /**
  * @param {Buffer} pdfBuffer
- * @param {{ bankName?: string, fileName?: string, defaultYear?: number }} [options]
+ * @param {{ profileId?: string, layoutProfile?: string, fileName?: string, defaultYear?: number }} [options]
  */
 export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) {
   if (!scanOcrEnabled()) {
@@ -117,15 +111,15 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
 
   const started = Date.now();
   const fileName = options.fileName || 'statement.pdf';
-  const slug = bankSlug(options.bankName);
+  const layoutProfile = resolveSidecarLayoutProfile(options);
   const scriptPath = resolveScriptPath();
 
-  logger.info('[SCAN_OCR] start', { fileName, bank: slug });
+  logger.info('[SCAN_OCR] start', { fileName, layoutProfile });
 
   try {
     const rawResult = await runPythonScriptOnPdfBuffer(pdfBuffer, {
       scriptPath,
-      scriptArgs: ['--bank', slug],
+      scriptArgs: ['--layout-profile', layoutProfile],
       timeoutMs: ocrTimeoutMs(),
       tempPrefix: 'scan-ocr-',
       runner: runChildProcessImpl ?? runPythonChildProcess

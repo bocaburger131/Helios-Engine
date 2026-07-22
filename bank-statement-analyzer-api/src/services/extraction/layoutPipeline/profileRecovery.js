@@ -2,9 +2,7 @@
  * Profile recovery — widen regions and re-extract for Wells/Chase.
  */
 
-import { tryRecoverWellsNearMiss } from '../profiles/wellsFargoInitiateProfile.js';
-import { tryRecoverChaseFromPlumber } from '../profiles/chaseBusinessCompleteProfile.js';
-import { tryRecoverRegionsFromPlumber } from '../profiles/regionsBusinessCheckingProfile.js';
+import { getProfileMeta } from '../bankProfileRegistry.js';
 import { mapProfileResultToRawBundle } from './dumbExtractorService.js';
 import logger from '../../../utils/logger.js';
 
@@ -29,8 +27,9 @@ export function widenTextRegion(region, padLines = 5) {
  */
 export function tryProfileNearMissRecovery(params = {}) {
   const { profile, profileResult, ctx } = params;
-  if (profile?.id === 'wells_initiate_checking') {
-    return tryRecoverWellsNearMiss({
+  const hooks = getProfileMeta(profile?.id).recoveryHooks;
+  if (hooks?.nearMiss) {
+    return hooks.nearMiss({
       meta: profileResult?.meta,
       normalizedTransactions: profileResult?.normalizedTransactions,
       transactions: profileResult?.transactions,
@@ -39,16 +38,10 @@ export function tryProfileNearMissRecovery(params = {}) {
       altText: ctx?.altText
     });
   }
-  if (profile?.id === 'chase_business_complete' && ctx?.plumberTransactions?.length) {
-    return tryRecoverChaseFromPlumber({
+  if (hooks?.plumber && ctx?.plumberTransactions?.length) {
+    return hooks.plumber({
       plumberTransactions: ctx.plumberTransactions,
       meta: profileResult?.meta,
-      stitcherPrinted: ctx.stitcherPrinted
-    });
-  }
-  if (profile?.id === 'regions_business_checking' && ctx?.plumberTransactions?.length) {
-    return tryRecoverRegionsFromPlumber({
-      plumberTransactions: ctx.plumberTransactions,
       text: ctx.text,
       defaultYear: ctx.defaultYear,
       rtn: ctx.rtn,

@@ -4,15 +4,10 @@
 import logger from '../../utils/logger.js';
 import { validateEndingDailyBalancePlacement } from './statementReconciliation.js';
 import { reconcileRawBundle } from './layoutPipeline/reconciliationService.js';
-import { WellsParseReconciliationError } from './profiles/wellsFargoInitiateProfile.js';
-import { ChaseParseReconciliationError } from './profiles/chaseBusinessCompleteProfile.js';
-import { RegionsParseReconciliationError } from './profiles/regionsBusinessCheckingProfile.js';
+import { getProfileMeta } from './bankProfileRegistry.js';
 
-const FULL_CTX_PROFILE_IDS = new Set([
-  'generic_digital',
-  'chase_business_complete',
-  'regions_business_checking'
-]);
+/** Profile reconciliation-gate errors follow this naming convention. */
+const RE_RECONCILIATION_GATE_ERROR = /ParseReconciliationError$/;
 
 /**
  * @param {object} ctx
@@ -30,7 +25,7 @@ export async function runStatementExtractionPipeline(ctx) {
 
   let extracted;
   try {
-    if (FULL_CTX_PROFILE_IDS.has(profile.id)) {
+    if (getProfileMeta(profile.id).fullContextExtract) {
       extracted = await profile.extract(ctx);
     } else {
       extracted = await profile.extract({
@@ -40,25 +35,10 @@ export async function runStatementExtractionPipeline(ctx) {
       });
     }
   } catch (e) {
-    if (e instanceof WellsParseReconciliationError) {
-      logger.warn('[STATEMENT_PIPELINE] Wells reconciliation gate failed', {
+    if (RE_RECONCILIATION_GATE_ERROR.test(String(e?.name || ''))) {
+      logger.warn('[STATEMENT_PIPELINE] profile reconciliation gate failed', {
         profileId: profile.id,
-        parsedDeposits: e.reconciliation?.parsedDeposits,
-        printedDeposits: e.reconciliation?.printedDeposits
-      });
-      throw e;
-    }
-    if (e instanceof ChaseParseReconciliationError) {
-      logger.warn('[STATEMENT_PIPELINE] Chase reconciliation gate failed', {
-        profileId: profile.id,
-        parsedDeposits: e.reconciliation?.parsedDeposits,
-        printedDeposits: e.reconciliation?.printedDeposits
-      });
-      throw e;
-    }
-    if (e instanceof RegionsParseReconciliationError) {
-      logger.warn('[STATEMENT_PIPELINE] Regions reconciliation gate failed', {
-        profileId: profile.id,
+        errorName: e.name,
         parsedDeposits: e.reconciliation?.parsedDeposits,
         printedDeposits: e.reconciliation?.printedDeposits,
         parsedWithdrawals: e.reconciliation?.parsedWithdrawals,
@@ -117,6 +97,10 @@ export async function runStatementExtractionPipeline(ctx) {
     durationMs: Date.now() - started
   });
 
+  // Declarative plumber row passthrough: the profile's PROFILE_META names the
+  // key carrying recovered plumber rows (no hardcoded per-bank fields here).
+  const plumberTxnKey = getProfileMeta(profile.id).plumberTxnKey;
+
   return {
     meta,
     transactions: extracted.transactions,
@@ -127,8 +111,7 @@ export async function runStatementExtractionPipeline(ctx) {
     dailyBalanceRule,
     extractionTier,
     profileId: profile.id,
-    chasePlumberTransactions: extracted.chasePlumberTransactions ?? null,
-    regionsPlumberTransactions: extracted.regionsPlumberTransactions ?? null
+    ...(plumberTxnKey ? { [plumberTxnKey]: extracted[plumberTxnKey] ?? null } : {})
   };
 }
 

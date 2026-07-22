@@ -3,7 +3,9 @@
  */
 
 export const PLUMBER_ROW_AMOUNT_CAP = 250_000;
-const ROUTING_BLEED_RE = /\b\d{9,}\b/;
+const ROUTING_BLEED_RE = /\b\d{8,}\b/;
+const DATE_BLEED_RE = /^\d{1,2}\/\d{3,}/;
+const NOISE_DESC_RE = /^\d{1,4}(\s+\d{1,4}){0,3}$/;
 
 /**
  * @param {string} raw
@@ -51,19 +53,32 @@ export function normalizePlumberRow(row, defaultYear = new Date().getFullYear())
   if (!description || description.length < 2) return null;
   if (/^total\b/i.test(description)) return null;
 
-  if (
-    ROUTING_BLEED_RE.test(description) &&
-    (absAmt > 25_000 || /\b(?:trn|trace|orig\s+co|ind\s+name)\b/i.test(description))
-  ) {
+  // Trace/reference digits alongside an implausibly large amount indicate
+  // numeric bleed. Small amounts with trace digits are legitimate ACH rows
+  // (sidecar amounts are strict-parsed, so keyword presence alone is fine).
+  if (ROUTING_BLEED_RE.test(description) && absAmt > 25_000) {
+    return null;
+  }
+  // Two+ money tokens in the memo usually means balance/amount column bleed.
+  const moneyInDesc = description.match(/\d{1,3}(?:,\d{3})*\.\d{2}/g);
+  if (moneyInDesc && moneyInDesc.length >= 2) {
+    return null;
+  }
+  // Daily-balance grid bleed often lands as short numeric noise ("37 37").
+  if (NOISE_DESC_RE.test(description) && absAmt > 1_000) {
     return null;
   }
 
   const dateRaw = String(row.dateRaw ?? row.date ?? '').trim();
+  if (DATE_BLEED_RE.test(dateRaw)) return null;
   const isoDate = parsePlumberRowDate(dateRaw, defaultYear);
   if (!isoDate) return null;
 
   const section = row.section != null ? String(row.section) : '';
   const signed = type === 'DEBIT' ? -absAmt : absAmt;
+  // rowIndex (when the extractor provides one) keeps legitimate identical rows
+  // (same day/amount/description) distinct through fingerprint dedupe.
+  const rowTag = Number.isFinite(Number(row.rowIndex)) ? `#${Number(row.rowIndex)}` : '';
 
   return {
     date: isoDate,
@@ -73,7 +88,7 @@ export function normalizePlumberRow(row, defaultYear = new Date().getFullYear())
     type: type === 'DEBIT' ? 'DEBIT' : 'CREDIT',
     section,
     rawAmount: absAmt.toFixed(2),
-    rawLine: `[PDF_PLUMBER] ${description}`,
+    rawLine: `[PDF_PLUMBER]${rowTag} ${description}`,
     extractionSource: 'pdfplumber'
   };
 }

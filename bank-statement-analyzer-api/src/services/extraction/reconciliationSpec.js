@@ -82,10 +82,11 @@ export const RECONCILIATION_SPECS = Object.freeze({
       },
       {
         key: 'withdrawals',
-        labels: [/withdrawals?(?:\s*(?:&|\/|and)\s*debits?)?/i, /total\s+debits?/i],
+        labels: [/withdrawals?(?:\s*(?:&|\/|and)\s*(?:other\s+)?debits?)?/i, /total\s+debits?/i],
         role: 'debit'
       },
-      { key: 'fees', labels: [/fees?(?:\s+and\s+charges)?/i], role: 'debit', optional: true }
+      { key: 'fees', labels: [/service\s+fees?/i, /fees?(?:\s+and\s+charges)?/i], role: 'debit', optional: true },
+      { key: 'checks', labels: [/checks?\b/i], role: 'debit', optional: true }
     ]
   }
 });
