@@ -133,6 +133,7 @@ def column_roles(header: list[str]) -> dict[str, int | None]:
         "amount": None,
         "balance": None,
     }
+    # Heuristic: the rightmost column with a money-like header is often a running balance
     for i, h in enumerate(header):
         nh = normalize_header(h)
         if not nh:
@@ -143,7 +144,7 @@ def column_roles(header: list[str]) -> dict[str, int | None]:
             roles["deposits"] = i
         elif "withdraw" in nh or "debit" in nh:
             roles["withdrawals"] = i
-        elif ("ending" in nh and "balance" in nh) or nh == "balance" or "daily balance" in nh:
+        elif ("balance" in nh) or ("daily" in nh):
             roles["balance"] = i
         elif "description" in nh or "detail" in nh:
             roles["description"] = i
@@ -283,6 +284,7 @@ def rows_from_table_chase(
         txn_type = chase_txn_type_for_section(row_section)
 
         date_idx = roles["date"]
+        balance_idx = roles["balance"]
         date_cell = cells[date_idx] if date_idx is not None and date_idx < len(cells) else ""
         date = ""
         date_tail = ""
@@ -315,7 +317,7 @@ def rows_from_table_chase(
             for i, c in enumerate(cells):
                 if i == date_idx:
                     continue
-                if roles["deposits"] == i or roles["withdrawals"] == i or roles["amount"] == i:
+                if roles["deposits"] == i or roles["withdrawals"] == i or roles["amount"] == i or balance_idx == i:
                     continue
                 if c and not MONEY_RE.match(c) and not DATE_RE.match(c):
                     parts.append(c)
@@ -335,7 +337,7 @@ def rows_from_table_chase(
 
         if dep_amt is None and wd_amt is None:
             for i, cell in enumerate(cells):
-                if i == date_idx:
+                if i == date_idx or i == balance_idx:
                     continue
                 amt = parse_money(cell)
                 if amt is not None:
