@@ -33,6 +33,8 @@ SUMMARY_RE = re.compile(
 BALANCE_ARTIFACT_RE = re.compile(
     r"^\d{1,2}/\d{1,2}$"  # e.g. "1/28" — date fragment from balance bleed
 )
+# Reference numbers misread as transaction descriptions
+REFERENCE_NUMBER_RE = re.compile(r"^\d{5,}$")  # e.g. "0136034", "012425", "250105"
 TXN_HISTORY_RE = re.compile(r"transaction\s+history", re.I)
 CONTINUED_HEADER_RE = re.compile(
     r"deposits?\s*/\s*credits?|withdrawals?\s*/\s*debits?|ending\s+daily\s+balance",
@@ -184,6 +186,8 @@ def emit_wells_row(
     if SUMMARY_RE.search(desc):
         return
     if BALANCE_ARTIFACT_RE.match(desc):
+        return
+    if REFERENCE_NUMBER_RE.match(desc):
         return
     if amount > CHASE_ROW_AMOUNT_CAP:
         return
