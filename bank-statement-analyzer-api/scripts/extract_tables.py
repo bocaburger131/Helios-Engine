@@ -24,8 +24,14 @@ DATE_PREFIX_RE = re.compile(r"^(\d{1,2}/\d{1,2})(?:/\d{2,4})?\s+(.+)$", re.I)
 MONEY_RE = re.compile(r"^\(?\$?\s*([\d,]+\.\d{2})\)?$")
 SUMMARY_RE = re.compile(
     r"deposits?/credits?|withdrawals?/debits?|beginning balance|ending balance|"
-    r"activity summary|opening balance|closing balance|total deposits",
+    r"activity summary|opening balance|closing balance|total deposits|"
+    r"average ledg|minimum dai|totals?\s+\$|total service|"
+    r"cash deposited?\s*\(\$|transactions?\s+\$",
     re.I,
+)
+# Row descriptions that are just balance-value artifacts, not real transactions
+BALANCE_ARTIFACT_RE = re.compile(
+    r"^\d{1,2}/\d{1,2}$"  # e.g. "1/28" — date fragment from balance bleed
 )
 TXN_HISTORY_RE = re.compile(r"transaction\s+history", re.I)
 CONTINUED_HEADER_RE = re.compile(
@@ -176,6 +182,8 @@ def emit_wells_row(
         return
     if SUMMARY_RE.search(desc):
         return
+    if BALANCE_ARTIFACT_RE.match(desc):
+        return
     if amount > CHASE_ROW_AMOUNT_CAP:
         return
     if ROUTING_BLEED_RE.search(desc) and (
@@ -185,7 +193,7 @@ def emit_wells_row(
     row: dict[str, Any] = {
         "date": date,
         "description": desc,
-        "amount": round(amount, 2),
+        "amount": round(-amount if txn_type == "DEBIT" else amount, 2),
         "type": txn_type,
     }
     if section:
