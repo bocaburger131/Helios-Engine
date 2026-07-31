@@ -17,6 +17,7 @@ import logger from '../utils/logger.js';
 const VISION_PROVIDERS = ['gemini', 'claude'];
 const CATEGORIZATION_PROVIDERS = ['perplexity', 'claude'];
 const DIAGNOSTIC_PROVIDERS = ['gemini', 'claude'];
+const RESCUE_PROVIDERS = ['gemini', 'claude'];
 
 function resolveProvider(envVar, allowed, fallback) {
   const raw = String(process.env[envVar] || '').toLowerCase().trim();
@@ -35,6 +36,10 @@ export function resolveDiagnosticProvider() {
   return resolveProvider('DIAGNOSTIC_PROVIDER', DIAGNOSTIC_PROVIDERS, 'gemini');
 }
 
+export function resolveRescueProvider() {
+  return resolveProvider('RESCUE_PROVIDER', RESCUE_PROVIDERS, 'gemini');
+}
+
 function resolveAnthropicKey() {
   return String(process.env.ANTHROPIC_API_KEY || '').trim();
 }
@@ -44,7 +49,7 @@ function resolveClaudeModel() {
 }
 
 function resolveGeminiDiagnosticModel() {
-  return String(process.env.GEMINI_DIAGNOSTIC_MODEL || process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash').trim();
+  return String(process.env.GEMINI_DIAGNOSTIC_MODEL || process.env.GEMINI_VISION_MODEL || 'gemini-3.5-flash').trim();
 }
 
 /**
@@ -80,7 +85,26 @@ export async function runDiagnosticCompletion({ system, user, responseSchema, ma
   return runGeminiJson({ system, user, responseSchema, maxTokens });
 }
 
-async function runClaudeJson({ system, user, maxTokens }) {
+/**
+ * Run a text-only JSON completion for AI rescue (bounded ambiguity resolver).
+ * Same cheap text path as diagnostics, but routed by its own RESCUE_PROVIDER
+ * slot so rescue can be moved between providers independently.
+ * @param {{ system: string, user: string, responseSchema?: object, maxTokens?: number }} prompt
+ * @returns {Promise<object|null>}
+ */
+export async function runRescue(prompt) {
+  const provider = resolveRescueProvider();
+  logger.info('[AI_ORCHESTRATOR] runRescue', { provider });
+  const { system, user, responseSchema, maxTokens = 8192 } = prompt;
+  // Rescue modes return JSON arrays of decisions — use the array-capable extractor.
+  // Token cap is high: evidence payloads + printed totals push prompts past 5KB,
+  // and truncated JSON (finishReason=MAX_TOKENS) silently yields zero candidates.
+  if (provider === 'gemini') return runGeminiJson({ system, user, responseSchema, maxTokens, allowArray: true });
+  if (provider === 'claude') return runClaudeJson({ system, user, maxTokens, allowArray: true });
+  throw new Error(`Unknown rescue provider: ${provider}`);
+}
+
+async function runClaudeJson({ system, user, maxTokens, allowArray = false }) {
   const apiKey = resolveAnthropicKey();
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
 
@@ -108,10 +132,10 @@ async function runClaudeJson({ system, user, maxTokens }) {
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('\n');
-  return extractJsonObject(text);
+  return parseModelJson(text, { allowArray });
 }
 
-async function runGeminiJson({ system, user, responseSchema, maxTokens }) {
+async function runGeminiJson({ system, user, responseSchema, maxTokens, allowArray = false }) {
   const apiKey = resolveGeminiApiKey();
   if (!apiKey) throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is not set');
 
@@ -131,17 +155,42 @@ async function runGeminiJson({ system, user, responseSchema, maxTokens }) {
   const result = await model.generateContent(user);
   const text = result?.response?.text?.() || '';
   if (!text.trim()) return null;
+  return parseModelJson(text, { allowArray });
+}
+
+/**
+ * Parse model JSON. Vision/diagnostic paths want objects only.
+ * Rescue path needs arrays of repair candidates.
+ */
+function parseModelJson(text, { allowArray = false } = {}) {
+  if (!text || !String(text).trim()) return null;
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return allowArray ? parsed : null;
+    if (parsed && typeof parsed === 'object') return parsed;
   } catch {
-    return extractJsonObject(text);
+    // fall through
   }
+  if (allowArray) {
+    const arrMatch = String(text).match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      try {
+        const parsed = JSON.parse(arrMatch[0]);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        /* continue */
+      }
+    }
+  }
+  return extractJsonObject(text);
 }
 
 export default {
   resolveVisionProvider,
   resolveCategorizationProvider,
   resolveDiagnosticProvider,
+  resolveRescueProvider,
   analyzeLayout,
-  runDiagnosticCompletion
+  runDiagnosticCompletion,
+  runRescue
 };

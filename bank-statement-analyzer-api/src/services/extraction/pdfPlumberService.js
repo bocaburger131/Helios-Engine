@@ -103,9 +103,16 @@ export function mapPlumberJsonToParseResult(json, options = {}) {
     transactions,
     openingBalance: normalized.openingBalance,
     closingBalance: normalized.closingBalance,
+    // Evidence sidecar for AI rescue — must survive the pipe into the pipeline
+    droppedRows: normalized.droppedRows || [],
+    uncertainAssignments: normalized.uncertainAssignments || [],
+    rawWordRows: normalized.rawWordRows || [],
     metadata: {
       ...(json?.metadata && typeof json.metadata === 'object' ? json.metadata : {}),
-      extractionEngine: 'pdfplumber'
+      extractionEngine: 'pdfplumber',
+      droppedRowCount: (normalized.droppedRows || []).length,
+      uncertainAssignmentCount: (normalized.uncertainAssignments || []).length,
+      rawWordRowCount: (normalized.rawWordRows || []).length,
     }
   };
 }
@@ -141,12 +148,17 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
   const scriptPath = resolveScriptPath();
   const slug = bankSlug(options.bankName);
 
-  logger.info('[PDF_PLUMBER] start', { fileName, bank: slug });
+  const scriptArgs = ['--bank', slug];
+    if (options.__columnTolerance != null) {
+      scriptArgs.push('--column-tolerance', String(options.__columnTolerance));
+    }
+
+    logger.info('[PDF_PLUMBER] start', { fileName, bank: slug });
 
   try {
     const { stdout, stderr } = await runPythonScriptOnPdfBuffer(pdfBuffer, {
       scriptPath,
-      scriptArgs: ['--bank', slug],
+      scriptArgs,
       timeoutMs: plumberTimeoutMs(),
       tempPrefix: 'pdfplumber-',
       runner: runChildProcessImpl ?? runPythonChildProcess
@@ -194,6 +206,9 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
         transactions: [],
         openingBalance: mapped.openingBalance,
         closingBalance: mapped.closingBalance,
+        droppedRows: mapped.droppedRows || [],
+        uncertainAssignments: mapped.uncertainAssignments || [],
+        rawWordRows: mapped.rawWordRows || [],
         metadata: resultMeta,
         error: 'zero_transactions'
       };
@@ -202,6 +217,8 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
     logger.info('[PDF_PLUMBER] success', {
       fileName,
       txnCount: mapped.transactions.length,
+      droppedRows: mapped.droppedRows?.length || 0,
+      uncertainAssignments: mapped.uncertainAssignments?.length || 0,
       durationMs: Date.now() - started
     });
 
@@ -210,6 +227,9 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
       transactions: mapped.transactions,
       openingBalance: mapped.openingBalance,
       closingBalance: mapped.closingBalance,
+      droppedRows: mapped.droppedRows || [],
+      uncertainAssignments: mapped.uncertainAssignments || [],
+      rawWordRows: mapped.rawWordRows || [],
       metadata: resultMeta
     };
   } catch (e) {
@@ -231,6 +251,7 @@ function softFail(partial) {
     transactions: [],
     openingBalance: partial.openingBalance ?? null,
     closingBalance: partial.closingBalance ?? null,
+    rawWordRows: partial.rawWordRows ?? [],
     metadata: partial.metadata ?? {},
     error: partial.error ?? 'unknown'
   };

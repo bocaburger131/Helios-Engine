@@ -11,12 +11,16 @@ import pdfParserService from '../services/pdfParserService.js';
 import { identifyTemplate } from '../services/templateLearningService.js';
 import logger from '../utils/logger.js';
 import {
+  buildLayoutFingerprint
+} from '../services/extraction/layoutFingerprintService.js';
+import {
   validateReconciliation,
   processTemplateOutcome,
   buildReconciliationMismatchAlert
 } from '../services/templateGraduationService.js';
 import { shouldTriggerVera, applyVeraHoldOnStatement } from '../services/veraVerificationService.js';
-
+import { triageLayoutMismatch, createRelationship } from '../services/institutionTriageService.js';
+import { enqueueTemplateLearningJob } from '../services/templateLearningQueue.js';
 /**
  * @param {import('bull').Job} job
  */
@@ -28,6 +32,85 @@ export async function processTemplateLearningJob(job) {
   }
 
   const buffer = await fs.readFile(filePath);
+
+  // ── Template Evolution Detection ──
+  // Before learning: check if this statement belongs to a different institution
+  const triageProfile = await InstitutionalProfile.findById(institutionalProfileId).lean();
+  if (triageProfile) {
+    // Extract initial layout data from the PDF to build fingerprint
+    // Use a lightweight extraction first
+    const { default: pdfParse } = await import('pdf-parse');
+    let extractedText = '';
+    try {
+      const pdfData = await pdfParse(buffer);
+      extractedText = pdfData.text || '';
+    } catch { /* ignore parse errors at triage stage */ }
+
+    // Build a preliminary fingerprint from the extracted text
+    // Look for section-like patterns (all-caps headers common in bank statements)
+    const sectionPattern = /^[A-Z][A-Z\s\/&]{3,40}$/gm;
+    const sectionLabels = (extractedText.match(sectionPattern) || [])
+      .map(s => s.trim())
+      .filter(s => s.length > 3);
+
+    const incomingFp = buildLayoutFingerprint({
+      headerAnchors: {},
+      transactionSections: sectionLabels.map(l => ({ label: l }))
+    });
+
+    if (incomingFp && triageProfile.templates?.length > 0) {
+      const triageResult = await triageLayoutMismatch({
+        incomingFingerprint: incomingFp,
+        expectedProfileId: triageProfile._id,
+        expectedProfileRtn: rtn,
+        expectedProfileName: triageProfile.legalName,
+        parsedBankName: anchorData?.companyName || '',
+        incomingSectionLabels: sectionLabels,
+        existingTemplateVersion: triageProfile.templates[0]?.version || 1,
+        existingTemplateFingerprint: triageProfile.templates[0]?.fingerprint || ''
+      });
+
+      if (triageResult.action === 'WRONG_INSTITUTION' && triageResult.targetProfileId) {
+        logger.warn('[LEARNING] Triage: WRONG_INSTITUTION — re-routing learning job', {
+          from: triageProfile.legalName,
+          to: triageResult.targetProfileName,
+          reason: triageResult.reason
+        });
+        await createRelationship(triageProfile._id, {
+          type: triageResult.relationshipType,
+          targetProfileId: triageResult.targetProfileId,
+          confidence: 0.9
+        });
+        // Re-queue the job under the correct profile
+        const correctProfile = await InstitutionalProfile.findById(triageResult.targetProfileId).lean();
+        if (correctProfile) {
+          await enqueueTemplateLearningJob({
+            filePath,
+            rtn: correctProfile.routingNumber,
+            institutionalProfileId: String(correctProfile._id),
+            statementId: String(statementId),
+            anchorData,
+            fileHash: job.data.fileHash
+          });
+          // Update statement to point to correct profile
+          await Statement.findByIdAndUpdate(statementId, {
+            $set: { institutionalProfileId: correctProfile._id }
+          });
+          return { ok: true, statementId: String(statementId), rerouted: true, to: correctProfile.legalName };
+        }
+      }
+
+      if (triageResult.action === 'FORMAT_CHANGE') {
+        logger.warn('[LEARNING] Triage: FORMAT_CHANGE — learning variant', {
+          profile: triageProfile.legalName,
+          parentVersion: triageResult.parentTemplateVersion,
+          reason: triageResult.reason
+        });
+        // Continue with Gemini learning — pass parentTemplateVersion
+        job.data.parentTemplateVersion = triageResult.parentTemplateVersion;
+      }
+    }
+  }
 
   await Statement.findByIdAndUpdate(statementId, {
     $set: {
@@ -41,6 +124,7 @@ export async function processTemplateLearningJob(job) {
     jobId: String(job.id)
   });
   const { layoutConfidence: _omitLc, ...mappingForTemplate } = mapping;
+  const fingerprint = mapping.layoutFingerprint || buildLayoutFingerprint(mapping);
 
   const profile = await InstitutionalProfile.findById(institutionalProfileId);
   if (!profile) {
@@ -63,6 +147,8 @@ export async function processTemplateLearningJob(job) {
           consecutiveSuccesses: 0,
           totalProcessed: 0,
           layoutConfidence: mapping.layoutConfidence ?? null,
+          fingerprint,
+          parentTemplateVersion: job.data.parentTemplateVersion || null,
           mapping: mappingForTemplate
         }
       }

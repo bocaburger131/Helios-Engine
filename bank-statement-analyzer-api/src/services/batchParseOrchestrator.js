@@ -20,6 +20,7 @@ import {
 import { buildParsingBleedAlert } from '../utils/amountSanityGuardrails.js';
 import { buildReconciliationMismatchAlert } from './templateGraduationService.js';
 import { ensureInstitutionalProfileForRtn } from './bankEnrichmentService.js';
+import InstitutionalProfile from '../models/InstitutionalProfile.js';
 import { RTN_BANK_MAP } from '../config/bankIdentifiers.js';
 import logger from '../utils/logger.js';
 import { clearVisionLayoutCacheForRtn } from './visionLayoutCacheService.js';
@@ -35,6 +36,7 @@ import {
   shouldRejectStoredMongoTemplate
 } from './extraction/templateDigitalValidator.js';
 import { shouldReuseLayoutWithoutGemini } from './extraction/layoutFingerprintService.js';
+import { triageLayoutMismatch, createRelationship } from './institutionTriageService.js';
 import {
   pdfPlumberEnabled,
   extractTransactionsFromPdfBuffer
@@ -779,6 +781,7 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
   }
 
   const learnable = profile ? getLatestLearnableTemplate(profile) : null;
+  let triageResult = null;
   if (learnable?.mapping) {
     if (exemplar.fileBuffer) {
       try {
@@ -817,6 +820,61 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
           mappedCount: probe.mappedCount,
           anchorMisses: anchor.misses
         });
+        // ── Template Evolution Detection ──
+        try {
+          const { buildLayoutFingerprint } = await import('./extraction/layoutFingerprintService.js');
+          const incomingFp = buildLayoutFingerprint(learnable.mapping);
+          const incomingSectionLabels = (learnable.mapping.transactionSections || [])
+            .map(s => s?.label || '').filter(Boolean);
+          triageResult = await triageLayoutMismatch({
+            incomingFingerprint: incomingFp,
+            expectedProfileId: profile._id,
+            expectedProfileRtn: effectiveRtn,
+            expectedProfileName: profile.legalName,
+            parsedBankName: exemplar.bankName || exemplar.parseResult?.bankName || '',
+            incomingSectionLabels,
+            existingTemplateVersion: learnable.version,
+            existingTemplateFingerprint: learnable.mapping?.layoutFingerprint || learnable.fingerprint || ''
+          });
+
+          if (triageResult.action === 'WRONG_INSTITUTION' && triageResult.targetProfileId) {
+            logger.warn('[BATCH_ORCHESTRATOR] Triage: WRONG_INSTITUTION — re-routing', {
+              from: profile.legalName,
+              to: triageResult.targetProfileName,
+              reason: triageResult.reason
+            });
+            await createRelationship(profile._id, {
+              type: triageResult.relationshipType,
+              targetProfileId: triageResult.targetProfileId,
+              targetRtn: triageResult.targetProfileName,
+              confidence: 0.9
+            });
+            // Re-lookup correct profile and its learnable template
+            const correctProfile = await InstitutionalProfile.findById(triageResult.targetProfileId).lean();
+            const correctLearnable = correctProfile ? getLatestLearnableTemplate(correctProfile) : null;
+            if (correctLearnable?.mapping) {
+              layoutByKey.set(groupKey, correctLearnable.mapping);
+              return correctLearnable.mapping;
+            }
+            // If correct profile has no template either, fall through to teach
+          }
+
+          if (triageResult.action === 'FORMAT_CHANGE') {
+            logger.warn('[BATCH_ORCHESTRATOR] Triage: FORMAT_CHANGE — learning variant', {
+              profile: profile.legalName,
+              parentVersion: triageResult.parentTemplateVersion,
+              reason: triageResult.reason
+            });
+            // Continue to Gemini teach — the new template will have parentTemplateVersion set
+            // when persisted via persistLearningTemplate
+          }
+        } catch (triageErr) {
+          logger.warn('[BATCH_ORCHESTRATOR] Triage evaluation failed', {
+            error: triageErr.message,
+            rtn: effectiveRtn
+          });
+          triageResult = null;
+        }
         if (effectiveRtn) {
           await clearVisionLayoutCacheForRtn(effectiveRtn);
         }
@@ -870,7 +928,9 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
     teachDoneByGroup.add(groupKey);
 
     if (profile?._id && mapping) {
-      await persistLearningTemplate(profile._id, mapping);
+      await persistLearningTemplate(profile._id, mapping, {
+        parentTemplateVersion: triageResult?.parentTemplateVersion ?? undefined
+      });
     }
     return mapping;
   } catch (e) {

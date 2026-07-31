@@ -2,6 +2,45 @@
  * Universal pdfplumber row normalization (preserves section + dateRaw for bank profiles).
  */
 
+import Ajv from 'ajv';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const rescueEvidenceSchema = require('./rescueEvidenceSchema.json');
+
+const ajv = new Ajv({ allErrors: true, strict: false });
+const validateDroppedRow = ajv.compile({
+  $ref: '#/definitions/droppedRow',
+  definitions: rescueEvidenceSchema.definitions
+});
+const validateUncertainAssignment = ajv.compile({
+  $ref: '#/definitions/uncertainAssignment',
+  definitions: rescueEvidenceSchema.definitions
+});
+
+/**
+ * Validate an evidence entry against the rescue evidence schema.
+ * Logs a warning on violations; never throws.
+ * @param {Function} validate
+ * @param {object} entry
+ * @param {string} kind
+ * @param {number} index
+ */
+function validateEvidenceEntry(validate, entry, kind, index) {
+  try {
+    if (!validate(entry)) {
+      console.warn(
+        `[plumberRowNormalizer] ${kind}[${index}] failed schema validation:`,
+        JSON.stringify(validate.errors)
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[plumberRowNormalizer] ${kind}[${index}] schema validation error: ${err.message}`
+    );
+  }
+}
+
 export const PLUMBER_ROW_AMOUNT_CAP = 250_000;
 const ROUTING_BLEED_RE = /\b\d{9,}\b/;
 
@@ -63,6 +102,7 @@ export function normalizePlumberRow(row, defaultYear = new Date().getFullYear())
   if (!isoDate) return null;
 
   const section = row.section != null ? String(row.section) : '';
+  const sectionId = section || 'unknown';
   const signed = type === 'DEBIT' ? -absAmt : absAmt;
 
   return {
@@ -72,9 +112,15 @@ export function normalizePlumberRow(row, defaultYear = new Date().getFullYear())
     amount: signed,
     type: type === 'DEBIT' ? 'DEBIT' : 'CREDIT',
     section,
+    sectionId,
     rawAmount: absAmt.toFixed(2),
     rawLine: `[PDF_PLUMBER] ${description}`,
-    extractionSource: 'pdfplumber'
+    extractionSource: 'pdfplumber',
+    ...(row.balance != null ? { balance: row.balance } : {}),
+    ...(row.page != null ? { page: row.page } : {}),
+    ...(row.y != null ? { pageY: row.y } : {}),
+    ...(row.sourceHash ? { sourceHash: row.sourceHash } : {}),
+    ...(row.rawCells ? { rawCells: row.rawCells } : {})
   };
 }
 
@@ -99,7 +145,31 @@ export function normalizePlumberJson(json, defaultYear = new Date().getFullYear(
       ? Number(json.closingBalance)
       : null;
 
-  return { transactions, openingBalance: opening, closingBalance: closing };
+  const droppedRows = Array.isArray(json?.dropped_rows) ? json.dropped_rows : [];
+  const uncertainAssignments = Array.isArray(json?.uncertain_assignments)
+    ? json.uncertain_assignments
+    : [];
+  const rawWordRows = Array.isArray(json?.raw_word_rows) ? json.raw_word_rows : [];
+
+  droppedRows.forEach((entry, i) => validateEvidenceEntry(validateDroppedRow, entry, 'droppedRows', i));
+  uncertainAssignments.forEach((entry, i) =>
+    validateEvidenceEntry(validateUncertainAssignment, entry, 'uncertainAssignments', i)
+  );
+
+  return {
+    transactions,
+    normalizedTransactions: transactions,
+    droppedRows,
+    uncertainAssignments,
+    rawWordRows,
+    openingBalance: opening,
+    closingBalance: closing,
+    meta: {
+      openingBalance: opening,
+      closingBalance: closing,
+      pageTelemetry: Array.isArray(json?.page_telemetry) ? json.page_telemetry : []
+    }
+  };
 }
 
 export default {

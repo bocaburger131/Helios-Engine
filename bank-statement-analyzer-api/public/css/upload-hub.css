@@ -34,6 +34,8 @@ body.helios-app {
   grid-template-columns: var(--helios-sidebar-w, 240px) 1fr 0;
   grid-template-rows: 1fr;
   overflow: hidden;
+  border: 4px solid #eab308;
+  box-sizing: border-box;
   transition: grid-template-columns 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 

@@ -424,8 +424,16 @@ export class PDFParserService {
           rtn: waterfallResult.rtn ?? null,
           accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
           plumberTransactions,
+          plumberDroppedRows: plumberResult?.droppedRows || [],
+          plumberUncertainAssignments: plumberResult?.uncertainAssignments || [],
+          plumberRawWordRows: plumberResult?.rawWordRows || [],
+          plumberMeta: {
+            openingBalance: plumberResult?.openingBalance ?? null,
+            closingBalance: plumberResult?.closingBalance ?? null,
+          },
           stitcherPrinted,
-          typeAText: stitcher.typeA?.text ?? null
+          typeAText: stitcher.typeA?.text ?? null,
+          pdfBuffer: buffer
         });
         transactions = pipelineResult.transactions || [];
         if (profile.id === 'wells_initiate_checking' || profile.id === 'chase_business_complete') {
@@ -453,10 +461,12 @@ export class PDFParserService {
           Object.assign(stitcher, pipelineResult.stitcher);
         }
         const strictProfileIds = new Set(['wells_initiate_checking', 'chase_business_complete']);
+        const rescueAttempted = pipelineResult.meta?.ocrRescueApplied === true || pipelineResult.meta?.ocrRescueFailed === true;
         const profileAccepted =
           !strictProfileIds.has(profile.id) ||
           (pipelineResult.extractionTier === 1 &&
-            pipelineResult.reconciliation?.checksumOk === true);
+            pipelineResult.reconciliation?.checksumOk === true) ||
+          rescueAttempted;  // accept results that went through rescue chain even if checksum still fails
 
         if (!profileAccepted) {
           logger.warn('[PDF_PARSER] Profile pipeline not accepted — legacy transaction extract', {
@@ -829,6 +839,16 @@ export class PDFParserService {
               : undefined,
           extractionTier: pipelineResult?.extractionTier ?? null,
           dailyBalanceRule: pipelineResult?.dailyBalanceRule ?? null,
+          rescueOutcome: pipelineResult?.meta?.rescueOutcome ?? pipelineResult?.rescueOutcome ?? null,
+          ocrRescueApplied: pipelineResult?.meta?.ocrRescueApplied ?? false,
+          ocrRescueFailed: pipelineResult?.meta?.ocrRescueFailed ?? false,
+          aiRetryApplied: pipelineResult?.meta?.aiRetryApplied ?? false,
+          columnFlipRepaired: pipelineResult?.meta?.columnFlipRepaired ?? false,
+          droppedRowCount: plumberResult?.droppedRows?.length ?? 0,
+          uncertainAssignmentCount: plumberResult?.uncertainAssignments?.length ?? 0,
+          rawLedgerApplied: pipelineResult?.meta?.rawLedgerApplied ?? false,
+          rawLedgerOutcome: pipelineResult?.meta?.rawLedgerOutcome ?? 'RESCUE_SKIPPED',
+          rawWordRowCount: plumberResult?.rawWordRows?.length ?? 0,
           layoutPipelineShadow,
           layoutPipelineFeeTransactions: layoutPipelineResult?.feeTransactions ?? [],
           layoutPipelineDocumentMap: layoutPipelineResult?.documentMap ?? null,
@@ -862,6 +882,20 @@ export class PDFParserService {
         availableBalance: balances.available,
         averageDailyBalance: balances.averageDaily,
         transactions,
+        rawWordRows: pipelineResult?.rawWordRows ?? plumberResult?.rawWordRows ?? [],
+        fallback:
+          (!transactions || transactions.length === 0) &&
+          (plumberResult?.rawWordRows?.length || pipelineResult?.rawWordRows?.length)
+            ? {
+                mode: 'raw_word',
+                note: 'Layout not recognized. Raw word ledger provided for manual review or AI reconstruction.',
+                rawWordRowCount:
+                  plumberResult?.rawWordRows?.length ||
+                  pipelineResult?.rawWordRows?.length ||
+                  0,
+              }
+            : null,
+        rescueOutcome: pipelineResult?.meta?.rescueOutcome ?? pipelineResult?.rescueOutcome ?? null,
         ...(options?.includeRawText ? { rawText: data.text } : {})
       };
 
@@ -885,7 +919,11 @@ export class PDFParserService {
         rtn: waterfallResult.rtn ?? null,
         accountNumber: accountInfo.accountNumber || indicators.accountNumber || null,
         stitcherPrinted: dualStitcherPrinted,
-        typeAText: stitcher.typeA?.text ?? null
+        typeAText: stitcher.typeA?.text ?? null,
+        // Rescue candidate overlay: the repaired plumber ledger and the base
+        // ledger the rescue compared. The selector scores the repaired
+        // candidate as a first-class contender instead of only the raw branch.
+        rescueCandidates: pipelineResult?.rescueCandidates ?? null
       });
     } catch (error) {
       // Let DocumentTriageError propagate as-is so callers can distinguish non-statement files

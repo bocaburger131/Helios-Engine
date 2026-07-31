@@ -5,9 +5,11 @@
  */
 
 import { runDiagnosticCompletion } from './aiOrchestratorService.js';
+import { identifyFailingSection, extractFailingSectionContext } from './sectionDiagnostic.js';
+import { detectSectionBoundaries } from './extraction/sectionBoundaryDetector.js';
 import logger from '../utils/logger.js';
 
-export const DIAGNOSIS_CODES = ['COLUMN_FLIP', 'ROW_BLEED', 'MISSING_FEE', 'MISALIGNED_COLUMNS', 'UNKNOWN'];
+export const DIAGNOSIS_CODES = ['COLUMN_FLIP', 'ROW_BLEED', 'MISSING_FEE', 'MISALIGNED_COLUMNS', 'LOW_DATA_DENSITY', 'UNKNOWN'];
 
 const MAX_SAMPLE_ROWS = 80;
 
@@ -25,6 +27,7 @@ Diagnosis codes (pick exactly one):
 - ROW_BLEED: Transactions from another section/page were included (duplicate dates, wrong section totals).
 - MISALIGNED_COLUMNS: Extracted deposit/withdrawal sums are massively larger than printed totals (e.g., 2x-5x), likely due to the parser confusing running balances or check numbers for amounts.
 - MISSING_FEE: Likely omitted fee/interest/adjustment row explaining a small delta.
+- LOW_DATA_DENSITY: The PDF lacks enough structural data (balance column empty, no section headers, sparse amounts) for deterministic extraction. Column assignment may be correct but sign inference needs help from other signals.
 - UNKNOWN: Cannot determine with reasonable confidence.
 
 Rules:
@@ -169,6 +172,16 @@ export async function analyzeMismatch(input = {}) {
     },
     reconciliationBreakdown: input.reconciliationBreakdown ?? null,
     transactionCount: Array.isArray(input.transactions) ? input.transactions.length : 0,
+    // Layout quality signals
+    balanceCoverage: input.balanceCoverage ?? null,
+    sectionCoverage: input.sectionCoverage ?? null,
+    extractionStrategies: input.extractionStrategies ?? null,
+    columnLayout: input.columnLayout ?? null,
+    columnStats: input.columnStats ?? null,
+    // Column flip signals
+    columnFlipDetected: input.columnFlipDetected ?? null,
+    depositRatio: input.depositRatio ?? null,
+    withdrawalRatio: input.withdrawalRatio ?? null,
     sectionSummary: sectionSummary.length > 0 ? sectionSummary : undefined,
     transactions,
     layoutTextSample: input.layoutTextSample
@@ -205,4 +218,72 @@ export async function analyzeMismatch(input = {}) {
   }
 }
 
-export default { analyzeMismatch, coerceDiagnosticResult, DIAGNOSIS_CODES };
+/**
+ * Section-scoped diagnostic — analyzes only the failing section instead of full statement.
+ * When a clear failing section is identified (confidence > 0.4), AI rescue is scoped
+ * to just that section's text and transactions, dramatically reducing token cost.
+ *
+ * Falls back to full-document analyzeMismatch when no clear failing section is found.
+ *
+ * @param {object} params
+ * @param {Array<object>} params.transactions - parsed transactions with sectionId/section
+ * @param {object} params.reconciliation - reconciliation result { ok, delta, ... }
+ * @param {string} params.fullText - raw extracted text from the statement
+ * @param {Array<string>} [params.sectionLabels] - section label strings
+ * @param {...any} params.rest - remaining inputs to pass through to analyzeMismatch
+ * @returns {Promise<object>}
+ */
+export async function runSectionDiagnostic({ transactions, reconciliation, fullText, sectionLabels, ...analyzeMismatchInput }) {
+  // 1. Identify failing section
+  const { failingSection, confidence, recommendedAction } = identifyFailingSection({
+    transactions,
+    sectionLabels: sectionLabels || [],
+    checksumRecon: reconciliation,
+    fullText
+  });
+
+  if (recommendedAction !== 'section_rescue' || !failingSection) {
+    // Fall back to full diagnostic
+    logger.info('[AI_DIAGNOSTIC] runSectionDiagnostic falling back to full analyzeMismatch', {
+      reason: recommendedAction !== 'section_rescue' ? 'low_confidence' : 'no_section',
+      confidence,
+      recommendedAction
+    });
+    return analyzeMismatch({ transactions, ...analyzeMismatchInput });
+  }
+
+  // 2. Detect boundaries and extract only the failing section's text
+  const boundaries = detectSectionBoundaries(fullText);
+  const sectionText = extractFailingSectionContext(fullText, failingSection, boundaries);
+
+  // 3. Filter transactions to only the failing section
+  const scopedTransactions = transactions.filter(t =>
+    (t.sectionId === failingSection || t.section === failingSection)
+  );
+
+  logger.info('[AI_DIAGNOSTIC] runSectionDiagnostic scoping to section', {
+    failingSection,
+    confidence,
+    scopedTxCount: scopedTransactions.length,
+    totalTxCount: transactions.length,
+    sectionTextLength: sectionText.length,
+    fullTextLength: fullText.length
+  });
+
+  // 4. Run AI diagnostic on JUST the failing section
+  // This is significantly cheaper — 500-2000 chars instead of 8000+ chars
+  const result = await analyzeMismatch({
+    transactions: scopedTransactions,
+    ...analyzeMismatchInput,
+    layoutTextSample: sectionText
+  });
+
+  return {
+    ...result,
+    sectionScoped: true,
+    failingSection,
+    tokenSavings: `Section-scoped: ~${sectionText.length} chars vs full text: ~${fullText.length} chars`
+  };
+}
+
+export default { analyzeMismatch, coerceDiagnosticResult, DIAGNOSIS_CODES, runSectionDiagnostic };

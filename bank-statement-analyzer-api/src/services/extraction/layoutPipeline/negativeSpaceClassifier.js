@@ -87,6 +87,44 @@ const IGNORED_HEURISTICS = [
 
       /\bwww\.|visit\s+us|call\s+1-800|learn\s+more|promotional|\.com\b/i.test(text)
 
+  },
+
+  {
+
+    type: IGNORED_REGION_TYPES.AD,
+
+    reason: 'routing_number_context',
+
+    test: (text) =>
+
+      /routing\s+number|aba\s+number|wire\s+transfer\s+instructions/i.test(text) &&
+
+      String(text || '').length < 200
+
+  },
+
+  {
+
+    type: IGNORED_REGION_TYPES.DISCLOSURE,
+
+    reason: 'legal_boilerplate',
+
+    test: (text) =>
+
+      /\bparagraph\s+\d+|section\s+\d+\.\d+|pursuant\s+to|herein/i.test(text)
+
+  },
+
+  {
+
+    type: IGNORED_REGION_TYPES.AD,
+
+    reason: 'marketing_banner',
+
+    test: (text) =>
+
+      /apply\s+(now|today)|limited\s+time|special\s+offer|exclusive/i.test(text)
+
   }
 
 ];
