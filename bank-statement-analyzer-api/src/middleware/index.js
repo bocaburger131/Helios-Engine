@@ -27,7 +27,7 @@ export { sanitizeRequest } from './sanitizer.js';
 export { securityHeaders, createRateLimiter } from './securitySimple.js';
 
 // Validation
-export { validateRequest } from './validateRequest.js';
+export { validateRequest } from './validation.js';
 // export { validate } from './validate.js'; // File missing - commented out
 export { statementValidator } from './statementValidator.js';
 

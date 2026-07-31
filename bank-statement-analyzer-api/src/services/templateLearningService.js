@@ -4,8 +4,8 @@
  * @license Copyright (c) 2025 Shift 4 Financial INC
  */
 
+import { analyzeStatementLayout } from './aiVisionService.js';
 import {
-  analyzeStatementLayout,
   extractFirstPagesPdfBuffer,
   MATH_PATTERNS,
   coerceLayoutMapping,

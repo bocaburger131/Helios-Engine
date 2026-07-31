@@ -1,17 +1,24 @@
 /**
- * Gemini 1.5 Pro multimodal "Teacher" for bank statement layout → deterministic runner mapping.
+ * Gemini Vision Provider — Helios AI.Vision provider implementation.
+ *
+ * Extracted from geminiVisionService.js. Handles Gemini-specific logic:
+ * prompt construction, API calls, and response parsing/coercion.
+ * Caching and rate limiting are orchestrator concerns and are excluded.
+ *
  * @license Copyright (c) 2025 Shift 4 Financial INC
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PDFDocument } from 'pdf-lib';
-import { logStructured } from '../utils/structuredLog.js';
-import redisService from './RedisService.js';
-import { preprocessStatementText, buildVisionPromptBlock, summarizePreprocess } from './preprocessStatementForAI.js';
+import { logStructured } from '../../utils/structuredLog.js';
 
-export const MATH_PATTERNS = ['MINUS_PREFIX', 'PARENTHESES', 'DEBIT_CREDIT_SEPARATE'];
+// ---------------------------------------------------------------------------
+// Module-level constants (shared prompts / schemas)
+// ---------------------------------------------------------------------------
 
-const VISION_SYSTEM_INSTRUCTION = `You are a Senior Financial Data Engineer. Analyze the provided bank statement PDF visually and textually. Your goal is to create a deterministic mapping for a regex-based parser that extracts EVERY posted transaction on the statement.
+const MATH_PATTERNS = ['MINUS_PREFIX', 'PARENTHESES', 'DEBIT_CREDIT_SEPARATE'];
+
+export const VISION_SYSTEM_INSTRUCTION = `You are a Senior Financial Data Engineer. Analyze the provided bank statement PDF visually and textually. Your goal is to create a deterministic mapping for a regex-based parser that extracts EVERY posted transaction on the statement.
 
 Analysis Requirements:
 
@@ -35,7 +42,7 @@ Parsing bleed guardrails: Never treat routing numbers (9 digits), account number
 
 Vitals: Read printed Beginning/Opening and Ending/Closing balances from the summary (not sums of your sample rows).`;
 
-const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backticks) with exactly this structure:
+export const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backticks) with exactly this structure:
 {
   "layoutName": "String (e.g., WellsFargo_InitiateChecking_v1)",
   "headerAnchors": { "start": "Transaction history", "end": "Daily balance summary" },
@@ -60,8 +67,6 @@ Rules:
 - columnMapping indices are 0-based from splitting each transaction row on 2+ spaces or tabs.
 - confidenceScore must be a number from 0.0 to 1.0.
 - vitals.openingBalance and vitals.closingBalance are numbers from the printed statement summary (not calculated from transactions).`;
-
-let lastVisionCallMs = 0;
 
 const LAYOUT_JSON_SCHEMA = {
   type: 'object',
@@ -111,23 +116,9 @@ const LAYOUT_JSON_SCHEMA = {
   required: ['headerAnchors', 'columnMapping', 'mathPattern', 'confidenceScore']
 };
 
-function layoutConfidenceMin() {
-  const n = Number(process.env.GEMINI_VISION_CONFIDENCE_MIN);
-  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.55;
-}
-
-/**
- * Redis layout cache keys:
- * - Legacy: vision:layout:{rtn} (e.g. vision:layout:062000080) — safe to DEL when invalidating
- * - Current: vision:layout:v2:{rtn}:{bank_slug}[:s{sectionCount}]
- * Use: node scripts/redis-clear-vision-layout.mjs --rtn 062000080
- */
-function visionCacheKey(rtn, bankName, sectionCount = 0) {
-  const b = String(bankName || 'unknown').replace(/\s+/g, '_').slice(0, 40);
-  const r = String(rtn || 'unknown').replace(/\D/g, '') || 'unknown';
-  const sc = Number(sectionCount) > 0 ? `:s${Number(sectionCount)}` : '';
-  return `vision:layout:v2:${r}:${b}${sc}`;
-}
+// ---------------------------------------------------------------------------
+// Helper functions (copied from geminiVisionService.js to keep provider self-contained)
+// ---------------------------------------------------------------------------
 
 /**
  * @param {object} cm
@@ -161,151 +152,9 @@ function resolveMathPatternWithDebitCredit(columnMapping, mathPattern) {
   return pattern;
 }
 
-async function readLayoutCache(rtn, bankName) {
-  const key = visionCacheKey(rtn, bankName);
-  try {
-    await redisService.connect();
-    if (!redisService.isConnected) return null;
-    const raw = await redisService.get(key);
-    if (!raw) {
-      logStructured('info', '[geminiVision] layout cache miss', { key, rtn, bankName });
-      return null;
-    }
-    logStructured('info', '[geminiVision] layout cache hit', { key, rtn, bankName });
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch (err) {
-    logStructured('warn', '[geminiVision] layout cache read failed', { key, err: err?.message });
-    return null;
-  }
-}
-
-async function writeLayoutCache(rtn, bankName, layout, sectionCount = 0) {
-  try {
-    await redisService.connect();
-    if (!redisService.isConnected || !layout) return;
-    const ttl = Number(process.env.GEMINI_VISION_CACHE_TTL_SEC) || 2592000;
-    const sc = sectionCount || layout?.transactionSections?.length || 0;
-    await redisService.set(visionCacheKey(rtn, bankName, sc), JSON.stringify(layout), ttl);
-  } catch {
-    /* non-fatal */
-  }
-}
-
-/**
- * Reject layouts where sample rows fail basic date/amount parse (hallucination guard).
- * @param {object} layout coerced layout
- * @param {Array<{ date?: string, amount?: number, description?: string }>} [sampleRows]
- */
-export function validateLayoutAgainstSampleRows(layout, sampleRows = []) {
-  if (!layout || !Array.isArray(sampleRows) || sampleRows.length === 0) return true;
-  let ok = 0;
-  for (const row of sampleRows.slice(0, 8)) {
-    const amt = Number(row?.amount);
-    const d = row?.date ? new Date(row.date) : null;
-    if (Number.isFinite(amt) && d && !Number.isNaN(d.getTime())) ok += 1;
-  }
-  return ok >= Math.max(1, Math.floor(sampleRows.length * 0.5));
-}
-
-/** @returns {string} API key from GEMINI_API_KEY or GOOGLE_API_KEY */
-export function resolveGeminiApiKey() {
-  return String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
-}
-
-/** @returns {string} Generative model id for layout vision (override via GEMINI_VISION_MODEL) */
-export function resolveGeminiVisionModel() {
-  return String(process.env.GEMINI_VISION_MODEL || 'gemini-flash-latest').trim() || 'gemini-flash-latest';
-}
-
-/** @returns {string} Model for direct row extraction fallback (GEMINI_VISION_ROW_MODEL) */
-export function resolveGeminiRowExtractionModel() {
-  return (
-    String(process.env.GEMINI_VISION_ROW_MODEL || 'gemini-flash-latest').trim() ||
-    'gemini-flash-latest'
-  );
-}
-
-export function rowFallbackEnabled() {
-  const v = process.env.GEMINI_VISION_ROW_FALLBACK;
-  if (v === 'false' || v === '0') return false;
-  return Boolean(resolveGeminiApiKey());
-}
-
-const ROW_EXTRACTION_SYSTEM = `You are a bank statement transaction extractor. Extract EVERY posted transaction row from the PDF — all pages, all sub-tables (deposits, withdrawals, checks, fees, card, ACH, etc.).
-
-Rules:
-- One JSON object per posted transaction (date, description, amount, type).
-- type must be CREDIT (money in) or DEBIT (money out).
-- amount is always a positive number; type indicates direction.
-- Use the statement period year when the row omits a year.
-- Skip summary lines (e.g. "Deposits/Credits 29,173.53", "Total withdrawals", beginning/ending balance summary).
-- Skip page headers, footers, and marketing text.
-- Multi-line descriptions: combine into one description string.
-- Include openingBalance and closingBalance from the printed activity summary if visible.`;
-
-const ROW_EXTRACTION_USER = `Return ONLY JSON matching the schema. Extract all transaction rows from the entire statement PDF provided.`;
-
-const ROW_EXTRACTION_JSON_SCHEMA = {
-  type: 'object',
-  properties: {
-    transactions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          date: { type: 'string' },
-          description: { type: 'string' },
-          amount: { type: 'number' },
-          type: { type: 'string', enum: ['CREDIT', 'DEBIT'] }
-        },
-        required: ['date', 'description', 'amount', 'type']
-      }
-    },
-    openingBalance: { type: 'number', nullable: true },
-    closingBalance: { type: 'number', nullable: true }
-  },
-  required: ['transactions']
-};
-
-function defaultMinIntervalMs() {
-  const n = Number(process.env.GEMINI_VISION_MIN_INTERVAL_MS);
-  return Number.isFinite(n) && n >= 0 ? n : 600;
-}
-
-async function respectVisionRateLimit() {
-  const min = defaultMinIntervalMs();
-  if (min === 0) return;
-  const now = Date.now();
-  const elapsed = now - lastVisionCallMs;
-  if (elapsed < min) {
-    await new Promise((r) => setTimeout(r, min - elapsed));
-  }
-  lastVisionCallMs = Date.now();
-}
-
-/**
- * @param {Buffer} pdfBuffer
- * @param {number} maxPages
- * @returns {Promise<Buffer>}
- */
-export async function extractFirstPagesPdfBuffer(pdfBuffer, maxPages = 3) {
-  return extractPdfBufferMaxPages(pdfBuffer, maxPages);
-}
-
-/**
- * @param {Buffer} pdfBuffer
- * @param {number} [maxPages]
- * @returns {Promise<Buffer>}
- */
-export async function extractPdfBufferMaxPages(pdfBuffer, maxPages = 20) {
-  const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
-  const out = await PDFDocument.create();
-  const n = Math.min(src.getPageCount(), Math.max(1, maxPages));
-  const idx = Array.from({ length: n }, (_, i) => i);
-  const pages = await out.copyPages(src, idx);
-  pages.forEach((p) => out.addPage(p));
-  return Buffer.from(await out.save());
+function layoutConfidenceMin() {
+  const n = Number(process.env.GEMINI_VISION_CONFIDENCE_MIN);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.55;
 }
 
 function layoutMaxPages() {
@@ -313,88 +162,18 @@ function layoutMaxPages() {
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 30) : 8;
 }
 
-function rowExtractionMaxPages() {
-  const n = Number(process.env.GEMINI_VISION_ROW_MAX_PAGES);
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 40) : 20;
+/** @returns {string} API key from GEMINI_API_KEY or GOOGLE_API_KEY */
+function resolveGeminiApiKey() {
+  return String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
 }
 
-/**
- * @param {string} raw
- * @param {number} [defaultYear]
- * @returns {string}
- */
-export function normalizeVisionRowDate(raw, defaultYear = new Date().getFullYear()) {
-  const s = String(raw || '').trim();
-  if (!s) return s;
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  const mdy = s.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/);
-  if (mdy) {
-    let y = mdy[3] ? Number(mdy[3]) : defaultYear;
-    if (y < 100) y += 2000;
-    const mm = String(mdy[1]).padStart(2, '0');
-    const dd = String(mdy[2]).padStart(2, '0');
-    return `${y}-${mm}-${dd}`;
-  }
-  const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
-  return s;
-}
-
-/**
- * @param {object} row
- * @param {number} [defaultYear]
- * @returns {object|null}
- */
-export function normalizeVisionTransactionRow(row, defaultYear) {
-  if (!row || typeof row !== 'object') return null;
-  const type = String(row.type || '').toUpperCase();
-  if (type !== 'CREDIT' && type !== 'DEBIT') return null;
-  const absAmt = Math.abs(Number(row.amount));
-  if (!Number.isFinite(absAmt) || absAmt < 0.01) return null;
-  const description = String(row.description || '').trim();
-  if (!description) return null;
-  const date = normalizeVisionRowDate(row.date, defaultYear);
-  const signed = type === 'DEBIT' ? -absAmt : absAmt;
-  return {
-    date,
-    description,
-    amount: signed,
-    type: type === 'DEBIT' ? 'DEBIT' : 'credit',
-    rawAmount: absAmt.toFixed(2),
-    rawLine: `[VISION_ROW] ${description}`,
-    extractionSource: 'gemini_row_fallback'
-  };
-}
-
-/**
- * @param {unknown} parsed
- * @param {number} [defaultYear]
- * @returns {{ transactions: object[], openingBalance: number|null, closingBalance: number|null }}
- */
-export function coerceVisionTransactionRows(parsed, defaultYear) {
-  const list = Array.isArray(parsed?.transactions) ? parsed.transactions : [];
-  const transactions = [];
-  for (const row of list) {
-    const norm = normalizeVisionTransactionRow(row, defaultYear);
-    if (norm) transactions.push(norm);
-  }
-  const opening =
-    parsed?.openingBalance != null && Number.isFinite(Number(parsed.openingBalance))
-      ? Number(parsed.openingBalance)
-      : null;
-  const closing =
-    parsed?.closingBalance != null && Number.isFinite(Number(parsed.closingBalance))
-      ? Number(parsed.closingBalance)
-      : null;
-  return { transactions, openingBalance: opening, closingBalance: closing };
+/** @returns {string} Generative model id for layout vision */
+function resolveGeminiVisionModel() {
+  return String(process.env.GEMINI_VISION_MODEL || 'gemini-flash-latest').trim() || 'gemini-flash-latest';
 }
 
 /** @param {string} [raw] */
-export function stripMarkdownFences(raw) {
+function stripMarkdownFences(raw) {
   if (!raw || typeof raw !== 'string') return raw || '';
   let s = raw.trim();
   const fence = /^```(?:json)?\s*([\s\S]*?)```$/im;
@@ -407,7 +186,7 @@ export function stripMarkdownFences(raw) {
  * @param {string|object|null|undefined} raw
  * @returns {object|null}
  */
-export function extractJsonObject(raw) {
+function extractJsonObject(raw) {
   if (!raw) return null;
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw;
   if (typeof raw !== 'string') return null;
@@ -426,7 +205,7 @@ export function extractJsonObject(raw) {
  * @param {object} parsed
  * @returns {object|null}
  */
-export function prenormalizeVisionPayload(parsed) {
+function prenormalizeVisionPayload(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const ha = parsed.headerAnchors && typeof parsed.headerAnchors === 'object' ? parsed.headerAnchors : {};
   const useNewAnchors = 'start' in ha || 'end' in ha;
@@ -509,10 +288,11 @@ export function prenormalizeVisionPayload(parsed) {
 }
 
 /**
+ * Coerce raw layout JSON into the canonical shape used by deterministic runners.
  * @param {object|null} parsed
  * @returns {object|null}
  */
-export function coerceLayoutMapping(parsed) {
+function coerceLayoutMapping(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const headerAnchors = parsed.headerAnchors && typeof parsed.headerAnchors === 'object'
     ? {
@@ -576,6 +356,46 @@ export function coerceLayoutMapping(parsed) {
 }
 
 /**
+ * Reject layouts where sample rows fail basic date/amount parse (hallucination guard).
+ * @param {object} layout coerced layout
+ * @param {Array<{ date?: string, amount?: number, description?: string }>} [sampleRows]
+ */
+export function validateLayoutAgainstSampleRows(layout, sampleRows = []) {
+  if (!layout || !Array.isArray(sampleRows) || sampleRows.length === 0) return true;
+  let ok = 0;
+  for (const row of sampleRows.slice(0, 8)) {
+    const amt = Number(row?.amount);
+    const d = row?.date ? new Date(row.date) : null;
+    if (Number.isFinite(amt) && d && !Number.isNaN(d.getTime())) ok += 1;
+  }
+  return ok >= Math.max(1, Math.floor(sampleRows.length * 0.5));
+}
+
+// ---------------------------------------------------------------------------
+// PDF utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract first N pages from a PDF buffer.
+ * @param {Buffer} pdfBuffer
+ * @param {number} maxPages
+ * @returns {Promise<Buffer>}
+ */
+export async function extractFirstPagesPdfBuffer(pdfBuffer, maxPages = 20) {
+  const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const n = Math.min(src.getPageCount(), Math.max(1, maxPages));
+  const idx = Array.from({ length: n }, (_, i) => i);
+  const pages = await out.copyPages(src, idx);
+  pages.forEach((p) => out.addPage(p));
+  return Buffer.from(await out.save());
+}
+
+// ---------------------------------------------------------------------------
+// Gemini API interaction
+// ---------------------------------------------------------------------------
+
+/**
  * @param {*} model GenerativeModel from @google/generative-ai
  * @param {Array<{ text?: string, inlineData?: { mimeType: string, data: string } }>} parts
  */
@@ -585,10 +405,14 @@ async function generateVisionContent(model, parts) {
   return typeof response.text === 'function' ? response.text() : '';
 }
 
+// ---------------------------------------------------------------------------
+// Main analyze function (no caching, no rate limiting — orchestrator concerns)
+// ---------------------------------------------------------------------------
+
 /**
  * Multimodal layout analysis for Helios deterministic runner templates.
  * @param {Buffer} pdfBuffer
- * @param {{ rtn?: string, statementId?: string, jobId?: string }} [options]
+ * @param {{ rtn?: string, statementId?: string, jobId?: string, bankName?: string, digitalTextExcerpt?: string, sampleRows?: Array, printedOpeningBalance?: number, printedClosingBalance?: number }} [options]
  * @returns {Promise<object>}
  */
 export async function analyzeStatementLayout(pdfBuffer, options = {}) {
@@ -598,26 +422,17 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   }
 
   const rtn = String(options.rtn || '').replace(/\D/g, '');
-  const bankName = String(options.bankName || '').trim();
   const logBase = {
     domain: 'gemini-vision',
     rtn: rtn || null,
-    bankName: bankName || null,
+    bankName: options.bankName || null,
     statementId: options.statementId || null,
     jobId: options.jobId || null
   };
 
-  const cached = await readLayoutCache(rtn, bankName, 0);
-  if (cached?.headerAnchors) {
-    logStructured('info', '[VISION_CACHE_HIT] Using cached layout', logBase);
-    return cached;
-  }
-
   logStructured('info', '[VISION_START] Analyzing new layout for RTN', logBase);
 
-  await respectVisionRateLimit();
-
-  const subset = await extractPdfBufferMaxPages(pdfBuffer, layoutMaxPages());
+  const subset = await extractFirstPagesPdfBuffer(pdfBuffer, layoutMaxPages());
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: resolveGeminiVisionModel(),
@@ -629,23 +444,10 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   });
 
   const routingLine = rtn ? `Routing context (ABA): ${rtn}` : 'Routing context: unknown';
-
-    // Pre-process: remove noise, detect sections (Marker-style scope reduction)
-    const digitalTextExcerpt = String(options.digitalTextExcerpt || '').trim();
-    let excerptBlock = '';
-    if (digitalTextExcerpt) {
-      try {
-        const preprocessResult = preprocessStatementText(digitalTextExcerpt);
-        const { summary, stats } = summarizePreprocess(preprocessResult);
-        logStructured('info', '[VISION_PREPROCESS] Statement pre-processed', { ...logBase, ...stats, summary });
-        excerptBlock = buildVisionPromptBlock(preprocessResult);
-      } catch (err) {
-        logStructured('warn', '[VISION_PREPROCESS] Pre-processing failed, using raw text', {
-          ...logBase, error: err?.message,
-        });
-        excerptBlock = `\n\nDigital PDF text excerpt (anchor strings MUST appear verbatim in this text):\n---\n${digitalTextExcerpt}\n---`;
-      }
-    }
+  const excerpt = String(options.digitalTextExcerpt || '').trim();
+  const excerptBlock = excerpt
+    ? `\n\nDigital PDF text excerpt (anchor strings MUST appear verbatim in this text):\n---\n${excerpt}\n---`
+    : '';
   const primaryParts = [
     { text: `${VISION_USER_SCHEMA}\n\n${routingLine}${excerptBlock}` },
     {
@@ -744,19 +546,6 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
     throw err;
   }
 
-  const vitals = finalOut.vitals || {};
-  const printedOpening = vitals.openingBalance ?? options.printedOpeningBalance;
-  const printedClosing = vitals.closingBalance ?? options.printedClosingBalance;
-  if (printedOpening != null || printedClosing != null) {
-    logStructured('info', '[VISION_MATH] Printed balances from teacher', {
-      ...logBase,
-      openingBalance: printedOpening ?? null,
-      closingBalance: printedClosing ?? null
-    });
-  }
-
-  await writeLayoutCache(rtn, bankName, finalOut, finalOut.transactionSections?.length || 0);
-
   logStructured('info', '[VISION_SUCCESS] Layout learned', {
     ...logBase,
     confidenceScore: finalOut.layoutConfidence ?? null,
@@ -766,126 +555,23 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   return finalOut;
 }
 
-/**
- * GEMINI_VISION_ROW_FALLBACK: extract transaction rows directly when layout/checksum fails.
- * @param {Buffer} pdfBuffer
- * @param {{ rtn?: string, bankName?: string, statementId?: string, jobId?: string, defaultYear?: number, printedOpeningBalance?: number, printedClosingBalance?: number }} [options]
- * @returns {Promise<{ transactions: object[], openingBalance: number|null, closingBalance: number|null, metadata: object }>}
- */
-export async function extractTransactionRows(pdfBuffer, options = {}) {
-  const apiKey = resolveGeminiApiKey();
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is not set');
-  }
+// ---------------------------------------------------------------------------
+// Provider object
+// ---------------------------------------------------------------------------
 
-  const rtn = String(options.rtn || '').replace(/\D/g, '');
-  const bankName = String(options.bankName || '').trim();
-  const logBase = {
-    domain: 'gemini-vision-rows',
-    rtn: rtn || null,
-    bankName: bankName || null,
-    statementId: options.statementId || null,
-    jobId: options.jobId || null
-  };
+export const geminiVisionProvider = {
+  name: 'gemini',
 
-  await respectVisionRateLimit();
+  analyzeStatementLayout,
 
-  const subset = await extractPdfBufferMaxPages(pdfBuffer, rowExtractionMaxPages());
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: resolveGeminiRowExtractionModel(),
-    systemInstruction: ROW_EXTRACTION_SYSTEM,
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: ROW_EXTRACTION_JSON_SCHEMA
-    }
-  });
+  extractFirstPagesPdfBuffer,
 
-  const routingLine = rtn ? `Routing context (ABA): ${rtn}` : 'Routing context: unknown';
-  const yearHint =
-    options.defaultYear != null
-      ? `Statement year hint: ${options.defaultYear}`
-      : '';
-  const balanceHint =
-    options.printedOpeningBalance != null || options.printedClosingBalance != null
-      ? `Printed balances: opening=${options.printedOpeningBalance ?? 'unknown'} closing=${options.printedClosingBalance ?? 'unknown'}`
-      : '';
+  supportsSectionalAnalysis: false,
 
-  const parts = [
-    {
-      text: `${ROW_EXTRACTION_USER}\n${routingLine}\n${yearHint}\n${balanceHint}`.trim()
-    },
-    {
-      inlineData: {
-        mimeType: 'application/pdf',
-        data: subset.toString('base64')
-      }
-    }
-  ];
+  maxContextPages: layoutMaxPages()
+};
 
-  logStructured('info', '[VISION_ROW_START] Direct transaction row extraction', logBase);
+export default geminiVisionProvider;
 
-  let text = '';
-  try {
-    text = await generateVisionContent(model, parts);
-  } catch (e) {
-    logStructured('warn', '[VISION_ROW_FAILURE] generateContent failed', {
-      ...logBase,
-      error: e.message
-    });
-    throw e;
-  }
-
-  let parsed = extractJsonObject(text);
-  if (!parsed) {
-    const snippet = String(text).slice(0, 4000);
-    const repairParts = [
-      {
-        text: `Previous output was not valid JSON:\n${snippet}\n\nReturn ONLY JSON with transactions[] (date, description, amount, type CREDIT|DEBIT) and optional openingBalance/closingBalance.`
-      },
-      {
-        inlineData: {
-          mimeType: 'application/pdf',
-          data: subset.toString('base64')
-        }
-      }
-    ];
-    text = await generateVisionContent(model, repairParts);
-    parsed = extractJsonObject(text);
-  }
-
-  if (!parsed) {
-    throw new Error('Gemini returned no parseable transaction row JSON');
-  }
-
-  const defaultYear = options.defaultYear ?? new Date().getFullYear();
-  const coerced = coerceVisionTransactionRows(parsed, defaultYear);
-  if (coerced.transactions.length === 0) {
-    throw new Error('Gemini row extraction returned zero transactions');
-  }
-
-  const openingBalance =
-    coerced.openingBalance ??
-    (options.printedOpeningBalance != null ? Number(options.printedOpeningBalance) : null);
-  const closingBalance =
-    coerced.closingBalance ??
-    (options.printedClosingBalance != null ? Number(options.printedClosingBalance) : null);
-
-  logStructured('info', '[VISION_ROW_SUCCESS] Rows extracted', {
-    ...logBase,
-    transactionCount: coerced.transactions.length,
-    openingBalance,
-    closingBalance
-  });
-
-  return {
-    transactions: coerced.transactions,
-    openingBalance,
-    closingBalance,
-    metadata: {
-      visionRowFallback: true,
-      rowModel: resolveGeminiRowExtractionModel(),
-      pageCap: rowExtractionMaxPages()
-    }
-  };
-}
+// Re-export helpers for convenience (used by aiVisionService.js router)
+export { MATH_PATTERNS, coerceLayoutMapping, extractJsonObject };

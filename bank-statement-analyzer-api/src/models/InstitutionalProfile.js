@@ -12,6 +12,7 @@ const PROFILE_STATUS = ['ACTIVE', 'INACTIVE', 'PENDING'];
 const templateSchema = new Schema(
   {
     version: { type: Number, required: true },
+    parentTemplateVersion: { type: Number, default: null },
     status: {
       type: String,
       enum: TEMPLATE_STATUS,
@@ -22,9 +23,29 @@ const templateSchema = new Schema(
     totalProcessed: { type: Number, default: 0, min: 0 },
     lastError: { type: String, trim: true },
     layoutConfidence: { type: Number, min: 0, max: 1, default: null },
+    fingerprint: { type: String, default: '', trim: true },
     mapping: { type: Schema.Types.Mixed, default: {} }
   },
   { _id: true }
+);
+
+const RELATIONSHIP_TYPES = [
+  'WHITE_LABEL_PROCESSOR',
+  'WHITE_LABEL_CLIENT',
+  'FORMAT_EVOLUTION',
+  'NAME_ALIAS'
+];
+
+const relationshipSchema = new Schema(
+  {
+    type: { type: String, enum: RELATIONSHIP_TYPES, required: true },
+    targetProfileId: { type: Schema.Types.ObjectId, ref: 'InstitutionalProfile', default: null },
+    targetRtn: { type: String, trim: true, default: '' },
+    confidence: { type: Number, min: 0, max: 1, default: 0 },
+    firstSeenAt: { type: Date, default: Date.now },
+    lastSeenAt: { type: Date, default: Date.now }
+  },
+  { _id: false }
 );
 
 const institutionalProfileSchema = new Schema(
@@ -65,6 +86,7 @@ const institutionalProfileSchema = new Schema(
     manuallyVerified: { type: Boolean, default: false, index: true },
     /** Statement / waterfall variants of the institution name for the same RTN (deduped in app code). */
     aliases: { type: [String], default: [] },
+    relationships: { type: [relationshipSchema], default: [] },
     templates: { type: [templateSchema], default: [] }
   },
   { timestamps: true }
@@ -75,4 +97,4 @@ const InstitutionalProfile =
   mongoose.model('InstitutionalProfile', institutionalProfileSchema);
 
 export default InstitutionalProfile;
-export { TEMPLATE_STATUS, PROFILE_STATUS };
+export { TEMPLATE_STATUS, PROFILE_STATUS, RELATIONSHIP_TYPES };

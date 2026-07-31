@@ -48,6 +48,8 @@ import { identifyTemplate } from '../services/templateLearningService.js';
 import { resolveGeminiApiKey } from '../services/geminiVisionService.js';
 import InstitutionalProfile from '../models/InstitutionalProfile.js';
 import { enqueueTemplateLearningJob } from '../services/templateLearningQueue.js';
+import { triageLayoutMismatch, createRelationship } from '../services/institutionTriageService.js';
+import { buildLayoutFingerprint } from '../services/extraction/layoutFingerprintService.js';
 import {
   validateReconciliation,
   processTemplateOutcome,
@@ -1887,6 +1889,24 @@ class StatementController {
       }
       
       if (!parseResult.success || !parseResult.transactions || parseResult.transactions.length === 0) {
+        // RAW_WORD fallback tier: unknown layout with captured word inventory.
+        // Never hard-fail when the sidecar preserved the raw ledger.
+        if (parseResult.fallback?.mode === 'raw_word') {
+          logger.warn('[UPLOAD] zero transactions — returning RAW_WORD fallback', {
+            rawWordRowCount: parseResult.fallback.rawWordRowCount,
+            rawLedgerOutcome: parseResult.metadata?.rawLedgerOutcome,
+          });
+          return res.status(200).json({
+            success: false,
+            fallback: parseResult.fallback,
+            rawWordRows: parseResult.rawWordRows || [],
+            bankName: parseResult.bankName || null,
+            bankNameConfidence: parseResult.bankNameConfidence || 'LOW',
+            message:
+              'Layout not recognized. Raw word ledger provided for manual review or AI reconstruction.',
+            metadata: parseResult.metadata,
+          });
+        }
         throw new Error('No transactions found in the PDF. Please ensure this is a valid bank statement.');
       }
 
@@ -1914,7 +1934,52 @@ class StatementController {
             const filePath = req.file?.path || null;
             const wantNewLearning = Boolean(resolveGeminiApiKey()) && !hasVerified && !hasLearning;
 
+            // ── Institution Triage: cross-profile fingerprint check ──
+            // If this RTN has no templates but its layout fingerprint matches
+            // an existing profile, link the profiles instead of queuing learning.
             if (wantNewLearning && filePath) {
+              try {
+                const incomingFp = buildLayoutFingerprint({
+                  headerAnchors: parseResult.metadata?.layoutAnchors || {},
+                  transactionSections: (parseResult.metadata?.transactionSections || [])
+                    .map(s => ({ label: s }))
+                });
+
+                const triageResult = await triageLayoutMismatch({
+                  incomingFingerprint: incomingFp,
+                  expectedProfileId: profileDoc._id,
+                  expectedProfileRtn: rtn,
+                  expectedProfileName: profileDoc.legalName,
+                  parsedBankName: parseResult.bankName || parseResult.accountInfo?.bankName,
+                  incomingSectionLabels: parseResult.metadata?.transactionSections || []
+                });
+
+                if (triageResult?.action === 'WRONG_INSTITUTION' && triageResult?.targetProfileId) {
+                  await createRelationship(profileDoc._id, {
+                    relatedProfileId: triageResult.targetProfileId,
+                    relationshipType: triageResult.relationshipType || 'WHITE_LABEL_PROCESSOR',
+                    reason: triageResult.reason
+                  });
+                  learningHandledAsync = true;
+                  logger.info({
+                    msg: `[TRIAGE] Linked RTN ${rtn} to existing profile ${triageResult.targetProfileName} — skipping learning`,
+                    service: 'bank-statement-analyzer',
+                    timestamp: new Date().toISOString(),
+                    rtn,
+                    targetProfileId: triageResult.targetProfileId,
+                    targetProfileName: triageResult.targetProfileName
+                  });
+                }
+              } catch (triageErr) {
+                logger.warn({
+                  msg: '[TRIAGE] Cross-profile check failed — proceeding with normal learning flow',
+                  service: 'bank-statement-analyzer',
+                  error: triageErr.message
+                });
+              }
+            }
+
+            if (wantNewLearning && filePath && !learningHandledAsync) {
               try {
                 const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
                 const stripParseForStorage = (pr) => {
@@ -1953,7 +2018,9 @@ class StatementController {
                     templateLearning: { status: 'queued', queuedAt: new Date() },
                     mimetype: req.file.mimetype,
                     size: req.file.size,
-                    originalName: req.file.originalname
+                    originalName: req.file.originalname,
+                    rescueOutcome:
+                      parseResult?.rescueOutcome ?? parseResult?.metadata?.rescueOutcome ?? null
                   }
                 });
 

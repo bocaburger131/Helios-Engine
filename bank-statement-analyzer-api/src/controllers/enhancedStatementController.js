@@ -85,6 +85,17 @@ class EnhancedStatementController {
       const transactions = parseResult.transactions || [];
       
       if (transactions.length === 0) {
+        // RAW_WORD fallback tier: unknown layout with captured word inventory.
+        if (parseResult.fallback?.mode === 'raw_word') {
+          return res.status(200).json({
+            success: false,
+            fallback: parseResult.fallback,
+            rawWordRows: parseResult.rawWordRows || [],
+            bankName: parseResult.bankName || null,
+            message:
+              'Layout not recognized. Raw word ledger provided for manual review or AI reconstruction.',
+          });
+        }
         throw new Error('No transactions found in the PDF. Please ensure this is a valid bank statement.');
       }
       

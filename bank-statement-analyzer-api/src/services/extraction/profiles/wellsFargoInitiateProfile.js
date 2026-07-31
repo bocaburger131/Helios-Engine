@@ -544,12 +544,11 @@ export function assignEndingDailyBalancesByDateBlock(parsedRows) {
 
   for (const dateBlock of blocks) {
     for (const r of dateBlock) {
-      r.endingDailyBalance = null;
-    }
-    const last = dateBlock[dateBlock.length - 1];
-    const bal = extractTrailingDailyBalance(last.rawLine);
-    if (bal != null) {
-      last.endingDailyBalance = bal;
+      // Keep balance on ALL transactions — needed for balance-sequence sign inference
+      const bal = extractTrailingDailyBalance(r.rawLine);
+      if (bal != null) {
+        r.endingDailyBalance = bal;
+      }
     }
   }
 
@@ -557,20 +556,8 @@ export function assignEndingDailyBalancesByDateBlock(parsedRows) {
 }
 
 function finalizeDailyBalances(transactions) {
-  const byDate = new Map();
-  for (const t of transactions) {
-    if (!byDate.has(t.postedDate)) byDate.set(t.postedDate, []);
-    byDate.get(t.postedDate).push(t);
-  }
-  for (const rows of byDate.values()) {
-    let lastWithBal = null;
-    for (const r of rows) {
-      if (r.endingDailyBalance != null) lastWithBal = r;
-    }
-    for (const r of rows) {
-      if (r !== lastWithBal) r.endingDailyBalance = null;
-    }
-  }
+  // Balance-sequence sign inference (P0) needs balance on ALL transactions.
+  // Returning as-is — no longer strips balances from non-last rows.
   return transactions;
 }
 

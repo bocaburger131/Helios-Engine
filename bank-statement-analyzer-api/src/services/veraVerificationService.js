@@ -252,6 +252,7 @@ export async function persistVeraQueueStatement(params) {
       mimetype: mimetype || 'application/pdf',
       size: size || 0,
       originalName: originalName || fileName,
+      rescueOutcome: parseResult?.rescueOutcome ?? parseResult?.metadata?.rescueOutcome ?? null,
       vera: {
         rtn: cleanedRtn,
         graduationTemplateVersion:

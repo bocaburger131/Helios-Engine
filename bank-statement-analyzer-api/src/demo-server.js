@@ -53,7 +53,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
+    const ext = path.extname(path.basename(file.originalname)).toLowerCase();
     if (['.pdf', '.png', '.jpg', '.jpeg'].includes(ext)) return cb(null, true);
     cb(new Error(`Only PDF, PNG, JPG files allowed`));
   },
@@ -621,6 +621,151 @@ app.post('/api/statements/:id/analyze', requireAuth, (req, res) => {
 
 app.post('/api/statements/:id/analyze-enhanced', requireAuth, (req, res) => {
   res.json({ success: true, message: 'Enhanced analysis complete', data: { id: req.params.id, status: 'completed' } });
+});
+
+// ── Analysis Report (full macro envelope)
+app.get('/api/statements/:id/analysis-report', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+
+  const now = new Date().toISOString();
+  res.json({
+    success: true,
+    data: {
+      id: req.params.id,
+      _id: req.params.id,
+      deal: stmt.deal || {
+        companyName: 'Demo Business LLC',
+        dba: 'Demo Business Solutions',
+        taxId: 'XX-XXXXXXX',
+        businessAddress: '123 Main Street, Suite 400, Wilmington, DE 19801',
+        requestedLoanAmount: 250000,
+        statedGAR: 720000,
+        dealId: 'APP-DEMO-001'
+      },
+      applicationData: stmt.applicationData || {
+        companyName: 'Demo Business LLC',
+        dbaName: 'Demo Business Solutions',
+        taxId: 'XX-XXXXXXX',
+        businessAddress: '123 Main Street, Suite 400, Wilmington, DE 19801',
+        requestedLoanAmount: 250000,
+        statedRevenue: 720000,
+        dealId: 'APP-DEMO-001',
+        industry: 'Wholesale Trade'
+      },
+      coverage: stmt.coverage || { startDate: '2025-01-01', endDate: '2025-03-31', fileCount: 4, accountCount: 2 },
+      metrics: stmt.metrics || { totalDeposits: 1250000, totalWithdrawals: 980000, netCashFlow: 270000, averageDailyBalance: 42500, nsfCount: 3, openingBalance: 38500, closingBalance: 52300 },
+      accountingSummary: stmt.accountingSummary || {
+        opex: { total: 180000, categories: [{ name: 'Payroll', amount: 95000 }, { name: 'Rent & Facilities', amount: 42000 }, { name: 'Operating Expenses', amount: 43000 }] }
+      },
+      juniorUnderwriter: stmt.juniorUnderwriter || { overallScore: 72, fiveCs: { capacity: { score: 74 }, capital: { score: 78 }, collateral: { score: 70 }, conditions: { score: 68 }, character: { score: 72 } } },
+      forensicIntelligence: stmt.forensicIntelligence || {
+        monthlyBreakdown: [{ month: '2025-01', deposits: 410000, withdrawals: 325000 }, { month: '2025-02', deposits: 395000, withdrawals: 340000 }, { month: '2025-03', deposits: 445000, withdrawals: 315000 }],
+        quarterlyBreakdown: [{ quarter: 'Q1 2025', label: 'Q1 2025', deposits: 1250000, withdrawals: 980000 }],
+        l3m: { totalDeposits: 1250000, totalWithdrawals: 980000, netCashFlow: 270000, avgMonthlyDeposits: 416667, depositGrowth: 8.5 },
+        dscr: { prospective: 1.85, ratio: 1.85 }
+      },
+      alerts: stmt.alerts || { items: [{ severity: 'high', title: '3 NSF Events Detected', message: 'Insufficient funds on Mar 5, Feb 12, Jan 28' }] },
+      accountGroups: stmt.accountGroups || [{ bankName: 'Chase Bank NA', accountNumber: 'XXXX1234', transactionCount: 47, veritasScore: 72 }],
+      vera: stmt.vera || {
+        decision: 'PROCEED', bankabilityScore: 7.2,
+        briefingMarkdown: '## Vera Executive Briefing\n\n**Applicant:** Demo Business LLC\n**Deal ID:** APP-DEMO-001\n**Requested Amount:** $250,000',
+        stipulations: [{ name: 'NSF Letter of Explanation', status: 'pending' }, { name: '3 Months Additional Statements', status: 'pending' }, { name: 'Business Verification', status: 'satisfied' }]
+      },
+      veritasScore: stmt.veritasScore || 72,
+      analysisTitle: stmt.analysisTitle || 'Demo Business LLC',
+      monthsAnalyzedLabel: stmt.monthsAnalyzedLabel || 'Q1 2025 (Jan–Mar)',
+      analyzedAt: stmt.createdAt || now,
+      updatedAt: now,
+      createdAt: stmt.createdAt || now,
+      applicationContext: stmt.applicationContext || { companyName: 'Demo Business LLC', dealId: 'APP-DEMO-001' },
+      veraDecision: stmt.veraDecision || 'PROCEED',
+      fileCount: stmt.fileCount || 4
+    }
+  });
+});
+
+// ── Vera Fix / Verify
+app.patch('/api/statements/:id/verify', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+  res.json({
+    success: true,
+    data: {
+      verified: true,
+      statementId: req.params.id,
+      fixes: req.body?.fixes || [],
+      message: 'Statement verified and fixes applied'
+    }
+  });
+});
+
+// ── Export JSON
+app.get('/api/statements/:id/export-json', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+  res.setHeader('Content-Disposition', `attachment; filename="${stmt.fileName || 'statement'}.json"`);
+  res.json({ success: true, data: stmt });
+});
+
+// ── Template Learning
+app.get('/api/statements/:id/template-learning', requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      templateId: 'chase_business_complete',
+      confidence: 0.94,
+      extractedFields: ['date', 'description', 'amount', 'balance', 'check_number'],
+      learnedPatterns: ['ACH Deposit - {PAYEE}', 'Check #{NUMBER}', 'Wire - {SENDER}']
+    }
+  });
+});
+
+// ── Retry Analysis
+app.post('/api/statements/:id/retry-analysis', requireAuth, (req, res) => {
+  res.json({ success: true, message: 'Analysis retry queued', data: { id: req.params.id, status: 'retrying' } });
+});
+
+// ── Categorize Transactions
+app.post('/api/statements/:id/categorize', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+  res.json({
+    success: true,
+    data: {
+      categories: [
+        { name: 'Payroll', amount: 95000, count: 6 },
+        { name: 'Rent & Facilities', amount: 42000, count: 3 },
+        { name: 'Operating Expenses', amount: 43000, count: 12 },
+        { name: 'Revenue', amount: 1250000, count: 24 }
+      ]
+    }
+  });
+});
+
+// ── Update Statement
+app.put('/api/statements/:id', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+  Object.assign(stmt, req.body, { updatedAt: new Date().toISOString() });
+  res.json({ success: true, data: { statement: stmt } });
+});
+
+// ── Delete All Statements (must be registered before /:id)
+app.delete('/api/statements/all', requireAuth, (req, res) => {
+  const ids = Object.keys(statements);
+  ids.forEach(id => delete statements[id]);
+  statementCounter = 0;
+  res.json({ success: true, message: `${ids.length} statements deleted` });
+});
+
+// ── Delete Statement
+app.delete('/api/statements/:id', requireAuth, (req, res) => {
+  const stmt = statements[req.params.id];
+  if (!stmt) return res.status(404).json({ success: false, error: 'Statement not found' });
+  delete statements[req.params.id];
+  statementCounter--;
+  res.json({ success: true, message: `Statement ${req.params.id} deleted` });
 });
 
 // ============================================================

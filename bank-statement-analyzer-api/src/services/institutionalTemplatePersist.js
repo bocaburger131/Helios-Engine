@@ -3,12 +3,12 @@
  */
 import InstitutionalProfile from '../models/InstitutionalProfile.js';
 import logger from '../utils/logger.js';
-import { withLayoutFingerprint } from './extraction/layoutFingerprintService.js';
+import { withLayoutFingerprint, buildLayoutFingerprint } from './extraction/layoutFingerprintService.js';
 
 /**
  * @param {import('mongoose').Types.ObjectId | string} profileId
  * @param {object} mapping — layout mapping (headerAnchors, etc.)
- * @param {{ layoutConfidence?: number | null }} [opts]
+ * @param {{ layoutConfidence?: number | null, parentTemplateVersion?: number | null }} [opts]
  * @returns {Promise<{ version: number, status: 'LEARNING' } | null>}
  */
 export async function persistLearningTemplate(profileId, mapping, opts = {}) {
@@ -20,7 +20,8 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
     return null;
   }
 
-  const { layoutConfidence: layoutConfOmit, ...mappingForTemplate } = withLayoutFingerprint(mapping);
+  const { layoutConfidence: layoutConfOmit, layoutFingerprint, ...mappingForTemplate } = withLayoutFingerprint(mapping);
+  const fingerprint = layoutFingerprint || buildLayoutFingerprint(mapping);
   const maxVersion = Math.max(
     0,
     ...(profile.templates || []).map((t) => (Number.isFinite(t.version) ? t.version : 0))
@@ -37,6 +38,8 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
           consecutiveSuccesses: 0,
           totalProcessed: 0,
           layoutConfidence: opts.layoutConfidence ?? mapping.layoutConfidence ?? null,
+          parentTemplateVersion: opts.parentTemplateVersion ?? null,
+          fingerprint,
           mapping: mappingForTemplate
         }
       }
