@@ -286,6 +286,33 @@ def _layout_from_money_columns(
     return breaks, col_ranges, header
 
 
+def _fold_check_number(description: str, roles: Any, cells: list[str]) -> str:
+    """Append the check number to a bare 'Check' description.
+
+    Wells lays checks as "<date> <check_no> Check <amount> <balance>". The
+    parser's description column yields only "Check", so two genuinely distinct
+    checks that share (date, amount) — e.g. #2404 & #2405 both $1,934.00 on
+    12/20, or a 2nd same-amount check on the same day — collapse into one at the
+    final (date, description, amount, type) dedup. Folding the number in keeps
+    each check unique and traceable.
+    """
+    if not description or not re.match(r"^check\b", description.strip(), re.I):
+        return description
+    cn_idx = roles.get("check_number") if isinstance(roles, dict) else None
+    if cn_idx is not None and cn_idx < len(cells):
+        cn = str(cells[cn_idx]).strip()
+        if cn.isdigit():
+            return f"Check {cn}"
+    # Fallback: Wells activity pages label the check-number column just "Number"
+    # (not aliased to check_number), so roles may miss it. Scan for a standalone
+    # digit run in the cells — the check number — excluding money/date cells.
+    for c in cells:
+        cs = str(c).strip()
+        if cs.isdigit() and 2 <= len(cs) <= 8 and not DATE_RE.match(cs) and not MONEY_RE.match(cs):
+            return f"Check {cs}"
+    return description
+
+
 def _parse_checks_row(row: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
     """Split a 2-column check-table row into (date, check_no, amount) sub-rows.
 
@@ -628,6 +655,30 @@ _DEBIT_CHECK_DESC: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# Wells phrases that read like credits ("Deposited...") but are money LEAVING
+# the account: a cashed check against the balance, or a previously-credited
+# deposit item that bounced and is being clawed back. When the parser has
+# already placed the amount in the withdrawals column (DEBIT), these must NOT
+# be flipped to CREDIT by the generic "deposit" keyword.
+_STRONG_DEBIT_DESC: re.Pattern[str] = re.compile(
+    r"deposited\s+or\s+cashed\s+check"
+    r"|deposited\s+item\s+ret",
+    re.IGNORECASE,
+)
+
+# Strong, unambiguous debit phrases: these OVERRIDE even a confident deposit
+# column (a genuine mis-columned withdrawal). Unlike the generic debit keyword
+# set, this deliberately excludes ambiguous words like "payment"/"overdraft"
+# that legitimately appear in incoming (credit) descriptions.
+_STRONG_DEBIT_ONLY: re.Pattern[str] = re.compile(
+    r"withdrawal\s+made\s+in\s+a\s+branch"
+    r"|atm\s+withdrawal"
+    r"|purchase\s+authorized"
+    r"|business\s+to\s+business\s+ach\s+debit"
+    r"|\bach\s+debit\b",
+    re.IGNORECASE,
+)
+
 # Description keywords that confirm a "CREDIT" classification even with weak signals.
 _CREDIT_DESC_KEYWORDS: re.Pattern[str] = re.compile(
     r"\b(?:"
@@ -639,21 +690,35 @@ _CREDIT_DESC_KEYWORDS: re.Pattern[str] = re.compile(
 )
 
 
-def _infer_txn_type_desc(description: str, current_type: str) -> str:
+def _infer_txn_type_desc(description: str, current_type: str, column_confident: bool = False) -> str:
     """Override transaction type based on description keywords.
     Institution-agnostic — works for ALL banks, not just Wells Fargo.
+
+    When column_confident is True, the amount came from an explicit
+    deposit/withdrawal column; only STRONG, unambiguous debit words may flip a
+    credit (protecting column-placed credits whose descriptions merely contain
+    ambiguous words like "payment"/"overdraft").
     """
     if not description:
         return current_type
     if current_type == "CREDIT" and _DEBIT_DESC_KEYWORDS.search(description):
         # Avoid overriding known credits (e.g., "ACH Credit" should not become DEBIT)
         if not _CREDIT_DESC_KEYWORDS.search(description):
+            # Column is authoritative: only flip on a STRONG debit word.
+            if column_confident and not _STRONG_DEBIT_ONLY.search(description):
+                return current_type
             return "DEBIT"
     # Narrow check-number pattern (only when not in a deposit context)
     if current_type == "CREDIT" and _DEBIT_CHECK_DESC.search(description):
         if not re.search(r"\bdeposit", description, re.I):
             return "DEBIT"
     if current_type == "DEBIT" and not _DEBIT_DESC_KEYWORDS.search(description):
+        # Never flip a correctly-placed withdrawal back to CREDIT when the
+        # description is a Wells strong-debit phrase ("Deposited OR Cashed
+        # Check", "Deposited Item Retn Unpaid") — the leading "Deposited"
+        # otherwise trips the generic credit keyword.
+        if _STRONG_DEBIT_DESC.search(description):
+            return current_type
         if _CREDIT_DESC_KEYWORDS.search(description):
             return "CREDIT"
     return current_type
@@ -672,6 +737,7 @@ def emit_transaction_row(
     y: float = 0.0,
     raw_cells: list[str] | None = None,
     source_hash: str = "",
+    column_confident: bool = False,
 ) -> None:
     """Emit a single transaction row with full provenance.
 
@@ -742,7 +808,14 @@ def emit_transaction_row(
         )
         return
 
-    txn_type = _infer_txn_type_desc(desc, txn_type)
+    # When the amount came from an explicit deposit/withdrawal column
+    # (column_confident), that positional signal is authoritative for AMBIGUOUS
+    # keywords: don't let "payment"/"overdraft"/generic "fee" flip a
+    # column-placed credit (e.g. "Overdraft Protection From ...", "Giant Oil,
+    # Inc. Payment ... Armani Food Mart" — both incoming, deposit column).
+    # Strong, unambiguous debit words (e.g. "Withdrawal Made In A Branch/Store")
+    # still correct mis-columned rows.
+    txn_type = _infer_txn_type_desc(desc, txn_type, column_confident=column_confident)
 
     signed_amount = round(-amount if txn_type == "DEBIT" else amount, 2)
     # Source hash: stable fingerprint from transaction identity
@@ -893,6 +966,7 @@ def rows_from_table_chase(
 
         desc_idx = roles["description"]
         description = cells[desc_idx] if desc_idx is not None and desc_idx < len(cells) else ""
+        description = _fold_check_number(description, roles, cells)
         if date_tail:
             description = f"{date_tail} {description}".strip()
         if not description:
@@ -931,9 +1005,9 @@ def rows_from_table_chase(
             continue
 
         if dep_amt is not None:
-            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, row_section or "deposits", balance=row_balance, page=page_no)
+            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, row_section or "deposits", balance=row_balance, page=page_no, column_confident=True)
         if wd_amt is not None:
-            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, row_section or section_id, balance=row_balance, page=page_no)
+            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, row_section or section_id, balance=row_balance, page=page_no, column_confident=True)
 
     return txns
 
@@ -998,6 +1072,7 @@ def rows_from_table(
 
         desc_idx = roles["description"]
         description = cells[desc_idx] if desc_idx is not None and desc_idx < len(cells) else ""
+        description = _fold_check_number(description, roles, cells)
         if date_tail:
             description = f"{date_tail} {description}".strip()
         if not description:
@@ -1088,11 +1163,11 @@ def rows_from_table(
         if dep_amt is not None:
             if _TRACE_ROWS:
                 print(f"TRACE_ROW date={date} dep_amt={dep_amt} wd_amt=None bal={row_balance} section={row_sec} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
-            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, section=row_sec, balance=row_balance, page=page_no)
+            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, section=row_sec, balance=row_balance, page=page_no, column_confident=True)
         if wd_amt is not None:
             if _TRACE_ROWS:
                 print(f"TRACE_ROW date={date} dep_amt=None wd_amt={wd_amt} bal={row_balance} section={row_sec} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
-            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, section=row_sec, balance=row_balance, page=page_no)
+            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, section=row_sec, balance=row_balance, page=page_no, column_confident=True)
 
     # Echo guard for CHECKS-section rows: a check whose (date, amount) already
     # existed in the document ledger BEFORE this page is a duplicate listing
@@ -1104,6 +1179,12 @@ def rows_from_table(
     if checks_ledger is not None:
         kept: list[dict[str, Any]] = []
         for t in txns:
+            # Dedup summary-section ("checks") rows against the document ledger
+            # by (date, amount). Paired same-amount checks are preserved earlier
+            # in the pipeline by folding the check NUMBER into the activity-row
+            # description (see _fold_check_number) so the main content dedup
+            # keeps them distinct; this echo guard only removes the Wells
+            # "Summary of checks" echoes that repeat activity-history checks.
             key = (t.get("date"), int(round(abs(t.get("amount", 0)) * 100)))
             if t.get("section") == "checks" and key in checks_ledger:
                 continue
