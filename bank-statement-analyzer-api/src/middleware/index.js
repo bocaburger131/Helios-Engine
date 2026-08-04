@@ -5,16 +5,9 @@
  * to eliminate duplication and provide a clean interface.
  */
 
-// Authentication & Authorization
-export { 
-  authenticateUser, 
-  authenticateToken, 
-  authenticateAdmin,
-  optionalAuth, 
-  generateToken,
-  requireRole,
-  authenticate
-} from './auth.middleware.minimal.js';
+// Authentication & Authorization — LIVE auth lives in ./auth.js and ./apiKeyAuth.js.
+// (The auth.middleware.minimal.js re-exports were removed: they were unused and
+// accepted any token.)
 
 // Request Processing
 import morganMiddleware from './morganMiddleware.js';

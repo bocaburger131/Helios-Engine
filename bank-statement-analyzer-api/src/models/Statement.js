@@ -441,7 +441,6 @@ const statementSchema = new mongoose.Schema({
 });
 
 statementSchema.index({ user: 1, createdAt: -1 });
-statementSchema.index({ userId: 1, createdAt: -1 });
 statementSchema.index({ tenantId: 1, createdAt: -1 });
 statementSchema.index({ status: 1, createdAt: -1 });
 statementSchema.index({ status: 1, 'veraVerification.triggeredAt': -1 });
@@ -450,6 +449,8 @@ statementSchema.index({ accountNumber: 1, statementDate: -1 });
 statementSchema.index({ bankName: 1, accountNumber: 1 });
 statementSchema.index({ 'verification.isVerified': 1, 'verification.sosScore': -1 });
 statementSchema.index({ 'alerts.severity': 1, 'alerts.isResolved': 1 });
+// RTN lives at metadata.vera.rtn — indexed for statement-level institution lookups.
+statementSchema.index({ 'metadata.vera.rtn': 1 });
 
 // Virtual fields
 statementSchema.virtual('alertsSummary').get(function() {

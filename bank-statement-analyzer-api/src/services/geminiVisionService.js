@@ -48,10 +48,12 @@ const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backt
     { "label": "Electronic Deposits", "start": "ELECTRONIC DEPOSITS", "end": "Total deposits" },
     { "label": "Electronic Withdrawals", "start": "ELECTRONIC WITHDRAWALS", "end": "Total withdrawals" },
     { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" }
-  ]
+  ],
+  "explicitVerticalLines": [72, 150, 310, 470, 540]
 }
 
 Rules:
+- explicitVerticalLines is OPTIONAL. When present it must be an array of x-coordinates (PDF points, left-to-right) marking each vertical column boundary in the transaction table, e.g. the right edge of the date column, the right edge of the description column, and the right edge of the amount column(s). Omit it (or return []) when the column boundaries are not clearly visible.
 - transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, card, ACH, etc.).
 - headerAnchors.start/end should span the full activity region; per-table sections use narrower start/end pairs.
 - Each start/end string must be copied exactly from the PDF (case and spacing matter).
@@ -106,6 +108,10 @@ const LAYOUT_JSON_SCHEMA = {
         },
         required: ['start']
       }
+    },
+    explicitVerticalLines: {
+      type: 'array',
+      items: { type: 'number' }
     }
   },
   required: ['headerAnchors', 'columnMapping', 'mathPattern', 'confidenceScore']
@@ -422,6 +428,17 @@ export function extractJsonObject(raw) {
 }
 
 /**
+ * Normalize optional Gemini explicitVerticalLines (x-coordinates of column breaks).
+ * @param {unknown} raw
+ * @returns {number[] | undefined}
+ */
+function normalizeExplicitVerticalLines(raw) {
+  if (!Array.isArray(raw)) return undefined;
+  const nums = raw.map(Number).filter(Number.isFinite);
+  return nums.length > 0 ? nums : undefined;
+}
+
+/**
  * Map Gemini vision JSON (start/end, *Idx) into the shape expected by coerceLayoutMapping.
  * @param {object} parsed
  * @returns {object|null}
@@ -504,7 +521,10 @@ export function prenormalizeVisionPayload(parsed) {
     confidence: conf,
     transactionSections,
     _layoutName: parsed.layoutName,
-    _vitals: parsed.vitals
+    _vitals: parsed.vitals,
+    ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
+      ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
+      : {})
   };
 }
 
@@ -571,6 +591,9 @@ export function coerceLayoutMapping(parsed) {
     mathPattern,
     balanceReconciliationHint,
     ...(transactionSections?.length ? { transactionSections } : {}),
+    ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
+      ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
+      : {}),
     ...(layoutConfidence !== undefined ? { layoutConfidence } : {})
   };
 }

@@ -241,7 +241,10 @@ class RedisStreamService {
             messageId,
             error: error.message,
           });
-          // Optionally, move to a dead-letter queue
+          // Move the failed job to the dead-letter stream and ack it so it
+          // stops redelivering forever (previously the comment said "optionally"
+          // but moveToErrorStream was never invoked).
+          await this.moveToErrorStream(messageId, job, error);
         }
       } catch (error) {
         if (error.message && error.message.includes('unknown command')) {

@@ -77,6 +77,17 @@ const transactionSchema = new mongoose.Schema({
     type: Number,
     default: null
   },
+  /** Lean-model field (former transactionModel.js): NSF flag. */
+  isNSF: {
+    type: Boolean,
+    default: false
+  },
+  /** Lean-model field (former transactionModel.js): linked merchant document. */
+  merchantId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Merchant',
+    default: null
+  },
   reference: {
     type: String,
     trim: true,
@@ -171,6 +182,10 @@ transactionSchema.index({ category: 1, amount: -1 });
 transactionSchema.index({ 'merchant.name': 1, date: -1 });
 transactionSchema.index({ 'flags.isRecurring': 1, 'flags.isSuspicious': 1 });
 transactionSchema.index({ tags: 1 });
+transactionSchema.index({ merchantId: 1 });
+transactionSchema.index({ isNSF: 1 });
+// Prefix/exact description lookups (search endpoint).
+transactionSchema.index({ description: 1 });
 
 // Virtual fields
 transactionSchema.virtual('displayAmount').get(function() {

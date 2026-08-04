@@ -42,6 +42,18 @@ function bankSlug(bankName) {
 }
 
 /**
+ * Normalize template explicitVerticalLines (x-coordinates of column breaks).
+ * @param {unknown} raw
+ * @returns {number[] | null} ascending unique x-coordinates, or null when empty/invalid
+ */
+export function normalizeExplicitVerticalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/**
  * @param {string} stderr
  * @returns {Array<{ page: number, rawRows: number, strategy: string, tables: number }>}
  */
@@ -152,8 +164,17 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
     if (options.__columnTolerance != null) {
       scriptArgs.push('--column-tolerance', String(options.__columnTolerance));
     }
+    // Template-learned column breaks → pdfplumber explicit vertical strategy.
+    const explicitLines = normalizeExplicitVerticalLines(options.explicitVerticalLines);
+    if (explicitLines) {
+      scriptArgs.push('--explicit-vertical-lines', JSON.stringify(explicitLines));
+    }
 
-    logger.info('[PDF_PLUMBER] start', { fileName, bank: slug });
+    logger.info('[PDF_PLUMBER] start', {
+      fileName,
+      bank: slug,
+      explicitVerticalLines: explicitLines ?? null
+    });
 
   try {
     const { stdout, stderr } = await runPythonScriptOnPdfBuffer(pdfBuffer, {

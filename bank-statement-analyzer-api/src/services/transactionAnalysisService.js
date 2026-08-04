@@ -133,7 +133,7 @@ class TransactionAnalysisService {
             if (error.message === 'Invalid date range') {
                 throw error;
             }
-            global.__mocks__.logger.error('Analysis failed:', error);
+            logger.error('Analysis failed:', error);
             throw new Error('Failed to analyze transactions');
         }
     }

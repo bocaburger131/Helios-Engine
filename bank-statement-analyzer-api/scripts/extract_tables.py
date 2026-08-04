@@ -75,6 +75,9 @@ TABLE_SETTINGS_LINES = {
     "snap_tolerance": 3,
 }
 
+# Template-learned column breaks (x-coordinates) → pdfplumber explicit vertical strategy.
+_EXPLICIT_VERTICAL_LINES: list[float] | None = None
+
 Y_TOLERANCE = 4
 HEADER_WORDS_RE = re.compile(r"date|deposit|credit|withdraw|debit|description|balance", re.I)
 _COL_BUCKET_PT = 4.0  # histogram resolution in PDF points
@@ -102,11 +105,45 @@ CANONICAL_COLS: list[str] = [
 MAX_LOGICAL_COLS = 8
 
 # Section heading detection — running page state
+# Bare-heading variants use re.MULTILINE so a heading can be found anywhere in a
+# multi-line page text (e.g. "WITHDRAWALS (CONTINUED)" mid-page). Row-level
+# detection passes a single line, where ^ anchors the line start naturally.
 SECTION_HEADING_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("deposits", re.compile(r"deposits?\s*(?:/|&|and)\s*(?:credits?|additions?)|electronic\s+deposits", re.I)),
-    ("withdrawals", re.compile(r"withdrawals?\s*(?:/|&|and)\s*(?:debits?|payments?)|electronic\s+withdrawals", re.I)),
-    ("checks", re.compile(r"checks?\s*(?:paid|written|cleared)", re.I)),
-    ("fees", re.compile(r"^fees?$|service\s+(?:charges?|fees?)|monthly\s+fee", re.I)),
+    (
+        "deposits",
+        re.compile(
+            r"deposits?\s*(?:/|&|and)\s*(?:credits?|additions?)|electronic\s+deposits|"
+            r"\bdeposits?(?:\s*\(?continued?\)?)?\b",
+            re.I | re.M,
+        ),
+    ),
+    (
+        "withdrawals",
+        re.compile(
+            r"withdrawals?\s*(?:/|&|and)\s*(?:debits?|payments?)|electronic\s+withdrawals|"
+            r"\bwithdrawals?(?:\s*\(?continued?\)?)?\b",
+            re.I | re.M,
+        ),
+    ),
+    (
+        "checks",
+        re.compile(
+            r"checks?\s*(?:paid|written|cleared)|summary\s+of\s+checks|"
+            r"\bchecks?(?:\s*\(?continued?\)?)?\b",
+            re.I | re.M,
+        ),
+    ),
+    (
+        "balance_summary",
+        re.compile(r"daily\s+balance\s+summary|balance\s+summary|ledger\s+balance", re.I),
+    ),
+    (
+        "fees",
+        re.compile(
+            r"^fees?$|service\s+(?:charges?|fees?)|monthly\s+fee|(?:^|\n)\s*fees?\b",
+            re.I | re.M,
+        ),
+    ),
     ("returned_items", re.compile(r"returned\s+(?:items?|checks?|deposits?)|nsf\s+items?", re.I)),
     ("adjustments", re.compile(r"adjustments?|miscellaneous\s+(?:debits?|credits?)", re.I)),
     ("primary_activity", re.compile(r"(?:account|transaction)\s+(?:activity|history|detail)", re.I)),
@@ -129,6 +166,151 @@ def detect_section_heading(line: str, current: str) -> str:
         if pattern.search(stripped):
             return section_id
     return current
+
+
+def _matches_any_section_pattern(line: str) -> bool:
+    """True when a line matches any non-summary section heading pattern.
+
+    Used to identify heading rows (short lines like "WITHDRAWALS (CONTINUED)")
+    so they update the running section instead of being parsed as transactions.
+    """
+    if not line or not line.strip():
+        return False
+    for section_id, pattern in SECTION_HEADING_PATTERNS:
+        if pattern.search(line.strip()):
+            return True
+    return False
+
+
+def detect_money_column_boundaries(page: Any) -> list[tuple[float, float]]:
+    """Find real money columns by right-edge clustering of currency tokens.
+
+    Bank statement money columns are right-aligned: every amount in a column
+    shares the same right edge (x1). Clustering strict money tokens by x1
+    separates deposits/withdrawals/balance columns even when the header row
+    is missing, split, or worded differently than the known aliases.
+
+    Returns [(xmin, xmax), ...] per money column, sorted left-to-right.
+    Only columns within 90pt of the rightmost column are kept — this drops
+    far-left SUMMARY tables, check-echo tables, and daily-balance tables
+    that are not the transaction money columns. Falls back to [] when the
+    page has no reliable money columns (caller then uses density detection).
+    """
+    try:
+        words = page.extract_words() or []
+    except Exception:
+        return []
+    if len(words) < 6:
+        return []
+    money: list[tuple[float, float]] = []
+    for w in words:
+        t = str(w.get("text", "")).strip()
+        if MONEY_RE.match(t):
+            try:
+                money.append((float(w["x0"]), float(w["x1"])))
+            except (KeyError, ValueError):
+                continue
+    if len(money) < 3:
+        return []
+    money.sort(key=lambda m: m[1])
+    clusters: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+    prev_x1: float | None = None
+    for m in money:
+        if prev_x1 is not None and m[1] - prev_x1 > 6.0:
+            if len(cur) >= 3:
+                clusters.append(cur)
+            cur = []
+        cur.append(m)
+        prev_x1 = m[1]
+    if len(cur) >= 3:
+        clusters.append(cur)
+    if not clusters:
+        return []
+    rightmost = max(m[1] for cl in clusters for m in cl)
+    ranges: list[tuple[float, float]] = []
+    for cl in clusters:
+        x1_max = max(m[1] for m in cl)
+        if rightmost - x1_max <= 90.0:
+            ranges.append((min(m[0] for m in cl), x1_max))
+    ranges.sort(key=lambda r: r[0])
+    return ranges
+
+
+def _detect_date_column_right(page: Any) -> float | None:
+    """Right edge of the date column (max x1 over MM/DD tokens) + small pad."""
+    try:
+        words = page.extract_words() or []
+    except Exception:
+        return None
+    xs = [
+        float(w["x1"])
+        for w in words
+        if DATE_RE.match(str(w.get("text", "")).strip())
+    ]
+    return (max(xs) + 2.0) if xs else None
+
+
+_MONEY_COL_HEADERS: dict[int, list[str]] = {
+    1: ["Date", "Description", "Amount"],
+    2: ["Date", "Description", "Deposits/Credits", "Withdrawals/Debits"],
+    3: ["Date", "Description", "Deposits/Credits", "Withdrawals/Debits", "Ending daily balance"],
+}
+
+
+def _layout_from_money_columns(
+    money_ranges: list[tuple[float, float]],
+    page: Any,
+    page_width: float,
+) -> tuple[list[float], list[tuple[float, float]], list[str]]:
+    """Build (breaks, col_ranges, header) from money-anchored column ranges.
+
+    The first money column is the leftmost amount column; its left boundary is
+    the description/amount split. Boundaries between money columns sit at the
+    midpoint of the gap between adjacent columns' extents.
+    """
+    n = len(money_ranges)
+    date_right = _detect_date_column_right(page) or (page_width * 0.15)
+    first_money_left = money_ranges[0][0] - 4.0
+    boundaries = [date_right, first_money_left]
+    for i in range(1, n):
+        boundaries.append((money_ranges[i - 1][1] + money_ranges[i][0]) / 2.0)
+    breaks = boundaries[:n + 1]
+    col_ranges: list[tuple[float, float]] = []
+    prev = 0.0
+    for b in breaks:
+        col_ranges.append((prev, b))
+        prev = b
+    col_ranges.append((prev, page_width))
+    header = _MONEY_COL_HEADERS.get(n, _MONEY_COL_HEADERS[1])
+    return breaks, col_ranges, header
+
+
+def _parse_checks_row(row: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Split a 2-column check-table row into (date, check_no, amount) sub-rows.
+
+    Check tables on Regions-style statements lay TWO check entries per row
+    (\"04/01 5247 225.49 04/01 10505 124.43\"). Words are consumed in visual
+    order: date -> check number (digit run) -> amount, repeated. Tokens that
+    are neither (e.g. the '*' break-in-sequence marker) are skipped.
+    """
+    words = sorted(row, key=lambda w: (float(w.get("top", 0)), float(w.get("x0", 0))))
+    texts = [_word_text(w) for w in words]
+    out: list[tuple[str, str, str]] = []
+    d: str | None = None
+    c: str | None = None
+    a: str | None = None
+    for t in texts:
+        if d is None and DATE_RE.match(t):
+            d = t
+        elif d is not None and c is None and t.isdigit():
+            c = t
+        elif d is not None and MONEY_RE.match(t):
+            a = t
+        if d is not None and a is not None:
+            out.append((d, c or "", a))
+            d = c = a = None
+    return out
 
 
 def classify_header_cell(cell_text: str) -> str | None:
@@ -756,7 +938,14 @@ def rows_from_table_chase(
     return txns
 
 
-def rows_from_table(table: list[list[str | None]], *, section_id: str = "unknown", page_no: int = 0) -> list[dict[str, Any]]:
+def rows_from_table(
+    table: list[list[str | None]],
+    *,
+    section_id: str = "unknown",
+    page_no: int = 0,
+    row_sections: list[str] | None = None,
+    checks_ledger: set[tuple[str, int]] | None = None,
+) -> list[dict[str, Any]]:
     if not table or len(table) < 2:
         return []
     header = [str(c or "").strip() for c in table[0]]
@@ -764,7 +953,8 @@ def rows_from_table(table: list[list[str | None]], *, section_id: str = "unknown
     txns: list[dict[str, Any]] = []
     last_date = ""
 
-    for raw_row in table[1:]:
+    for row_idx, raw_row in enumerate(table[1:]):
+        row_sec = row_sections[row_idx] if row_sections is not None and row_idx < len(row_sections) else section_id
         cells = [str(c or "").strip() for c in raw_row]
         if not any(cells):
             continue
@@ -841,7 +1031,10 @@ def rows_from_table(table: list[list[str | None]], *, section_id: str = "unknown
         if dep_amt is None and wd_amt is None and roles["amount"] is not None:
             amt = parse_money(cells[roles["amount"]])
             if amt is not None:
-                emit_transaction_row(date, description, amt, "DEBIT", txns, balance=row_balance, page=page_no)
+                # Single amount column: the section decides the sign
+                # (deposits -> CREDIT, everything else -> DEBIT).
+                txn_type = "CREDIT" if row_sec in _CREDIT_SECTIONS else "DEBIT"
+                emit_transaction_row(date, description, amt, txn_type, txns, section=row_sec, balance=row_balance, page=page_no)
             continue
 
         if dep_amt is None and wd_amt is None:
@@ -864,16 +1057,16 @@ def rows_from_table(table: list[list[str | None]], *, section_id: str = "unknown
                 _i, amt = money_cells[0]
                 has_sep = roles["deposits"] is not None and roles["withdrawals"] is not None
                 if _TRACE_ROWS:
-                    print(f"TRACE_ROW date={date} money_cells=[{money_cells}] has_sep={has_sep} section={section_id} cells={cells}", file=sys.stderr)
+                    print(f"TRACE_ROW date={date} money_cells=[{money_cells}] has_sep={has_sep} section={row_sec} cells={cells}", file=sys.stderr)
                 txn_type = resolve_sign(
-                    section_id=section_id,
+                    section_id=row_sec,
                     roles=roles,
                     col_index=_i,
                     cell_text=cells[_i] if _i < len(cells) else "",
                     has_separate_deposit_withdrawal=has_sep,
                 )
                 emit_transaction_row(date, description or row_line, amt, txn_type, txns,
-                                     section=section_id, balance=row_balance,
+                                     section=row_sec, balance=row_balance,
                                      raw_cells=cells, page=page_no)
             elif len(money_cells) >= 2:
                 money_cells.sort(key=lambda x: x[0])
@@ -883,24 +1076,41 @@ def rows_from_table(table: list[list[str | None]], *, section_id: str = "unknown
                     # Guard: first money cell could be a running balance if balance_idx is the same
                     if balance_idx is None or money_cells[0][0] != balance_idx:
                         emit_transaction_row(date, description, dep_fb, "CREDIT", txns,
-                                             section=section_id, balance=row_balance,
+                                             section=row_sec, balance=row_balance,
                                              raw_cells=cells, page=page_no)
                 if wd_fb is not None and wd_fb >= 0.01:
                     if balance_idx is None or money_cells[1][0] != balance_idx:
                         emit_transaction_row(date, description, wd_fb, "DEBIT", txns,
-                                             section=section_id, balance=row_balance,
+                                             section=row_sec, balance=row_balance,
                                              raw_cells=cells, page=page_no)
             continue
 
         if dep_amt is not None:
             if _TRACE_ROWS:
-                print(f"TRACE_ROW date={date} dep_amt={dep_amt} wd_amt=None bal={row_balance} section={section_id} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
-            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, section=section_id, balance=row_balance, page=page_no)
+                print(f"TRACE_ROW date={date} dep_amt={dep_amt} wd_amt=None bal={row_balance} section={row_sec} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
+            emit_transaction_row(date, description, dep_amt, "CREDIT", txns, section=row_sec, balance=row_balance, page=page_no)
         if wd_amt is not None:
             if _TRACE_ROWS:
-                print(f"TRACE_ROW date={date} dep_amt=None wd_amt={wd_amt} bal={row_balance} section={section_id} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
-            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, section=section_id, balance=row_balance, page=page_no)
+                print(f"TRACE_ROW date={date} dep_amt=None wd_amt={wd_amt} bal={row_balance} section={row_sec} col_dep={roles['deposits']} col_wd={roles['withdrawals']} cells={cells}", file=sys.stderr)
+            emit_transaction_row(date, description, wd_amt, "DEBIT", txns, section=row_sec, balance=row_balance, page=page_no)
 
+    # Echo guard for CHECKS-section rows: a check whose (date, amount) already
+    # existed in the document ledger BEFORE this page is a duplicate listing
+    # (Wells "Summary of checks written" echoes of checks already in the
+    # activity history pages 2-9) — never double-count it. Same-page collisions
+    # (e.g. an EB-to-Checking transfer that happens to share date+amount with a
+    # physical check) are NOT filtered — they are distinct transactions on
+    # Regions-style statements. Mirrors the Node-tier CHECK_SUMMARY_REF logic.
+    if checks_ledger is not None:
+        kept: list[dict[str, Any]] = []
+        for t in txns:
+            key = (t.get("date"), int(round(abs(t.get("amount", 0)) * 100)))
+            if t.get("section") == "checks" and key in checks_ledger:
+                continue
+            kept.append(t)
+            if t.get("section") == "checks":
+                checks_ledger.add(key)
+        return kept
     return txns
 
 
@@ -914,6 +1124,17 @@ def count_data_rows(tables: list[list[list[str | None]]]) -> int:
 
 def extract_tables_from_page(page: Any, settings: dict[str, Any]) -> list[list[list[str | None]]]:
     try:
+        if _EXPLICIT_VERTICAL_LINES:
+            # Template-learned column breaks: switch to explicit vertical strategy.
+            # Convert bare x-coordinates into full-height pdfplumber line dicts.
+            settings = {
+                **settings,
+                "vertical_strategy": "explicit",
+                "explicit_vertical_lines": [
+                    {"x0": float(x), "x1": float(x), "top": 0, "bottom": float(page.height)}
+                    for x in _EXPLICIT_VERTICAL_LINES
+                ],
+            }
         return page.extract_tables(table_settings=settings) or []
     except Exception:
         return []
@@ -1620,28 +1841,44 @@ def _row_words_to_cells(
     return [c.strip() for c in cells]
 
 
-def table_from_words(
-    page: Any, *, default_header: list[str] | None = None, bank: str = "", section_id: str = "unknown"
-) -> list[list[str | None]] | None:
+def table_from_words_with_sections(
+    page: Any,
+    *,
+    default_header: list[str] | None = None,
+    bank: str = "",
+    section_id: str = "unknown",
+    checks_ledger: set[tuple[str, int]] | None = None,
+) -> tuple[list[list[str | None]] | None, list[str] | None]:
+    """Build a table from word rows, tracking the section of every data row.
+
+    Returns (table, row_sections) where row_sections[i] is the section for
+    table[i + 1]. Section headings update a running section; rows under a
+    CHECKS heading are split into (date, check_no, amount) sub-rows (two per
+    physical row for 2-column check tables). Rows in balance_summary sections
+    are skipped. checks_ledger (optional, document-level (date, cents) set)
+    is updated with every emitted row so the Node-tier echo guard has the
+    ledger state.
+    """
     try:
         words = page.extract_words(use_text_flow=True) or []
     except Exception:
         try:
             words = page.extract_words() or []
         except Exception:
-            return None
+            return (None, None)
     if not words:
-        return None
+        return (None, None)
 
     word_rows = _cluster_words_into_rows(words)
     if not word_rows:
-        return None
+        return (None, None)
 
     page_width = float(getattr(page, "width", 0) or 612)
     header_info = _find_header_row(word_rows)
     data_start = 0
     breaks: list[float]
     col_ranges: list[tuple[float, float]] | None = None
+    money_header_override: list[str] | None = None
 
     if header_info:
         header_idx, header_xs, header_roles = header_info
@@ -1656,18 +1893,28 @@ def table_from_words(
                 f"reason=too_many_columns",
                 file=sys.stderr,
             )
-            return None
+            return (None, None)
 
         if layout is None:
-            # Header found but layout validation failed — degraded mode
+            # Header found but layout validation failed — degraded mode.
+            # Prefer money-anchored columns (right-edge clustering) over the
+            # density heuristic: it separates real amount columns even when the
+            # header text is split or worded differently.
             print(
                 f"COLUMN_LAYOUT_UNCERTAIN page=? reason=invalid_header "
                 f"header={header_cells[:4]}",
                 file=sys.stderr,
             )
-            dynamic_breaks = detect_column_boundaries(page)
-            breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks(header_xs, page_width, bank=bank)
-            source = "dynamic" if dynamic_breaks else "header_degraded"
+            money_layout = detect_money_column_boundaries(page)
+            if money_layout and len(money_layout) <= 3:
+                breaks, col_ranges, money_header_override = _layout_from_money_columns(
+                    money_layout, page, page_width
+                )
+                source = "money_clusters"
+            else:
+                dynamic_breaks = detect_column_boundaries(page)
+                breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks(header_xs, page_width, bank=bank)
+                source = "dynamic" if dynamic_breaks else "header_degraded"
         else:
             # Valid layout — use header-derived breaks
             header_breaks = _assign_column_breaks(header_xs, page_width, bank=bank)
@@ -1684,18 +1931,22 @@ def table_from_words(
             set_continuation_template({"breaks": header_xs, "roles": header_roles, "layout": layout})
 
         # Compute column ranges from header positions for range-based assignment
-        col_ranges = _compute_col_ranges(header_xs, page_width) if header_info else None
-        if col_ranges and _continuation_template is not None:
-            _continuation_template["col_ranges"] = col_ranges
-            _continuation_template["header_roles"] = header_roles
+        if money_header_override is None:
+            col_ranges = _compute_col_ranges(header_xs, page_width) if header_info else None
+            if col_ranges and _continuation_template is not None:
+                _continuation_template["col_ranges"] = col_ranges
+                _continuation_template["header_roles"] = header_roles
 
         # Run column diagnostics on the first data-bearing page that has a header
         if _DIAGNOSE_COLUMNS and header_info and col_ranges:
             page_num = int(getattr(page, 'page_number', 0) or 0)
             _run_column_diagnostics(page_num, words, col_ranges, header_roles)
 
-        header_cells_out = _row_words_to_cells(word_rows[header_idx], breaks, col_ranges=col_ranges)
-        table: list[list[str | None]] = [header_cells_out]
+        if money_header_override is not None:
+            table = [money_header_override]
+        else:
+            header_cells_out = _row_words_to_cells(word_rows[header_idx], breaks, col_ranges=col_ranges)
+            table = [header_cells_out]
         data_start = header_idx + 1
     elif _continuation_template is not None:
         ct = _continuation_template
@@ -1706,27 +1957,36 @@ def table_from_words(
         syn_header = [""] * (len(col_ranges) if col_ranges else len(breaks) + 1)
         table = [syn_header]
     else:
-        dynamic_breaks = detect_column_boundaries(page)
-        if dynamic_breaks:
-            # Tolerant clustering: collapse raw breaks to a supported schema
-            collapsed = collapse_to_schema(dynamic_breaks, page_width)
-            if collapsed:
-                breaks, schema_idx = collapsed
-                source = "dynamic_collapsed"
+        # No header detected — try money-anchored columns first, then density.
+        money_layout = detect_money_column_boundaries(page)
+        if money_layout and len(money_layout) <= 3:
+            breaks, col_ranges, money_header_override = _layout_from_money_columns(
+                money_layout, page, page_width
+            )
+            source = "money_clusters"
+            table = [money_header_override]
+        else:
+            dynamic_breaks = detect_column_boundaries(page)
+            if dynamic_breaks:
+                # Tolerant clustering: collapse raw breaks to a supported schema
+                collapsed = collapse_to_schema(dynamic_breaks, page_width)
+                if collapsed:
+                    breaks, schema_idx = collapsed
+                    source = "dynamic_collapsed"
+                else:
+                    breaks = _assign_column_breaks([], page_width, bank=bank)
+                    source = "fallback"
             else:
                 breaks = _assign_column_breaks([], page_width, bank=bank)
                 source = "fallback"
-        else:
-            breaks = _assign_column_breaks([], page_width, bank=bank)
-            source = "fallback"
-        fallback = default_header or [
-            "Date",
-            "Description",
-            "Deposits/Credits",
-            "Withdrawals/Debits",
-            "Ending daily balance",
-        ]
-        table = [fallback]
+            fallback = default_header or [
+                "Date",
+                "Description",
+                "Deposits/Credits",
+                "Withdrawals/Debits",
+                "Ending daily balance",
+            ]
+            table = [fallback]
 
     print(
         f"COLUMN_DEBUG page=? header_breaks=0 final_breaks={len(breaks)} source={source}",
@@ -1750,23 +2010,69 @@ def table_from_words(
                 file=sys.stderr,
             )
 
+    row_sections: list[str] = []
+    row_section = section_id
+    after_totals = False
+    page_no = int(getattr(page, 'page_number', 0) or 0)
     for row in merged_word_rows[data_start:]:
         line = " ".join(_word_text(w) for w in row)
         if not line.strip():
             continue
+        # A "Total ..." line ends the current section's data. Content after it
+        # is only re-admitted when a new section heading appears (e.g. a CHECKS
+        # table after "Total Withdrawals"). The heading can ride the same
+        # pre-merged row as the total line ("Total Withdrawals $X CHECKS").
         if re.search(r"^totals?\b", line, re.I):
-            break
-        if SUMMARY_RE.search(line) and not DATE_RE.search(line.split()[0] if line.split() else ""):
+            after_totals = True
+            # The totals line can carry the NEXT section's heading on the same
+            # pre-merged row ("Total Deposits & Credits $X WITHDRAWALS"). Prefer
+            # the section that differs from the current one — the totals line
+            # mentioning its own section is not a transition.
+            for sec_id, pat in SECTION_HEADING_PATTERNS:
+                if sec_id != row_section and pat.search(line):
+                    row_section = sec_id
+                    after_totals = False
+                    break
+            continue
+        parts = line.split()
+        leading_date = bool(parts and DATE_RE.match(parts[0]))
+        if not leading_date:
+            detected = detect_section_heading(line, row_section)
+            if detected == "summary_only" or _matches_any_section_pattern(line):
+                row_section = detected
+                after_totals = False
+                continue
+            if SUMMARY_RE.search(line):
+                continue
+        if after_totals:
+            continue
+        if row_section == "balance_summary":
+            continue
+        if row_section == "checks":
+            for d, c, a in _parse_checks_row(row):
+                table.append([d, f"Check {c}" if c else d, a])
+                row_sections.append("checks")
             continue
         cells = _row_words_to_cells(
             row, breaks, col_ranges=col_ranges,
-            page=int(getattr(page, 'page_number', 0) or 0),
+            page=page_no,
         )
         if any(cells):
             table.append(cells)
+            row_sections.append(row_section)
 
     if len(table) < 2:
-        return None
+        return (None, None)
+    return (table, row_sections)
+
+
+def table_from_words(
+    page: Any, *, default_header: list[str] | None = None, bank: str = "", section_id: str = "unknown"
+) -> list[list[str | None]] | None:
+    """Legacy wrapper — returns the table only (callers that don't need sections)."""
+    table, _ = table_from_words_with_sections(
+        page, default_header=default_header, bank=bank, section_id=section_id
+    )
     return table
 
 
@@ -1827,7 +2133,8 @@ def _merge_balances_by_amount(
 
 
 def extract_page_rows(
-    page: Any, page_index: int, *, bank: str = "", section_id: str = "unknown"
+    page: Any, page_index: int, *, bank: str = "", section_id: str = "unknown",
+    checks_ledger: set[tuple[str, int]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Cascade: text tables -> words -> lines."""
     txns: list[dict[str, Any]] = []
@@ -1862,9 +2169,9 @@ def extract_page_rows(
     # detection including the balance column. Only use text results when
     # table_from_words produces fewer transactions.
     if txns and not any(t.get("balance") is not None for t in txns):
-        word_table = table_from_words(page, bank=bank)
+        word_table, word_sections = table_from_words_with_sections(page, bank=bank, checks_ledger=checks_ledger)
         if word_table and len(word_table) > 1:
-            word_txns = rows_from_table(word_table, page_no=page_index)
+            word_txns = rows_from_table(word_table, page_no=page_index, row_sections=word_sections, checks_ledger=checks_ledger)
             word_bal = sum(1 for t in word_txns if t.get("balance") is not None)
             # Always prefer word extraction when it has balance data.
             # Balance-sequence inference needs consecutive balances — table_from_words
@@ -1877,19 +2184,21 @@ def extract_page_rows(
                 _merge_balances_by_amount(txns, word_txns)
 
     if raw_rows > 0 and not txns:
-        word_table = table_from_words(page, bank=bank, section_id=section_id)
+        word_table, word_sections = table_from_words_with_sections(
+            page, bank=bank, section_id=section_id, checks_ledger=checks_ledger
+        )
         if word_table:
             strategy = "words_retry"
             table_count = max(table_count, 1)
-            txns.extend(rows_from_table(word_table, section_id=section_id, page_no=page_index))
+            txns.extend(rows_from_table(word_table, section_id=section_id, page_no=page_index, row_sections=word_sections, checks_ledger=checks_ledger))
 
     if raw_rows == 0 and not txns:
-        word_table = table_from_words(page, bank=bank)
+        word_table, word_sections = table_from_words_with_sections(page, bank=bank, checks_ledger=checks_ledger)
         if word_table:
             strategy = "words"
             table_count = 1
             raw_rows = max(0, len(word_table) - 1)
-            txns.extend(rows_from_table(word_table, page_no=page_index))
+            txns.extend(rows_from_table(word_table, page_no=page_index, row_sections=word_sections, checks_ledger=checks_ledger))
 
     if raw_rows == 0 and not txns:
         tables_lines = extract_tables_from_page(page, TABLE_SETTINGS_LINES)
@@ -1898,7 +2207,7 @@ def extract_page_rows(
         table_count = len(tables_lines)
         for table in tables_lines:
             if table:
-                txns.extend(rows_from_table(table, section_id=section_id, page_no=page_index))
+                txns.extend(rows_from_table(table, section_id=section_id, page_no=page_index, checks_ledger=checks_ledger))
 
     debug_page(page_index, raw_rows, strategy, table_count)
     telemetry = {
@@ -1960,7 +2269,13 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
                 )
                 continue
 
-            page_txns, telemetry = extract_page_rows(page, page_index)
+            page_txns, telemetry = extract_page_rows(
+                page, page_index,
+                checks_ledger=(
+                    {(t.get("date"), int(round(abs(t.get("amount", 0)) * 100))) for t in transactions}
+                    if transactions else set()
+                ),
+            )
             page_telemetry.append(telemetry)
             strategies_used.add(telemetry["strategy"])
             tables_extracted += telemetry.get("tables", 0)
@@ -2275,7 +2590,13 @@ def extract_generic(pdf_path: str) -> dict[str, Any]:
                 )
                 continue
 
-            page_txns, telemetry = extract_page_rows(page, page_index, section_id=section_id)
+            page_txns, telemetry = extract_page_rows(
+                page, page_index, section_id=section_id,
+                checks_ledger=(
+                    {(t.get("date"), int(round(abs(t.get("amount", 0)) * 100))) for t in transactions}
+                    if transactions else set()
+                ),
+            )
             page_telemetry.append(telemetry)
             strategies_used.add(telemetry["strategy"])
             tables_extracted += telemetry.get("tables", 0)
@@ -2402,6 +2723,10 @@ def main() -> None:
         "--diagnose-columns", action="store_true", default=False,
         help="Emit per-page monetary token census and boundary-distance logging to stderr."
     )
+    parser.add_argument(
+        "--explicit-vertical-lines", default=None,
+        help='JSON array of x-coordinates (PDF points) for pdfplumber explicit vertical strategy, e.g. \'[72, 310, 540]\'.'
+    )
     args = parser.parse_args()
 
     if args.column_tolerance is not None:
@@ -2418,6 +2743,26 @@ def main() -> None:
         import sys as _sys
         _mod = _sys.modules[__name__]
         _mod._DIAGNOSE_COLUMNS = True
+
+    if args.explicit_vertical_lines:
+        import json as _json
+        import sys as _sys
+        _mod = _sys.modules[__name__]
+        try:
+            lines = _json.loads(args.explicit_vertical_lines)
+        except ValueError as e:
+            print(f"invalid --explicit-vertical-lines JSON: {e}", file=_sys.stderr)
+            _sys.exit(2)
+        if not isinstance(lines, list) or not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in lines
+        ):
+            print("--explicit-vertical-lines must be a JSON array of numbers", file=_sys.stderr)
+            _sys.exit(2)
+        _mod._EXPLICIT_VERTICAL_LINES = [float(x) for x in lines]
+        print(
+            f"PDFPLUMBER_DEBUG explicit_vertical_lines={_mod._EXPLICIT_VERTICAL_LINES}",
+            file=_sys.stderr,
+        )
 
     bank = (args.bank or "wells").lower()
     if bank in ("wells", "wells_fargo", "wellsfargo"):

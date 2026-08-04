@@ -60,13 +60,17 @@ vi.mock('../src/config/redis.js', () => ({
 }));
 
 // Mock any models that might cause issues
-vi.mock('../src/models/transactionModel.js', () => {
+vi.mock('../src/models/Transaction.js', () => {
   const mockModel = {
     find: vi.fn().mockResolvedValue([]),
     findOne: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ id: '123' }),
     findByIdAndUpdate: vi.fn().mockResolvedValue({ id: '123' }),
-    findByIdAndDelete: vi.fn().mockResolvedValue({ id: '123' })
+    findByIdAndDelete: vi.fn().mockResolvedValue({ id: '123' }),
+    insertMany: vi.fn().mockResolvedValue([]),
+    bulkWrite: vi.fn().mockResolvedValue({ modifiedCount: 0, upsertedCount: 0 }),
+    aggregate: vi.fn().mockResolvedValue([]),
+    countDocuments: vi.fn().mockResolvedValue(0)
   };
   return { default: mockModel };
 });

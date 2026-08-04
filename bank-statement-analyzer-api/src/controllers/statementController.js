@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import StatementControllerServices from './statementController.services.js';
 import Statement from '../models/Statement.js';
 import Transaction from '../models/Transaction.js';
+import { findByIdWithTransactions, findByUserMonthly } from '../services/repositories/statementRepository.js';
+import { bulkCategorize as bulkCategorizeTxns } from '../services/repositories/transactionRepository.js';
 import PDFParserService, { DocumentTriageError } from '../services/pdfParserService.js';
 import riskAnalysisService from '../services/riskAnalysisService.js';
 import { LLMCategorizationService } from '../services/llmCategorizationService.js';
@@ -2827,8 +2829,8 @@ class StatementController {
       }
       
       // Full document as stored in MongoDB (lean avoids omitting paths not declared on the schema).
-      const statementDoc = await Statement.findById(id).lean();
-      
+      const { statement: statementDoc, transactions } = await findByIdWithTransactions(id);
+
       if (!statementDoc) {
         return res.status(404).json({ 
           success: false, 
@@ -2850,8 +2852,6 @@ class StatementController {
           error: 'Statement not found or access denied' 
         });
       }
-
-      const transactions = await Transaction.find({ statementId: id }).sort({ date: 1 }).lean();
 
       const ex = macroListExtras(statementDoc);
 
@@ -6067,13 +6067,14 @@ Vera's Underwriting Report:`;
         };
       }
       
-      // Query database for user's monthly statements
-      const statements = await Statement.find({ 
-        userId, 
-        ...dateFilter 
-      })
-        .select('_id fileName uploadDate processedDate status summary transactionCount')
-        .sort({ uploadDate: -1 });
+      // Query database for user's monthly statements.
+      // NOTE: `userId` is a virtual getter (returns this.user); the real
+      // persisted field is `user`. Querying the virtual name matches nothing.
+      const statements = await findByUserMonthly(
+        userId,
+        dateFilter,
+        '_id fileName uploadDate processedDate status summary transactionCount'
+      );
       
       const statementList = statements.map(s => ({
         id: s._id,
@@ -6508,33 +6509,35 @@ Vera's Underwriting Report:`;
           // Parse categories from response (simplified logic)
           const categories = this._extractCategoriesFromAnalysis(analysis, batch);
           
-          // Update transactions with categories
-          for (let j = 0; j < batch.length; j++) {
-            const transaction = batch[j];
-            const category = categories[j] || 'Other';
-            
-            await Transaction.findByIdAndUpdate(transaction._id, {
-              category,
+          // Update transactions with categories (single bulkWrite per batch)
+          const bulkOps = batch.map((transaction, j) => ({
+            filter: { _id: transaction._id },
+            update: {
+              category: categories[j] || 'Other',
               categorizedAt: new Date(),
               categorizedBy: 'AI'
-            });
-            
-            categorizedCount++;
-          }
+            }
+          }));
+          const bulkResult = await bulkCategorizeTxns(bulkOps);
+          categorizedCount += bulkResult.modifiedCount || bulkResult.upsertedCount || batch.length;
 
         } catch (error) {
           logger.warn('Failed to categorize batch', { error: error.message, batchStart: i });
           
-          // Fallback to rule-based categorization
-          for (const transaction of batch) {
+          // Fallback to rule-based categorization (single bulkWrite per batch)
+          const fallbackOps = batch.map((transaction) => {
             const category = this._ruleBasedCategorization(transaction);
-            await Transaction.findByIdAndUpdate(transaction._id, {
-              category,
-              categorizedAt: new Date(),
-              categorizedBy: 'Rule-based'
-            });
-            categorizedCount++;
-          }
+            return {
+              filter: { _id: transaction._id },
+              update: {
+                category,
+                categorizedAt: new Date(),
+                categorizedBy: 'Rule-based'
+              }
+            };
+          });
+          const fallbackResult = await bulkCategorizeTxns(fallbackOps);
+          categorizedCount += fallbackResult.modifiedCount || fallbackResult.upsertedCount || batch.length;
         }
       }
 

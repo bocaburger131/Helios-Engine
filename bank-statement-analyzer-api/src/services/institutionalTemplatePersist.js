@@ -22,6 +22,13 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
 
   const { layoutConfidence: layoutConfOmit, layoutFingerprint, ...mappingForTemplate } = withLayoutFingerprint(mapping);
   const fingerprint = layoutFingerprint || buildLayoutFingerprint(mapping);
+  // Column breaks (x-coordinates) must survive learning → re-parse.
+  // Persist on the template doc AND inside the mapping so the layout
+  // object flowing into pdfplumber carries them.
+  const explicitVerticalLines = normalizeExplicitVerticalLines(mappingForTemplate.explicitVerticalLines);
+  if (explicitVerticalLines) {
+    mappingForTemplate.explicitVerticalLines = explicitVerticalLines;
+  }
   const maxVersion = Math.max(
     0,
     ...(profile.templates || []).map((t) => (Number.isFinite(t.version) ? t.version : 0))
@@ -40,6 +47,7 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
           layoutConfidence: opts.layoutConfidence ?? mapping.layoutConfidence ?? null,
           parentTemplateVersion: opts.parentTemplateVersion ?? null,
           fingerprint,
+          explicitVerticalLines: explicitVerticalLines || [],
           mapping: mappingForTemplate
         }
       }
@@ -55,6 +63,17 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
 }
 
 /**
+ * @param {unknown} raw
+ * @returns {number[] | null} sorted ascending x-coordinates, or null when empty/invalid
+ */
+function normalizeExplicitVerticalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n));
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/**
  * Latest LEARNING or VERIFIED mapping for batch macro re-parse (no manuallyVerified gate).
  * @param {object | null} profile — lean InstitutionalProfile
  * @returns {{ mapping: object, version: number, status: string } | null}
@@ -63,16 +82,40 @@ export function getLatestLearnableTemplate(profile) {
   const templates = profile?.templates || [];
   const verified = templates.find((t) => String(t.status || '').toUpperCase() === 'VERIFIED');
   if (verified?.mapping) {
-    return { mapping: verified.mapping, version: verified.version, status: 'VERIFIED' };
+    return {
+      mapping: withTemplateExplicitVerticalLines(verified),
+      version: verified.version,
+      status: 'VERIFIED'
+    };
   }
   const learning = templates
     .filter((t) => String(t.status || '').toUpperCase() === 'LEARNING')
     .sort((a, b) => (b.version || 0) - (a.version || 0));
   const top = learning[0];
   if (top?.mapping) {
-    return { mapping: top.mapping, version: top.version, status: 'LEARNING' };
+    return {
+      mapping: withTemplateExplicitVerticalLines(top),
+      version: top.version,
+      status: 'LEARNING'
+    };
   }
   return null;
+}
+
+/**
+ * Merge template-level explicitVerticalLines into the mapping when the mapping
+ * lacks them (covers templates persisted before the field existed).
+ * @param {object} template — template subdocument
+ * @returns {object} mapping clone with explicitVerticalLines attached
+ */
+function withTemplateExplicitVerticalLines(template) {
+  const mapping = { ...template.mapping };
+  const lines = normalizeExplicitVerticalLines(mapping.explicitVerticalLines) ||
+    normalizeExplicitVerticalLines(template.explicitVerticalLines);
+  if (lines) {
+    mapping.explicitVerticalLines = lines;
+  }
+  return mapping;
 }
 
 export default { persistLearningTemplate, getLatestLearnableTemplate };

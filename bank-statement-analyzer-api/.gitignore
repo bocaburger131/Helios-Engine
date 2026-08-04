@@ -3,6 +3,10 @@ service-account-key.json
 *-sa-key.json
 *.json
 
+# Contract mock fixtures are static, safe test data — tracked deliberately
+!src/contracts/mocks/
+!src/contracts/mocks/**
+
 # Local environment files (never commit real secrets)
 .env
 .env.local

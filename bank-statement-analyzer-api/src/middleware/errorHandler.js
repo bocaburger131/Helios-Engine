@@ -1,13 +1,34 @@
 import logger from '../utils/logger.js';
 
+/**
+ * Classify an error into an HTTP status code.
+ * AppError sets `statusCode`; legacy code sometimes sets `status` (which can be
+ * the string 'fail'/'error' — never use it as a numeric status).
+ * @param {Error} err
+ * @returns {number}
+ */
+function classifyStatus(err) {
+  if (Number.isInteger(err?.statusCode)) return err.statusCode;
+  if (typeof err?.status === 'number') return err.status;
+  if (err?.code === 'LIMIT_FILE_SIZE') return 400;
+  if (err?.name === 'ValidationError') return 400;
+  if (err?.name === 'CastError') return 400;
+  return 500;
+}
+
 export const errorHandler = (err, req, res, next) => {
-  // Log error
-  logger.error('Error occurred:', {
-    error: err.message,
-    stack: err.stack,
+  const status = classifyStatus(err);
+  const isOperational = Boolean(err?.isOperational);
+  const is4xx = status >= 400 && status < 500;
+
+  // Log the failure without PII: never include req.body (taxId, email, phone, etc.).
+  logger.error('Request failed:', {
+    message: err.message,
     url: req.url,
     method: req.method,
-    body: req.body
+    status,
+    operational: isOperational,
+    ...(is4xx ? {} : { stack: err.stack })
   });
 
   // Multer errors
@@ -18,7 +39,7 @@ export const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // MongoDB errors
+  // MongoDB validation errors
   if (err.name === 'ValidationError') {
     return res.status(400).json({
       success: false,
@@ -27,10 +48,13 @@ export const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Default error
-  res.status(err.status || 500).json({
+  // Default: expose the message for operational errors only.
+  // Programmer errors (500) get a generic message to avoid leaking internals.
+  const exposeMessage = status < 500 ? (err.message || 'Request failed') : 'Internal server error';
+
+  res.status(status).json({
     success: false,
-    error: err.message || 'Internal server error'
+    error: exposeMessage
   });
 };
 

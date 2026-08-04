@@ -392,7 +392,8 @@ export class PDFParserService {
       const plumberOptions = {
         fileName: options?.fileName,
         bankName: bankNameFromTriage || accountInfo.bankName || options?.bankName,
-        defaultYear
+        defaultYear,
+        explicitVerticalLines: options?.layoutTemplate?.explicitVerticalLines
       };
       let plumberResult = null;
       let plumberTransactions = null;

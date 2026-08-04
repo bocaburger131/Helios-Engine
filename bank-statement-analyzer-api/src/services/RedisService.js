@@ -37,14 +37,14 @@ class RedisService {
         return;
       }
 
-      // Determine Redis connection options based on the environment
-      const isProduction = config.NODE_ENV === 'production';
-      
-      // In production, use the Redis URL from your environment variables.
-      // For local development, connect to the standard localhost port.
-      const redisUrl = isProduction 
-        ? `redis://${config.REDIS_HOST}:${config.REDIS_PORT}`
-        : 'redis://localhost:6379';
+      // Determine Redis connection options based on the environment.
+      // Consume REDIS_URL first, then fall back to REDIS_HOST / REDIS_PORT
+      // (never hardcode localhost — Docker-mapped Redis lives elsewhere).
+      const rawUrl =
+        process.env.REDIS_URL ||
+        `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
+      // Avoid Windows IPv6 localhost (::1) hangs against Docker-mapped Redis.
+      const redisUrl = rawUrl.replace(/\/\/localhost/i, '//127.0.0.1');
 
       this.client = createClient({ url: redisUrl });
 

@@ -24,6 +24,8 @@ const templateSchema = new Schema(
     lastError: { type: String, trim: true },
     layoutConfidence: { type: Number, min: 0, max: 1, default: null },
     fingerprint: { type: String, default: '', trim: true },
+    /** x-coordinates of horizontal column breaks (pdfplumber explicit vertical lines). */
+    explicitVerticalLines: { type: [Number], default: [] },
     mapping: { type: Schema.Types.Mixed, default: {} }
   },
   { _id: true }

@@ -177,6 +177,20 @@ app.use((req, res) => {
   });
 });
 
+// Process-level crash guards. server.js also registers these for the main
+// process; this covers workers and scripts that import app.js directly.
+// Skipped under test so vitest owns the process lifecycle.
+if (process.env.NODE_ENV !== 'test') {
+  process.on('unhandledRejection', (reason) => {
+    // eslint-disable-next-line no-console
+    console.error('Unhandled promise rejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    // eslint-disable-next-line no-console
+    console.error('Uncaught exception:', err);
+  });
+}
+
 // Database connection is handled in server.js
 
 export default app;
