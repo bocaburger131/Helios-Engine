@@ -785,6 +785,36 @@ def emit_transaction_row(
             words=raw_cells,
         )
         return
+    # Wells "Summary of checks written" GRID debris: the check-number matrix
+    # gets misparsed into a bogus row whose description is the grid footer
+    # "Gap in check sequence." This exact phrase never appears in a real
+    # transaction description.
+    if re.search(r"gap\s+in\s+check\s+sequence", desc, re.I):
+        record_dropped_row(
+            page=page,
+            drop_reason="summary_match",
+            amount=amount,
+            date=date,
+            description=desc,
+            words=raw_cells,
+        )
+        return
+    # Checks-paid GRID row debris: the "Summary of checks" matrix produces rows
+    # whose description is a run of "<amount> <m/d>" pairs (the printed
+    # amount/date grid) optionally trailing into check numbers. Real transaction
+    # descriptions never START with "amount date amount date". Require at least
+    # two such money+date pairs to avoid catching legit rows that merely open
+    # with an amount.
+    if re.match(r"^\s*\d[\d,]*\.\d{2}\s+\d{1,2}/\d{1,2}\s+\d[\d,]*\.\d{2}\s+\d{1,2}/\d{1,2}\b", desc):
+        record_dropped_row(
+            page=page,
+            drop_reason="summary_match",
+            amount=amount,
+            date=date,
+            description=desc,
+            words=raw_cells,
+        )
+        return
     if amount > CHASE_ROW_AMOUNT_CAP:
         record_dropped_row(
             page=page,
@@ -2239,7 +2269,7 @@ def extract_page_rows(
     if text_header_ok:
         for table in tables_text:
             if table:
-                txns.extend(rows_from_table(table, section_id=section_id, page_no=page_index))
+                txns.extend(rows_from_table(table, section_id=section_id, page_no=page_index, checks_ledger=checks_ledger))
     else:
         # Header not detected in text table — skip directly to table_from_words
         txns = []
@@ -2409,20 +2439,39 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
 def parse_summary_balances(text: str) -> tuple[float | None, float | None]:
     opening = closing = None
     m_open = re.search(
-        r"beginning balance(?:\s+on\s+\d{1,2}/\d{1,2})?\s*\$?\s*([\d,]+\.\d{2})",
+        r"beginning balance(?:\s+on\s+\d{1,2}/\d{1,2})?\s*(-?\s*\$?\s*-?[\d,]+\.\d{2})",
         text,
         re.I,
     )
     m_close = re.search(
-        r"ending balance(?:\s+on\s+\d{1,2}/\d{1,2})?\s*\$?\s*([\d,]+\.\d{2})",
+        r"ending balance(?:\s+on\s+\d{1,2}/\d{1,2})?\s*(-?\s*\$?\s*-?[\d,]+\.\d{2})",
         text,
         re.I,
     )
     if m_open:
-        opening = parse_money(m_open.group(1))
+        opening = _parse_signed_balance(m_open.group(1))
     if m_close:
-        closing = parse_money(m_close.group(1))
+        closing = _parse_signed_balance(m_close.group(1))
     return opening, closing
+
+
+def _parse_signed_balance(token: str) -> float | None:
+    """Parse a balance that may be negative (e.g. an overdrawn ending balance
+    "-$608.74"). Unlike parse_money, this accepts values <= 0 and preserves the
+    sign — required for statements that close negative."""
+    if not token:
+        return None
+    s = str(token).strip().replace("$", "").replace(",", "").replace(" ", "")
+    neg = s.count("-") % 2 == 1
+    s = s.replace("-", "")
+    if s.startswith("(") and s.endswith(")"):
+        s = s[1:-1]
+        neg = True
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return -v if neg else v
 
 
 CHASE_ACTIVITY_RE = re.compile(
@@ -2746,7 +2795,13 @@ def extract_wells(pdf_path: str) -> dict[str, Any]:
                 )
                 continue
 
-            page_txns, telemetry = extract_page_rows(page, page_index, bank="wells", section_id=section_id)
+            page_txns, telemetry = extract_page_rows(
+                page, page_index, bank="wells", section_id=section_id,
+                checks_ledger=(
+                    {(t.get("date"), int(round(abs(t.get("amount", 0)) * 100))) for t in transactions}
+                    if transactions else set()
+                ),
+            )
             page_telemetry.append(telemetry)
             strategies_used.add(telemetry["strategy"])
             tables_extracted += telemetry.get("tables", 0)
@@ -2759,6 +2814,27 @@ def extract_wells(pdf_path: str) -> dict[str, Any]:
     combined = "\n".join(full_text_parts)
     opening, closing = parse_summary_balances(combined)
 
+    # Document-level checks echo guard: a summary ("checks" section) row whose
+    # (date, amount) matches any activity-history row is a Wells "Summary of
+    # checks" echo of a check already counted in the transaction history — drop
+    # it. Catches same-page echoes the per-page ledger misses (activity check and
+    # its summary echo can share a page, so the page-start ledger snapshot does
+    # not yet contain the activity row).
+    _activity_keys = {
+        (t.get("date"), int(round(abs(t.get("amount", 0)) * 100)))
+        for t in transactions
+        if t.get("section") != "checks"
+    }
+    if _activity_keys:
+        _pruned: list[dict[str, Any]] = []
+        for t in transactions:
+            if t.get("section") == "checks":
+                k = (t.get("date"), int(round(abs(t.get("amount", 0)) * 100)))
+                if k in _activity_keys:
+                    continue
+            _pruned.append(t)
+        transactions = _pruned
+
     seen = set()
     deduped: list[dict[str, Any]] = []
     for t in transactions:
@@ -2769,6 +2845,31 @@ def extract_wells(pdf_path: str) -> dict[str, Any]:
         deduped.append(t)
 
     extraction_strategy = "+".join(sorted(strategies_used - {"skipped"})) or "none"
+
+    # Post-close trim: if the LAST balance-bearing row equals the printed closing
+    # balance, the ledger is provably complete at that point — any rows after it
+    # are post-close extraction artifacts (check-grid debris, out-of-sequence
+    # re-reads of the summary zone). Drop them. Conservative: only fires when a
+    # printed closing exists and a real checkpoint matches it to the cent.
+    if closing is not None:
+        last_bal_idx = None
+        for i in range(len(deduped) - 1, -1, -1):
+            if deduped[i].get("balance") is not None:
+                last_bal_idx = i
+                break
+        if (last_bal_idx is not None
+                and last_bal_idx < len(deduped) - 1
+                and abs(deduped[last_bal_idx]["balance"] - closing) < 0.005):
+            for t in deduped[last_bal_idx + 1:]:
+                record_dropped_row(
+                    page=int(t.get("page", 0) or 0),
+                    drop_reason="summary_match",
+                    amount=float(t.get("amount", 0) or 0),
+                    date=str(t.get("date", "") or ""),
+                    description=str(t.get("description", "") or ""),
+                    words=None,
+                )
+            deduped = deduped[:last_bal_idx + 1]
 
     return {
         "transactions": deduped,
