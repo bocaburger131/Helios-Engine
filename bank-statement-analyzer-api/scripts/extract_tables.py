@@ -91,6 +91,9 @@ TABLE_SETTINGS_LINES = {
 # Template-learned column breaks (x-coordinates) → pdfplumber explicit vertical strategy.
 _EXPLICIT_VERTICAL_LINES: list[float] | None = None
 
+# Template-learned row breaks (y-coordinates) → pdfplumber explicit horizontal strategy.
+_EXPLICIT_HORIZONTAL_LINES: list[float] | None = None
+
 Y_TOLERANCE = 4
 HEADER_WORDS_RE = re.compile(r"date|deposit|credit|withdraw|debit|description|balance", re.I)
 _COL_BUCKET_PT = 4.0  # histogram resolution in PDF points
@@ -1294,17 +1297,28 @@ def count_data_rows(tables: list[list[list[str | None]]]) -> int:
 
 def extract_tables_from_page(page: Any, settings: dict[str, Any]) -> list[list[list[str | None]]]:
     try:
-        if _EXPLICIT_VERTICAL_LINES:
-            # Template-learned column breaks: switch to explicit vertical strategy.
+        if _EXPLICIT_VERTICAL_LINES or _EXPLICIT_HORIZONTAL_LINES:
+            # Template-learned breaks → pdfplumber explicit strategy.
             # Convert bare x-coordinates into full-height pdfplumber line dicts.
+            v_lines = (
+                [{"x0": float(x), "x1": float(x), "top": 0, "bottom": float(page.height)}
+                 for x in _EXPLICIT_VERTICAL_LINES]
+                if _EXPLICIT_VERTICAL_LINES else None
+            )
+            h_lines = (
+                [{"x0": 0, "x1": float(page.width), "top": float(y), "bottom": float(y)}
+                 for y in _EXPLICIT_HORIZONTAL_LINES]
+                if _EXPLICIT_HORIZONTAL_LINES else None
+            )
             settings = {
                 **settings,
-                "vertical_strategy": "explicit",
-                "explicit_vertical_lines": [
-                    {"x0": float(x), "x1": float(x), "top": 0, "bottom": float(page.height)}
-                    for x in _EXPLICIT_VERTICAL_LINES
-                ],
+                "vertical_strategy": "explicit" if v_lines else settings.get("vertical_strategy", "text"),
+                "horizontal_strategy": "explicit" if h_lines else settings.get("horizontal_strategy", "text"),
             }
+            if v_lines:
+                settings["explicit_vertical_lines"] = v_lines
+            if h_lines:
+                settings["explicit_horizontal_lines"] = h_lines
         return page.extract_tables(table_settings=settings) or []
     except Exception:
         return []
@@ -1338,6 +1352,46 @@ def _cluster_words_into_rows(words: list[dict[str, Any]]) -> list[list[dict[str,
     return rows
 
 
+def _cluster_words_by_explicit_rows(
+    words: list[dict[str, Any]], h_lines: list[float]
+) -> list[list[dict[str, Any]]]:
+    """Group words into rows using explicit horizontal line y-coordinates.
+
+    When AI-provided explicit horizontal lines exist, they define hard
+    row boundaries. Each word is assigned to the band between two
+    consecutive y-coordinates (or above the first / below the last).
+    This bypasses the Y_TOLERANCE whitespace clustering entirely.
+    """
+    if not words:
+        return []
+    sorted_words = sorted(words, key=lambda w: (float(w.get("top", 0)), float(w.get("x0", 0))))
+    rows: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_band_top = -float("inf")
+
+    for w in sorted_words:
+        top = float(w.get("top", 0))
+        # Find which band this word falls into
+        band_top = -float("inf")
+        for i, y in enumerate(h_lines):
+            if top <= y + 1:  # 1pt tolerance for word height
+                band_top = y
+                break
+        else:
+            band_top = h_lines[-1] if h_lines else -float("inf")
+
+        if band_top == current_band_top:
+            current.append(w)
+        else:
+            if current:
+                rows.append(current)
+            current = [w]
+            current_band_top = band_top
+    if current:
+        rows.append(current)
+    return rows
+
+
 def collect_raw_word_rows(page: Any, page_no: int) -> None:
     """Append every word on the page, clustered into visual lines, to _RAW_WORD_ROWS.
 
@@ -1353,7 +1407,10 @@ def collect_raw_word_rows(page: Any, page_no: int) -> None:
         return
     if not words:
         return
-    rows = _cluster_words_into_rows(words)
+    if _EXPLICIT_HORIZONTAL_LINES:
+        rows = _cluster_words_by_explicit_rows(words, _EXPLICIT_HORIZONTAL_LINES)
+    else:
+        rows = _cluster_words_into_rows(words)
     for row_index, row in enumerate(rows):
         _RAW_WORD_ROWS.append(
             {
@@ -1743,7 +1800,17 @@ def _compute_col_ranges(header_xs: list[float], page_width: float, *, tolerance:
     Returns [(x_min, x_max), ...]. Tolerance is applied only to the LEFT edge
     of money columns (deposits, withdrawals, balance) where right-aligned data
     numbers start slightly before the header's centered text.
+
+    When _EXPLICIT_VERTICAL_LINES is set, those x-coordinates are used as
+    hard column boundaries, bypassing all whitespace-guessing logic.
     """
+    if _EXPLICIT_VERTICAL_LINES:
+        xs = sorted(_EXPLICIT_VERTICAL_LINES)
+        ranges = [(0.0, float(xs[0]))]
+        for i in range(len(xs) - 1):
+            ranges.append((float(xs[i]), float(xs[i + 1])))
+        ranges.append((float(xs[-1]), float(page_width)))
+        return ranges
     if not header_xs or len(header_xs) < 2:
         return []
     _tol = _COLUMN_TOLERANCE if tolerance is None else tolerance
@@ -2039,7 +2106,10 @@ def table_from_words_with_sections(
     if not words:
         return (None, None)
 
-    word_rows = _cluster_words_into_rows(words)
+    if _EXPLICIT_HORIZONTAL_LINES:
+        word_rows = _cluster_words_by_explicit_rows(words, _EXPLICIT_HORIZONTAL_LINES)
+    else:
+        word_rows = _cluster_words_into_rows(words)
     if not word_rows:
         return (None, None)
 
@@ -2980,6 +3050,10 @@ def main() -> None:
         "--explicit-vertical-lines", default=None,
         help='JSON array of x-coordinates (PDF points) for pdfplumber explicit vertical strategy, e.g. \'[72, 310, 540]\'.'
     )
+    parser.add_argument(
+        "--explicit-horizontal-lines", default=None,
+        help='JSON array of y-coordinates (PDF points) for pdfplumber explicit horizontal strategy, e.g. \'[120, 350, 580]\'.'
+    )
     args = parser.parse_args()
 
     if args.column_tolerance is not None:
@@ -3014,6 +3088,26 @@ def main() -> None:
         _mod._EXPLICIT_VERTICAL_LINES = [float(x) for x in lines]
         print(
             f"PDFPLUMBER_DEBUG explicit_vertical_lines={_mod._EXPLICIT_VERTICAL_LINES}",
+            file=_sys.stderr,
+        )
+
+    if args.explicit_horizontal_lines:
+        import json as _json
+        import sys as _sys
+        _mod = _sys.modules[__name__]
+        try:
+            hlines = _json.loads(args.explicit_horizontal_lines)
+        except ValueError as e:
+            print(f"invalid --explicit-horizontal-lines JSON: {e}", file=_sys.stderr)
+            _sys.exit(2)
+        if not isinstance(hlines, list) or not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in hlines
+        ):
+            print("--explicit-horizontal-lines must be a JSON array of numbers", file=_sys.stderr)
+            _sys.exit(2)
+        _mod._EXPLICIT_HORIZONTAL_LINES = [float(x) for x in hlines]
+        print(
+            f"PDFPLUMBER_DEBUG explicit_horizontal_lines={_mod._EXPLICIT_HORIZONTAL_LINES}",
             file=_sys.stderr,
         )
 

@@ -393,7 +393,8 @@ export class PDFParserService {
         fileName: options?.fileName,
         bankName: bankNameFromTriage || accountInfo.bankName || options?.bankName,
         defaultYear,
-        explicitVerticalLines: options?.layoutTemplate?.explicitVerticalLines
+        explicitVerticalLines: options?.layoutTemplate?.explicitVerticalLines,
+        explicitHorizontalLines: options?.layoutTemplate?.explicitHorizontalLines
       };
       let plumberResult = null;
       let plumberTransactions = null;

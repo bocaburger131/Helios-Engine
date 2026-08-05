@@ -54,6 +54,18 @@ export function normalizeExplicitVerticalLines(raw) {
 }
 
 /**
+ * Normalize template explicitHorizontalLines (y-coordinates of row breaks).
+ * @param {unknown} raw
+ * @returns {number[] | null} ascending unique y-coordinates, or null when empty/invalid
+ */
+export function normalizeExplicitHorizontalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/**
  * @param {string} stderr
  * @returns {Array<{ page: number, rawRows: number, strategy: string, tables: number }>}
  */
@@ -145,7 +157,7 @@ export const runPlumberChildProcess = runPythonChildProcess;
 
 /**
  * @param {Buffer} pdfBuffer
- * @param {{ bankName?: string, fileName?: string, defaultYear?: number }} [options]
+ * @param {{ bankName?: string, fileName?: string, defaultYear?: number, explicitVerticalLines?: number[], explicitHorizontalLines?: number[] }} [options]
  */
 export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) {
   if (!pdfPlumberEnabled()) {
@@ -169,11 +181,17 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
     if (explicitLines) {
       scriptArgs.push('--explicit-vertical-lines', JSON.stringify(explicitLines));
     }
+    // Template-learned row breaks → pdfplumber explicit horizontal strategy.
+    const explicitHLines = normalizeExplicitHorizontalLines(options.explicitHorizontalLines);
+    if (explicitHLines) {
+      scriptArgs.push('--explicit-horizontal-lines', JSON.stringify(explicitHLines));
+    }
 
     logger.info('[PDF_PLUMBER] start', {
       fileName,
       bank: slug,
-      explicitVerticalLines: explicitLines ?? null
+      explicitVerticalLines: explicitLines ?? null,
+      explicitHorizontalLines: explicitHLines ?? null
     });
 
   try {

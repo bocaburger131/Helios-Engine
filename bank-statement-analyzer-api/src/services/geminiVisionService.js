@@ -49,11 +49,13 @@ const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backt
     { "label": "Electronic Withdrawals", "start": "ELECTRONIC WITHDRAWALS", "end": "Total withdrawals" },
     { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" }
   ],
-  "explicitVerticalLines": [72, 150, 310, 470, 540]
+  "explicitVerticalLines": [72, 150, 310, 470, 540],
+  "explicitHorizontalLines": [120, 350, 580]
 }
 
 Rules:
 - explicitVerticalLines is OPTIONAL. When present it must be an array of x-coordinates (PDF points, left-to-right) marking each vertical column boundary in the transaction table, e.g. the right edge of the date column, the right edge of the description column, and the right edge of the amount column(s). Omit it (or return []) when the column boundaries are not clearly visible.
+- explicitHorizontalLines is OPTIONAL. When present it must be an array of y-coordinates (PDF points, top-to-bottom) marking each horizontal row boundary in the transaction table, e.g. the bottom edge of the header row and the top edges of section separator lines. Omit it (or return []) when horizontal boundaries are not clearly visible.
 - transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, card, ACH, etc.).
 - headerAnchors.start/end should span the full activity region; per-table sections use narrower start/end pairs.
 - Each start/end string must be copied exactly from the PDF (case and spacing matter).
@@ -110,6 +112,10 @@ const LAYOUT_JSON_SCHEMA = {
       }
     },
     explicitVerticalLines: {
+      type: 'array',
+      items: { type: 'number' }
+    },
+    explicitHorizontalLines: {
       type: 'array',
       items: { type: 'number' }
     }
@@ -439,6 +445,17 @@ function normalizeExplicitVerticalLines(raw) {
 }
 
 /**
+ * Normalize optional Gemini explicitHorizontalLines (y-coordinates of row breaks).
+ * @param {unknown} raw
+ * @returns {number[] | undefined}
+ */
+function normalizeExplicitHorizontalLines(raw) {
+  if (!Array.isArray(raw)) return undefined;
+  const nums = raw.map(Number).filter(Number.isFinite);
+  return nums.length > 0 ? nums : undefined;
+}
+
+/**
  * Map Gemini vision JSON (start/end, *Idx) into the shape expected by coerceLayoutMapping.
  * @param {object} parsed
  * @returns {object|null}
@@ -524,6 +541,9 @@ export function prenormalizeVisionPayload(parsed) {
     _vitals: parsed.vitals,
     ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
       ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
+      : {}),
+    ...(normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) !== undefined
+      ? { explicitHorizontalLines: normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) }
       : {})
   };
 }
@@ -593,6 +613,9 @@ export function coerceLayoutMapping(parsed) {
     ...(transactionSections?.length ? { transactionSections } : {}),
     ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
       ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
+      : {}),
+    ...(normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) !== undefined
+      ? { explicitHorizontalLines: normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) }
       : {}),
     ...(layoutConfidence !== undefined ? { layoutConfidence } : {})
   };

@@ -26,8 +26,12 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
   // Persist on the template doc AND inside the mapping so the layout
   // object flowing into pdfplumber carries them.
   const explicitVerticalLines = normalizeExplicitVerticalLines(mappingForTemplate.explicitVerticalLines);
+  const explicitHorizontalLines = normalizeExplicitHorizontalLines(mappingForTemplate.explicitHorizontalLines);
   if (explicitVerticalLines) {
     mappingForTemplate.explicitVerticalLines = explicitVerticalLines;
+  }
+  if (explicitHorizontalLines) {
+    mappingForTemplate.explicitHorizontalLines = explicitHorizontalLines;
   }
   const maxVersion = Math.max(
     0,
@@ -48,6 +52,7 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
           parentTemplateVersion: opts.parentTemplateVersion ?? null,
           fingerprint,
           explicitVerticalLines: explicitVerticalLines || [],
+          explicitHorizontalLines: explicitHorizontalLines || [],
           mapping: mappingForTemplate
         }
       }
@@ -74,6 +79,17 @@ function normalizeExplicitVerticalLines(raw) {
 }
 
 /**
+ * @param {unknown} raw
+ * @returns {number[] | null} sorted ascending y-coordinates, or null when empty/invalid
+ */
+function normalizeExplicitHorizontalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n));
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/**
  * Latest LEARNING or VERIFIED mapping for batch macro re-parse (no manuallyVerified gate).
  * @param {object | null} profile — lean InstitutionalProfile
  * @returns {{ mapping: object, version: number, status: string } | null}
@@ -83,7 +99,7 @@ export function getLatestLearnableTemplate(profile) {
   const verified = templates.find((t) => String(t.status || '').toUpperCase() === 'VERIFIED');
   if (verified?.mapping) {
     return {
-      mapping: withTemplateExplicitVerticalLines(verified),
+      mapping: withTemplateExplicitLines(verified),
       version: verified.version,
       status: 'VERIFIED'
     };
@@ -94,12 +110,23 @@ export function getLatestLearnableTemplate(profile) {
   const top = learning[0];
   if (top?.mapping) {
     return {
-      mapping: withTemplateExplicitVerticalLines(top),
+      mapping: withTemplateExplicitLines(top),
       version: top.version,
       status: 'LEARNING'
     };
   }
   return null;
+}
+
+/**
+ * Merge both vertical and horizontal explicit lines from template into mapping.
+ * @param {object} template
+ * @returns {object}
+ */
+function withTemplateExplicitLines(template) {
+  let mapping = withTemplateExplicitVerticalLines(template);
+  mapping = withTemplateExplicitHorizontalLines(template);
+  return mapping;
 }
 
 /**
@@ -114,6 +141,22 @@ function withTemplateExplicitVerticalLines(template) {
     normalizeExplicitVerticalLines(template.explicitVerticalLines);
   if (lines) {
     mapping.explicitVerticalLines = lines;
+  }
+  return mapping;
+}
+
+/**
+ * Merge template-level explicitHorizontalLines into the mapping when the mapping
+ * lacks them (covers templates persisted before the field existed).
+ * @param {object} template — template subdocument
+ * @returns {object} mapping clone with explicitHorizontalLines attached
+ */
+function withTemplateExplicitHorizontalLines(template) {
+  const mapping = { ...template.mapping };
+  const lines = normalizeExplicitHorizontalLines(mapping.explicitHorizontalLines) ||
+    normalizeExplicitHorizontalLines(template.explicitHorizontalLines);
+  if (lines) {
+    mapping.explicitHorizontalLines = lines;
   }
   return mapping;
 }
