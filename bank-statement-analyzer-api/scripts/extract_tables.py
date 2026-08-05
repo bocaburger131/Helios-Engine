@@ -12,7 +12,20 @@ import hashlib
 import json
 import re
 import sys
+from pathlib import Path
 from typing import Any
+
+try:
+    import jsonschema
+except ImportError:
+    jsonschema = None  # type: ignore[assignment]
+
+try:
+    _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "src" / "services" / "extraction" / "rescueEvidenceSchema.json"
+    _EVIDENCE_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    _SCHEMA_AVAILABLE = jsonschema is not None
+except (ImportError, FileNotFoundError, json.JSONDecodeError):
+    _SCHEMA_AVAILABLE = False
 
 try:
     import pdfplumber
@@ -576,6 +589,40 @@ def record_dropped_row(
             if v is not None:
                 ev[k] = v
     _DROPPED_ROWS.append(ev)
+
+
+def _validate_evidence() -> None:
+    """Validate dropped_rows and uncertain_assignments against the shared
+    rescue evidence schema.  Logs warnings on violations; never raises
+    (fail-open — a schema violation must never block extraction)."""
+    if not _SCHEMA_AVAILABLE:
+        return
+    assert jsonschema is not None
+    evidence = {
+        "dropped_rows": _DROPPED_ROWS,
+        "uncertain_assignments": _UNCERTAIN_ASSIGNMENTS,
+    }
+    errors: list[str] = []
+    for i, row in enumerate(evidence.get("dropped_rows") or []):
+        try:
+            jsonschema.validate(
+                row,
+                {"$ref": "#/definitions/droppedRow", "definitions": _EVIDENCE_SCHEMA["definitions"]},
+            )
+        except jsonschema.ValidationError as exc:
+            errors.append(f"dropped_rows[{i}]: {exc.message}")
+    for i, row in enumerate(evidence.get("uncertain_assignments") or []):
+        try:
+            jsonschema.validate(
+                row,
+                {"$ref": "#/definitions/uncertainAssignment", "definitions": _EVIDENCE_SCHEMA["definitions"]},
+            )
+        except jsonschema.ValidationError as exc:
+            errors.append(f"uncertain_assignments[{i}]: {exc.message}")
+    if errors:
+        print(f"[EVIDENCE] schema violations count={len(errors)}", file=sys.stderr)
+        for err in errors[:5]:
+            print(f"  {err}", file=sys.stderr)
 
 
 # ---- Generic transaction-type detection (institution-agnostic) ----
@@ -2416,6 +2463,8 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
 
     extraction_strategy = "+".join(sorted(strategies_used - {"skipped"})) or "none"
 
+    _validate_evidence()
+
     return {
         "transactions": deduped,
         "dropped_rows": _DROPPED_ROWS,
@@ -2651,8 +2700,12 @@ def extract_chase(pdf_path: str) -> dict[str, Any]:
 
     extraction_strategy = "+".join(sorted(strategies_used - {"skipped"})) or "none"
 
+    _validate_evidence()
+
     return {
         "transactions": deduped,
+        "dropped_rows": _DROPPED_ROWS,
+        "uncertain_assignments": _UNCERTAIN_ASSIGNMENTS,
         "raw_word_rows": _RAW_WORD_ROWS if not deduped else [],
         "openingBalance": opening,
         "closingBalance": closing,
@@ -2746,8 +2799,12 @@ def extract_generic(pdf_path: str) -> dict[str, Any]:
 
     extraction_strategy = "+".join(sorted(strategies_used - {"skipped"})) or "none"
 
+    _validate_evidence()
+
     return {
         "transactions": deduped,
+        "dropped_rows": _DROPPED_ROWS,
+        "uncertain_assignments": _UNCERTAIN_ASSIGNMENTS,
         "raw_word_rows": _RAW_WORD_ROWS if not deduped else [],
         "openingBalance": opening,
         "closingBalance": closing,
@@ -2870,6 +2927,8 @@ def extract_wells(pdf_path: str) -> dict[str, Any]:
                     words=None,
                 )
             deduped = deduped[:last_bal_idx + 1]
+
+    _validate_evidence()
 
     return {
         "transactions": deduped,
