@@ -26,13 +26,12 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
   // Persist on the template doc AND inside the mapping so the layout
   // object flowing into pdfplumber carries them.
   const explicitVerticalLines = normalizeExplicitVerticalLines(mappingForTemplate.explicitVerticalLines);
-  const explicitHorizontalLines = normalizeExplicitHorizontalLines(mappingForTemplate.explicitHorizontalLines);
   if (explicitVerticalLines) {
     mappingForTemplate.explicitVerticalLines = explicitVerticalLines;
   }
-  if (explicitHorizontalLines) {
-    mappingForTemplate.explicitHorizontalLines = explicitHorizontalLines;
-  }
+  // explicitHorizontalLines are stripped before save — they are rescue-specific
+  // and must never persist into verified templates.
+  delete mappingForTemplate.explicitHorizontalLines;
   const maxVersion = Math.max(
     0,
     ...(profile.templates || []).map((t) => (Number.isFinite(t.version) ? t.version : 0))
@@ -52,7 +51,6 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
           parentTemplateVersion: opts.parentTemplateVersion ?? null,
           fingerprint,
           explicitVerticalLines: explicitVerticalLines || [],
-          explicitHorizontalLines: explicitHorizontalLines || [],
           mapping: mappingForTemplate
         }
       }
@@ -72,17 +70,6 @@ export async function persistLearningTemplate(profileId, mapping, opts = {}) {
  * @returns {number[] | null} sorted ascending x-coordinates, or null when empty/invalid
  */
 function normalizeExplicitVerticalLines(raw) {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const nums = raw.map(Number).filter((n) => Number.isFinite(n));
-  if (nums.length === 0) return null;
-  return [...new Set(nums)].sort((a, b) => a - b);
-}
-
-/**
- * @param {unknown} raw
- * @returns {number[] | null} sorted ascending y-coordinates, or null when empty/invalid
- */
-function normalizeExplicitHorizontalLines(raw) {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const nums = raw.map(Number).filter((n) => Number.isFinite(n));
   if (nums.length === 0) return null;
@@ -119,14 +106,15 @@ export function getLatestLearnableTemplate(profile) {
 }
 
 /**
- * Merge both vertical and horizontal explicit lines from template into mapping.
- * @param {object} template
- * @returns {object}
+ * Merge template-level explicitVerticalLines into the mapping when the mapping
+ * lacks them (covers templates persisted before the field existed).
+ * explicitHorizontalLines are intentionally NOT applied on load —
+ * they are rescue-specific and must never persist into verified templates.
+ * @param {object} template — template subdocument
+ * @returns {object} mapping clone with explicitVerticalLines attached
  */
 function withTemplateExplicitLines(template) {
-  let mapping = withTemplateExplicitVerticalLines(template);
-  mapping = withTemplateExplicitHorizontalLines(template);
-  return mapping;
+  return withTemplateExplicitVerticalLines(template);
 }
 
 /**
@@ -141,22 +129,6 @@ function withTemplateExplicitVerticalLines(template) {
     normalizeExplicitVerticalLines(template.explicitVerticalLines);
   if (lines) {
     mapping.explicitVerticalLines = lines;
-  }
-  return mapping;
-}
-
-/**
- * Merge template-level explicitHorizontalLines into the mapping when the mapping
- * lacks them (covers templates persisted before the field existed).
- * @param {object} template — template subdocument
- * @returns {object} mapping clone with explicitHorizontalLines attached
- */
-function withTemplateExplicitHorizontalLines(template) {
-  const mapping = { ...template.mapping };
-  const lines = normalizeExplicitHorizontalLines(mapping.explicitHorizontalLines) ||
-    normalizeExplicitHorizontalLines(template.explicitHorizontalLines);
-  if (lines) {
-    mapping.explicitHorizontalLines = lines;
   }
   return mapping;
 }
