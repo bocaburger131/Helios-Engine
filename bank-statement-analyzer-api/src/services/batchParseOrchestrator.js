@@ -35,6 +35,7 @@ import {
   extractTypeBTextFromBuffer,
   shouldRejectStoredMongoTemplate
 } from './extraction/templateDigitalValidator.js';
+import { detectBankName, fastPage1Text } from '../utils/bankDetector.js';
 import { shouldReuseLayoutWithoutGemini } from './extraction/layoutFingerprintService.js';
 import { triageLayoutMismatch, createRelationship } from './institutionTriageService.js';
 import {
@@ -722,12 +723,21 @@ async function localReparseAllInGroup(stmts, layoutTemplate, ctx) {
   for (const stmt of stmts) {
     if (!stmt.fileBuffer) continue;
     try {
+      // ── Step 1: Fast pre-parse Page 1 text for bank detection ──
+      const page1Text = await fastPage1Text(stmt.fileBuffer);
+      const detectedBank = detectBankName(page1Text);
+      const effectiveBankName = detectedBank.bankName || stmt.bankName || 'generic';
+
+      if (detectedBank.confidence === 'HIGH' || detectedBank.bankName !== 'generic') {
+        stmt.bankName = effectiveBankName;
+      }
+
       const parseResult = await parserService.parseStatement(stmt.fileBuffer, {
         ...finalAnchorData,
         layoutTemplate,
         correlationId,
         fileName: stmt.fileName,
-        bankName: stmt.bankName,
+        bankName: effectiveBankName,
         suppressWaterfallDetailLogs: true
       });
       if (!parseResult?.success) continue;

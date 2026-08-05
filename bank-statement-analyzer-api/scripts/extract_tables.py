@@ -3,7 +3,7 @@
 Spatial table extraction for bank statements (pdfplumber).
 Stdout: single JSON object. Errors: stderr + exit 1.
 Debug telemetry: stderr lines PDFPLUMBER_DEBUG (never stdout).
-Usage: python extract_tables.py <pdf_path> [--bank wells]
+Usage: python extract_tables.py <pdf_path> [--bank generic]
 """
 from __future__ import annotations
 
@@ -2951,7 +2951,7 @@ def extract_wells(pdf_path: str) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract statement tables to JSON")
     parser.add_argument("pdf_path", help="Path to PDF file")
-    parser.add_argument("--bank", default="wells", help="Bank profile (wells)")
+    parser.add_argument("--bank", default="generic", help="Bank profile (generic, wells, regions, chase)")
     parser.add_argument(
         "--column-tolerance", type=float, default=None,
         help="Override column range tolerance (default 10.0). Higher values capture right-aligned amounts earlier."
