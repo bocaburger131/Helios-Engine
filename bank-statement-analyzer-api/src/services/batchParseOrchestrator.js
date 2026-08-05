@@ -728,6 +728,9 @@ async function localReparseAllInGroup(stmts, layoutTemplate, ctx) {
       const detectedBank = detectBankName(page1Text);
       const effectiveBankName = detectedBank.bankName || stmt.bankName || 'generic';
 
+      // ── Step 2: Map detected bank name to profile flag for Python ──
+      const profileFlag = bankNameToProfileFlag(effectiveBankName);
+
       if (detectedBank.confidence === 'HIGH' || detectedBank.bankName !== 'generic') {
         stmt.bankName = effectiveBankName;
       }
@@ -757,6 +760,18 @@ async function localReparseAllInGroup(stmts, layoutTemplate, ctx) {
       logger.warn(`[BATCH_ORCHESTRATOR] Local re-parse error ${stmt.fileName}: ${e.message}`);
     }
   }
+}
+
+/**
+ * Map a detected bank name to the profile flag used by extract_tables.py --bank.
+ * Mirrors bankSlug() in pdfPlumberService.js.
+ */
+function bankNameToProfileFlag(bankName) {
+  const n = String(bankName || '').toLowerCase();
+  if (/wells/.test(n)) return 'wells';
+  if (/regions/.test(n)) return 'regions';
+  if (/chase|jpmorgan/.test(n)) return 'chase';
+  return 'generic';
 }
 
 async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
