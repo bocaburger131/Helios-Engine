@@ -1,0 +1,36 @@
+fileName,bankName,status,checksumPass,txnCount,droppedRows,uncertainAssignments,openingBalance,closingBalance,extractionStrategy,elapsedMs
+test/09_24 Civista Bank-2395.pdf,generic,failed,false,0,0,0,,,none,1804
+test/09_24 Westfield Bank-4127.pdf,generic,failed,false,0,0,0,,,none,1783
+test/09_24 Westfield Bank-9237.pdf,generic,failed,false,0,0,0,,,none,2064
+test/10_24 Civista Bank-2395.pdf,generic,failed,false,0,0,0,,,none,1678
+test/10_24 Westfield Bank-4127 .pdf,generic,failed,false,0,0,0,,,none,1750
+test/10_24 Westfield Bank-9237.pdf,generic,failed,false,0,0,0,,,none,1756
+test/11_24 Civista Bank-2395.pdf,generic,failed,false,0,0,0,,,none,2260
+test/11_24 Westfield Bank-4127.pdf,generic,failed,false,0,0,0,,,none,1840
+test/11_24 Westfield Bank-9237.pdf,generic,failed,false,0,0,0,,,none,1738
+test/Armani Food 25.pdf,generic,success,false,250,0,0,2856.12,581.63,text+words_retry,3989
+test/Armani Food Feb 25.pdf,generic,success,false,226,0,0,3684.3,-608.74,text+words_retry,3409
+test/Armani Food Jan 25.pdf,generic,success,false,244,0,0,581.63,3684.3,text+words_retry,3857
+test/Armani food mart - 19-Mar-2025 11_49_27.pdf,generic,failed,false,0,0,0,,,words_retry,2101
+test/PREMIER FITNESS BANK STMTS/BANK STMT APR - 9470.pdf,generic,success,false,136,0,0,15190.51,10040.61,words_retry,2763
+test/PREMIER FITNESS BANK STMTS/BANK STMT AUG  - 9470.pdf,generic,success,false,134,0,0,39414.94,18097.46,words_retry,2706
+test/PREMIER FITNESS BANK STMTS/BANK STMT DEC 2023 - 9470.pdf,generic,success,false,138,0,0,5757.53,14794.17,words_retry,2646
+test/PREMIER FITNESS BANK STMTS/BANK STMT FEB - 9470.pdf,generic,success,false,128,0,0,17238.53,24873.58,words_retry,2636
+test/PREMIER FITNESS BANK STMTS/BANK STMT JAN - 9470.pdf,generic,success,false,145,0,0,14794.17,17238.53,words_retry,2662
+test/PREMIER FITNESS BANK STMTS/BANK STMT JULY - 9470.pdf,generic,success,false,140,0,0,26062.49,39414.94,words_retry,2721
+test/PREMIER FITNESS BANK STMTS/BANK STMT JUNE - 9470.pdf,generic,success,false,133,0,0,50256.27,26062.49,words_retry,2577
+test/PREMIER FITNESS BANK STMTS/BANK STMT MAR  - 9470.pdf,generic,success,false,184,0,0,24873.58,15190.51,words_retry,3017
+test/PREMIER FITNESS BANK STMTS/BANK STMT MAY - 9470.pdf,generic,success,false,132,0,0,10040.61,50256.27,words_retry,2833
+test/PREMIER FITNESS BANK STMTS/BANK STMT NOV - 9470.pdf,generic,success,false,139,0,0,18784.86,3960.9,words_retry,2694
+test/PREMIER FITNESS BANK STMTS/BANK STMT OCT - 9470.pdf,generic,success,false,137,0,0,30665.08,18784.86,words_retry,2519
+test/PREMIER FITNESS BANK STMTS/BANK STMT SEP - 9470.pdf,generic,success,false,135,0,0,18097.46,30665.08,words_retry,3104
+"test/PREMIER FITNESS BANK STMTS/Premier Fitness, LLC - 23-Dec-2024 11_20_49.pdf",generic,failed,false,0,0,0,,,words_retry,2430
+test/armani foods/Armani Food 25.pdf,generic,success,false,250,0,0,2856.12,581.63,text+words_retry,3946
+test/armani foods/Armani Food Feb 25.pdf,generic,success,false,226,0,0,3684.3,-608.74,text+words_retry,3889
+test/armani foods/Armani Food Jan 25.pdf,generic,success,false,244,0,0,581.63,3684.3,text+words_retry,3988
+test/armani foods/Armani food mart - 19-Mar-2025 11_49_27.pdf,generic,failed,false,0,0,0,,,words_retry,2058
+test/data/05-versions-space.pdf,generic,failed,false,0,0,0,,,unknown,1726
+test/integration/fixtures/sample-bank-statement.pdf,generic,failed,false,0,0,0,,,unknown,1807
+test/statement-1752564431032.pdf,generic,failed,false,0,0,0,,,words_retry,1597
+test/statement-1752564735037.pdf,generic,failed,false,0,0,0,,,words_retry,1930
+test/statement-1752600448180.pdf,generic,failed,false,0,0,0,,,words_retry,1799
