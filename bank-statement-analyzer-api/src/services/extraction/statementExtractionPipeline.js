@@ -36,7 +36,11 @@ export async function runStatementExtractionPipeline(ctx) {
 
   let extracted;
   try {
-    if (profile.id === 'generic_digital' || profile.id === 'chase_business_complete') {
+    if (
+      profile.id === 'generic_digital' ||
+      profile.id === 'chase_business_complete' ||
+      profile.id === 'regions_business_checking'
+    ) {
       extracted = await profile.extract(ctx);
     } else {
       extracted = await profile.extract({

@@ -502,7 +502,8 @@ def column_roles(header: list[str]) -> dict[str, int | None]:
 
 
 CHASE_ROW_AMOUNT_CAP = 250_000.0
-ROUTING_BLEED_RE = re.compile(r"\b\d{9,}\b")
+ROUTING_BLEED_RE = re.compile(r"\b\d{8,}\b")
+NOISE_DESC_RE = re.compile(r"^\d{1,4}(\s+\d{1,4}){0,3}$")
 
 # ── Evidence capture (AI rescue sidecar) ────────────────────────────────────
 _DROPPED_ROWS: list[dict[str, Any]] = []
@@ -878,6 +879,17 @@ def emit_transaction_row(
         record_dropped_row(
             page=page,
             drop_reason="routing_bleed",
+            amount=amount,
+            date=date,
+            description=desc,
+            words=raw_cells,
+        )
+        return
+    # Daily-balance grid bleed often lands as short numeric noise ("37 37").
+    if NOISE_DESC_RE.match(desc) and amount > 1_000:
+        record_dropped_row(
+            page=page,
+            drop_reason="noise_desc",
             amount=amount,
             date=date,
             description=desc,

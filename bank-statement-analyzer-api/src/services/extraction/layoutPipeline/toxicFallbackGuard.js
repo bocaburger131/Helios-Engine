@@ -7,7 +7,8 @@ import logger from '../../../utils/logger.js';
 
 export const STRICT_PROFILE_IDS = Object.freeze([
   'wells_initiate_checking',
-  'chase_business_complete'
+  'chase_business_complete',
+  'regions_business_checking'
 ]);
 
 /**
