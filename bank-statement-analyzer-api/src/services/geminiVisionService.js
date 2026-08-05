@@ -645,6 +645,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const rtn = String(options.rtn || '').replace(/\D/g, '');
   const bankName = String(options.bankName || '').trim();
+  const rescueHints = options.rescueHints || null;
   const logBase = {
     domain: 'gemini-vision',
     rtn: rtn || null,
@@ -676,6 +677,17 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const routingLine = rtn ? `Routing context (ABA): ${rtn}` : 'Routing context: unknown';
 
+  let rescueHintBlock = '';
+  if (rescueHints && (rescueHints.verticalLines?.length || rescueHints.anchors?.length)) {
+    const vLines = rescueHints.verticalLines?.length
+      ? rescueHints.verticalLines.join(', ')
+      : 'none';
+    const anchors = rescueHints.anchors?.length
+      ? rescueHints.anchors.join(', ')
+      : 'none';
+    rescueHintBlock = `\n\nHISTORICAL CONTEXT HINT: In previous successful parses for this institution, the vertical column boundaries were located at X-coordinates: [${vLines}], and the data tables were located near these text anchors: [${anchors}]. Use these as a strong baseline to guide your extraction for this document.`;
+  }
+
     // Pre-process: remove noise, detect sections (Marker-style scope reduction)
     const digitalTextExcerpt = String(options.digitalTextExcerpt || '').trim();
     let excerptBlock = '';
@@ -693,7 +705,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
       }
     }
   const primaryParts = [
-    { text: `${VISION_USER_SCHEMA}\n\n${routingLine}${excerptBlock}` },
+    { text: `${VISION_USER_SCHEMA}\n\n${routingLine}${rescueHintBlock}${excerptBlock}` },
     {
       inlineData: {
         mimeType: 'application/pdf',
