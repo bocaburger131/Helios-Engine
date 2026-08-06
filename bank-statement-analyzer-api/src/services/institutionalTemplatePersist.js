@@ -163,6 +163,23 @@ export async function graduationTemplate(bankName, explicitVerticalLines, header
 }
 
 /**
+ * Look up a VERIFIED template for a given bank name.
+ * @param {string} bankName
+ * @returns {Promise<object|null>} the VERIFIED template doc, or null
+ */
+export async function getVerifiedTemplate(bankName) {
+  if (!bankName) return null;
+
+  const profile = await InstitutionalProfile.findOne({
+    legalName: bankName
+  }).lean();
+
+  if (!profile || !profile.templates) return null;
+
+  return profile.templates.find((t) => t.status === 'VERIFIED') ?? null;
+}
+
+/**
  * @param {unknown} raw
  * @returns {number[] | null} sorted ascending x-coordinates, or null when empty/invalid
  */
@@ -230,4 +247,4 @@ function withTemplateExplicitVerticalLines(template) {
   return mapping;
 }
 
-export default { persistLearningTemplate, getLatestLearnableTemplate, graduationTemplate, isRescueStatus };
+export default { persistLearningTemplate, getLatestLearnableTemplate, graduationTemplate, isRescueStatus, getVerifiedTemplate };

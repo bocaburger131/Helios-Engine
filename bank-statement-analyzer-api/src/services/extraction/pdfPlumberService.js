@@ -1,6 +1,7 @@
 import path from 'node:path';
 import logger from '../../utils/logger.js';
 import { normalizePlumberJson } from './plumberRowNormalizer.js';
+import { getVerifiedTemplate } from './institutionalTemplatePersist.js';
 import {
   API_ROOT,
   parseStdoutJson,
@@ -172,12 +173,35 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
   const scriptPath = resolveScriptPath();
   const slug = bankSlug(options.bankName);
 
+  // Graduation lookup: if a VERIFIED template exists for this bank,
+  // use its deterministic structural metadata instead of the generic guesser.
+  let verifiedVLines = null;
+  try {
+    const verified = await getVerifiedTemplate(options.bankName);
+    if (verified) {
+      verifiedVLines = normalizeExplicitVerticalLines(
+        verified?.explicitVerticalLines
+      );
+      logger.info('[PDF_PLUMBER] graduated template found', {
+        bankName: options.bankName,
+        slug,
+        vLineCount: verifiedVLines?.length ?? 0
+      });
+    }
+  } catch (dbErr) {
+    logger.warn('[PDF_PLUMBER] graduation lookup failed, using fallback', {
+      bankName: options.bankName,
+      err: dbErr.message
+    });
+  }
+
   const scriptArgs = ['--bank', slug];
     if (options.__columnTolerance != null) {
       scriptArgs.push('--column-tolerance', String(options.__columnTolerance));
     }
     // Template-learned column breaks → pdfplumber explicit vertical strategy.
-    const explicitLines = normalizeExplicitVerticalLines(options.explicitVerticalLines);
+    // Prefer VERIFIED template lines over runtime options when available.
+    const explicitLines = verifiedVLines ?? normalizeExplicitVerticalLines(options.explicitVerticalLines);
     if (explicitLines) {
       scriptArgs.push('--explicit-vertical-lines', JSON.stringify(explicitLines));
     }
