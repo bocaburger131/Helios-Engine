@@ -27,6 +27,8 @@ import { clearVisionLayoutCacheForRtn } from './visionLayoutCacheService.js';
 import { setBatchProgress } from './batchProgressStore.js';
 import {
   persistLearningTemplate,
+  graduationTemplate,
+  isRescueStatus,
   getLatestLearnableTemplate
 } from './institutionalTemplatePersist.js';
 import { isDigitalPdfMode } from './extraction/extractionModeRouter.js';
@@ -45,6 +47,12 @@ import {
 import { isLedgerInflow } from '../utils/transactionNormalization.js';
 import { analyzeMismatch } from './aiDiagnosticService.js';
 import { applyDiagnosticCorrection } from '../utils/checksumAutoCorrection.js';
+import {
+  classifyRescueItems,
+  dispatchRescueBatches,
+  applyRepairs,
+  RESCUE_MODES
+} from './extraction/aiRescueDispatcher.js';
 
 /** Strict integrity gate — not overridable below 0.8 via env. */
 export const MACRO_CHECKSUM_MIN_OK_RATIO = 0.8;
@@ -623,6 +631,105 @@ async function tryPdfPlumberRescue(stmt, ctx) {
 }
 
 /**
+ * AI Rescue Dispatcher: invoke the rescue infrastructure when checksum
+ * fails after deterministic extraction. Collects evidence from the
+ * statement, classifies rescue items, dispatches to the AI, and
+ * applies repairs. Returns repaired transactions or null.
+ */
+async function runAiRescueDispatcher(stmt, ctx) {
+  const { effectiveRtn, correlationId } = ctx;
+
+  // Collect evidence from the statement's parse result
+  const pr = stmt.parseResult || {};
+  const evidence = {
+    droppedRows: pr.dropped_rows || [],
+    uncertainAssignments: pr.uncertain_assignments || [],
+    transactions: stmt.transactions || [],
+    fullText: pr.metadata?.fullText || '',
+    rawWordRows: pr.raw_word_rows || [],
+    checkSummary: stmt.checksumRecon || {},
+  };
+
+  // Classify rescue items into batches
+  const { batches, modeCounts } = classifyRescueItems(evidence);
+  const hasWork = Object.values(modeCounts).some((c) => c > 0);
+  if (!hasWork) {
+    logger.info('[BATCH_ORCHESTRATOR] AI rescue skipped — no classified items', {
+      fileName: stmt.fileName,
+      modeCounts,
+    });
+    return null;
+  }
+
+  logger.info('[BATCH_ORCHESTRATOR] AI rescue dispatching', {
+    fileName: stmt.fileName,
+    modeCounts,
+    txnCount: evidence.transactions.length,
+    droppedRows: evidence.droppedRows.length,
+    uncertainAssignments: evidence.uncertainAssignments.length,
+  });
+
+  // Build AI client using the existing Gemini infrastructure
+  const aiClient = {
+    runRescue: async ({ system, user }) => {
+      const apiKey = resolveLlmApiKey();
+      if (!apiKey) throw new Error('No LLM API key');
+      const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      const result = await model.generateContent([system, user]);
+      return result.response.text();
+    },
+  };
+
+  const context = {
+    existingTxns: evidence.transactions,
+    pageWords: evidence.rawWordRows,
+    bankName: stmt.bankName,
+    printedDeposits: stmt.checksumDeltaProbe?.printedTotals,
+    printedWithdrawals: stmt.checksumDeltaProbe?.printedTotals,
+  };
+
+  let repairs, stats;
+  try {
+    ({ repairs, stats } = await dispatchRescueBatches(batches, aiClient, context));
+  } catch (e) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue dispatch failed', {
+      fileName: stmt.fileName,
+      error: e.message
+    });
+    return null;
+  }
+
+  if (!repairs.length) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue returned no accepted repairs', {
+      fileName: stmt.fileName,
+      stats,
+    });
+    return null;
+  }
+
+  let repaired;
+  try {
+    repaired = applyRepairs(evidence.transactions, repairs);
+  } catch (e) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue applyRepairs failed', {
+      fileName: stmt.fileName,
+      error: e.message
+    });
+    return null;
+  }
+  logger.info('[BATCH_ORCHESTRATOR] AI rescue applied repairs', {
+    fileName: stmt.fileName,
+    repairsApplied: repairs.length,
+    repairedTxnCount: repaired.length,
+    stats,
+  });
+
+  return repaired;
+}
+
+/**
  * Per-file rescue: pdfplumber spatial tables first, then Gemini row extraction.
  */
 async function escalateMisalignedFile(stmt, ctx) {
@@ -649,6 +756,36 @@ async function escalateMisalignedFile(stmt, ctx) {
   if (aiDiagnosticRescueEnabled()) {
     stmt.templateCoordinateStatus = bleed ? 'BLEED_DIAGNOSTIC' : 'MISALIGNED_DIAGNOSTIC';
     return runDiagnosticRescue(stmt, { identitySources, effectiveRtn, correlationId });
+  }
+
+  // ── AI Rescue Dispatcher (Phase 2) ──
+  // If deterministic rescue failed, try the AI rescue dispatcher
+  // (ROW_MERGE, COLUMN_REMAP, DROP_REVIEW, RAW_LEDGER) before
+  // falling back to brute-force Gemini row extraction.
+  const aiRescued = await runAiRescueDispatcher(stmt, ctx);
+  if (aiRescued && aiRescued.length > 0) {
+    // Snapshot full state before rescue so we can roll back if it fails
+    const snap = snapshotStatementParse(stmt);
+    // Replace transactions with rescued rows and re-run checksum validation
+    stmt.transactions = aiRescued;
+    const rescuedRecon = applyParseQualityPipeline(stmt, identitySources);
+    if (rescuedRecon?.checksumRecon?.ok) {
+      logger.info('[BATCH_ORCHESTRATOR] AI rescue PASSED checksum', {
+        fileName: stmt.fileName,
+        txnCount: effectiveTxnCount(stmt),
+        deposits: effectiveDeposits(stmt),
+        printedDeposits: printedTotalDeposits(stmt)
+      });
+      stmt.templateCoordinateStatus = 'AI_RESCUE_PASSED';
+      return true;
+    }
+    // Restore full state — rescue did not fix the checksum
+    restoreStatementParse(stmt, snap);
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue did not fix checksum', {
+      fileName: stmt.fileName,
+      parseQuality: stmt.parseQuality,
+      checksumOk: stmt.checksumRecon?.ok
+    });
   }
 
   if (!resolveLlmApiKey()) {
@@ -1148,6 +1285,28 @@ export async function enhanceBatchParsesWithTeacher(parsedStatements, ctx = {}) 
           validationTiers: stmt.validationReport?.forensicMetadata?.validationTiers
         }
       });
+    }
+  }
+
+  // Graduation Logic: when a statement passes checksum via dynamic/rescue
+  // boundaries, automatically hardcode its structural metadata as a VERIFIED template.
+  for (const stmt of parsedStatements) {
+    if (stmt.checksumRecon?.ok && isRescueStatus(stmt.templateCoordinateStatus)) {
+      const groupKey = layoutGroupKey(stmt);
+      const layoutMapping = layoutByKey?.get(groupKey);
+      try {
+        await graduationTemplate(
+          stmt.bankName,
+          layoutMapping?.explicitVerticalLines,
+          layoutMapping?.headerAnchors
+        );
+        logger.info(`Graduated ${stmt.bankName} to VERIFIED profile.`);
+      } catch (gradErr) {
+        logger.warn(
+          `[GRADUATION] Failed to graduate ${stmt.bankName}: ${gradErr.message}`,
+          { err: gradErr }
+        );
+      }
     }
   }
 
