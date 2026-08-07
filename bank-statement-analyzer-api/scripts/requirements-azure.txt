@@ -1,0 +1,2 @@
+# Azure Document Intelligence sidecar (scripts/azure_docintel_extract.py)
+azure-ai-documentintelligence>=1.0.0,<2.0.0

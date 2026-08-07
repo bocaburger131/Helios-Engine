@@ -198,6 +198,62 @@ npm run dev
 - **Compliance Alerts**: OFAC screening, high-volume activity
 - **Pattern Alerts**: Unusual timing, suspicious amounts
 
+## 🔍 Azure Document Intelligence parser (experimental)
+
+An **additive** alternative to the pdfplumber extraction sidecar, backed by Azure's
+`prebuilt-bankStatement.us` model. It is not wired into the pipeline — the existing
+Marker/pdfplumber + Gemini path is unchanged — so it can be evaluated on its own.
+
+### Setup
+
+```bash
+pip install -r scripts/requirements-azure.txt
+
+export AZURE_DOCINTEL_ENDPOINT="https://<your-resource>.cognitiveservices.azure.com/"
+export AZURE_DOCINTEL_KEY="<your-resource-key>"
+```
+
+Both variables are read from the environment only; keys are never passed as arguments.
+
+### Run the parser in isolation
+
+`scripts/run_azure_parser.py` runs *only* the Azure adapter — no header detection, no
+row gating, no categorization, no review workflow. Normalized JSON goes to stdout and a
+diagnostics summary (timing, page/account counts, credit/debit totals, reconcile delta)
+goes to stderr.
+
+```bash
+# Print normalized JSON + diagnostics
+python scripts/run_azure_parser.py /path/to/statement.pdf
+
+# Save the JSON for a side-by-side comparison against the current parser
+python scripts/run_azure_parser.py /path/to/statement.pdf --bank wells --out azure.json
+python scripts/extract_tables.py   /path/to/statement.pdf --bank wells > plumber.json
+```
+
+### Swapping it into the pipeline
+
+`scripts/azure_docintel_extract.py` deliberately mirrors `scripts/extract_tables.py` —
+same CLI signature (`<file_path> [--bank <slug>]`) and same stdout JSON shape
+(`transactions[] / openingBalance / closingBalance / metadata`). To A/B it against the
+current engine without a code change, point the sidecar at it:
+
+```bash
+PDFPLUMBER_SCRIPT=scripts/azure_docintel_extract.py npm run dev
+```
+
+Transaction rows are emitted with positive amounts and a `CREDIT`/`DEBIT` type, so
+`plumberRowNormalizer.js` applies signs exactly as it does for pdfplumber output.
+
+### Tests
+
+Mocked Azure responses — no SDK install and no live credentials required.
+
+```bash
+npm run test:azure-parser
+# or: python -m unittest discover -s tests/python -v
+```
+
 ## 🧪 Testing
 
 ### Run Tests

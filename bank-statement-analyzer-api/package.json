@@ -47,7 +47,8 @@
     "seed:demo": "node scripts/seed-default-user.mjs",
     "check-env": "node scripts/check-env.js",
     "redis:clear-vision": "node scripts/redis-clear-vision-layout.mjs --rtn 062000080",
-    "smoke:golden-path": "node scripts/smoke-golden-path.mjs"
+    "smoke:golden-path": "node scripts/smoke-golden-path.mjs",
+    "test:azure-parser": "python -m unittest discover -s tests/python -v"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
