@@ -3,7 +3,7 @@
 export type ChatMessage = {
   id: string;
   html: string;
-  variant: "system" | "success" | "warning" | "error" | "deal";
+  variant: "system" | "success" | "warning" | "error" | "deal" | "hitl";
 };
 
 const VARIANT_CLASS: Record<ChatMessage["variant"], string> = {
@@ -12,6 +12,7 @@ const VARIANT_CLASS: Record<ChatMessage["variant"], string> = {
   warning: "chat-bubble chat-bubble--warning",
   error: "chat-bubble chat-bubble--error",
   deal: "chat-bubble chat-bubble--deal",
+  hitl: "chat-bubble chat-bubble--hitl",
 };
 
 type Props = {

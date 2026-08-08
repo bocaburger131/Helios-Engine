@@ -24,10 +24,14 @@ Analysis Requirements:
 
 Header Anchors: Identify exact printed strings marking the start and end of transaction regions. For Wells Fargo / Initiate Business Checking, the activity block is usually under "Transaction history" and ends before "Daily balance summary" or "Interest summary" — do NOT anchor only to a one-line summary on page 2.
 
+Account Boundaries (REQUIRED for multi-account PDFs): Strictly segment by account. If the PDF contains more than one account (e.g. Business Checking + Savings, or multiple checking numbers), list each in accountSegments[] with its own start/end anchors and do NOT let one account's rows bleed into another's. Prefer the primary operating account for headerAnchors/vitals when multiple exist; still enumerate every account segment.
+
 Multi-Table (REQUIRED for commercial statements): Commercial PDFs contain MULTIPLE transaction tables across many pages. You MUST list ALL of them in transactionSections[], each with its own start/end anchor pair. Examples:
 - Regions: Electronic Deposits, Electronic Withdrawals, Checks Cleared, Bank Fees, Service Charges
 - Wells Fargo: sections under Transaction history (deposits/credits block, withdrawals/debits block, fees, checks paid, card activity, etc.)
 Never return only the first sub-table or a 2–5 row sample — if the statement spans 10+ pages of activity, your transactionSections must cover the full activity span (use the broadest start anchor such as "Transaction history" and section-specific headers for each sub-table).
+
+Secondary mini-ledgers (REQUIRED when present): Service Fees / Service Charges, Interest / Interest summary detail rows, and Returned Items / NSF / Overdraft fee tables are ACTIVITY to extract — not merely stop-anchors for the main history block. Include each mini-ledger as its own transactionSections[] entry so rows can be appended to the primary activity set. Do not skip fee/interest/returned-item ledgers just because they sit after "Transaction history".
 
 Column Mapping: Determine the horizontal order (0-indexed) of Date, Description, Amount, and Balance. For DEBIT_CREDIT_SEPARATE layouts, include debitIdx and creditIdx column indices.
 
@@ -50,17 +54,24 @@ export const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, n
   "mathPattern": "MINUS_PREFIX",
   "confidenceScore": 0.85,
   "vitals": { "currency": "USD", "dateFormat": "MM/DD/YYYY", "openingBalance": 1234.56, "closingBalance": 5678.90 },
+  "accountSegments": [
+    { "label": "Business Checking …1234", "accountNumberLast4": "1234", "start": "Account number: 1234", "end": "Account number: 5678" }
+  ],
   "transactionSections": [
     { "label": "Transaction history (all activity)", "start": "Transaction history", "end": "Daily balance summary" },
     { "label": "Electronic Deposits", "start": "ELECTRONIC DEPOSITS", "end": "Total deposits" },
     { "label": "Electronic Withdrawals", "start": "ELECTRONIC WITHDRAWALS", "end": "Total withdrawals" },
-    { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" }
+    { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" },
+    { "label": "Service Fees", "start": "Service fee summary", "end": "Total service fees" },
+    { "label": "Interest", "start": "Interest summary", "end": "Total interest paid" },
+    { "label": "Returned Items / NSF", "start": "Returned item", "end": "Total returned items" }
   ]
 }
 
 Rules:
-- transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, card, ACH, etc.).
-- headerAnchors.start/end should span the full activity region; per-table sections use narrower start/end pairs.
+- accountSegments is OPTIONAL. When the PDF has multiple accounts, list each account with exact start/end anchors so extraction does not bleed across accounts.
+- transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, interest, returned items/NSF, card, ACH, etc.). Mini-ledgers are activity sections, not stop-anchors only.
+- headerAnchors.start/end should span the full primary-account activity region; per-table sections use narrower start/end pairs.
 - Each start/end string must be copied exactly from the PDF (case and spacing matter).
 - mathPattern must be exactly one of: MINUS_PREFIX, PARENTHESES, DEBIT_CREDIT_SEPARATE.
 - For DEBIT_CREDIT_SEPARATE, debitIdx and creditIdx are required in columnMapping.
@@ -98,6 +109,19 @@ const LAYOUT_JSON_SCHEMA = {
         dateFormat: { type: 'string' },
         openingBalance: { type: 'number', nullable: true },
         closingBalance: { type: 'number', nullable: true }
+      }
+    },
+    accountSegments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          accountNumberLast4: { type: 'string' },
+          start: { type: 'string' },
+          end: { type: 'string' }
+        },
+        required: ['start']
       }
     },
     transactionSections: {

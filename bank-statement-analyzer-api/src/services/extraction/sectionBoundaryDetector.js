@@ -13,27 +13,32 @@
  * @property {string} label        — The matched section header text
  * @property {number} startLine    — 0-indexed line number where section begins
  * @property {number} endLine      — 0-indexed line number where section ends
- * @property {string} type         — deposits | withdrawals | checks | fees | summary | unknown
+ * @property {string} type         — deposits | withdrawals | checks | fees | interest | returned_items | account | summary | unknown
  */
 
 // Section header detection: all-caps lines, 3–40 chars, possibly followed by header-like patterns
 const SECTION_HEADER_RE = /^[A-Z0-9\s&\/\-]{3,40}$/;
 
-// Section type classifiers
+// Section type classifiers (more specific types before generic fees/summary)
 const SECTION_PATTERNS = [
-  { type: 'deposits',   re: /deposits?\s*(?:and|\&|\/)?\s*credits?|credits?\s*only|electronic\s+deposits?\s*$/i },
-  { type: 'withdrawals', re: /withdrawals?|debits?\s*only|electronic\s+(?:debits?|withdrawals)|atm\s+(?:withdrawals?|debits?)|ach\s+(?:debits?|withdrawals)/i },
-  { type: 'checks',     re: /checks?\s*(?:paid|cleared|presented|written|posted)/i },
-  { type: 'fees',       re: /fees?|service\s+charges?|account\s+fees?|monthly\s+fees?/i },
-  { type: 'summary',    re: /(?:daily\s+)?balance\s+summary|statement\s+summary|totals?|ending\s+balance|closing\s+balance|activity\s+summary/i },
+  { type: 'account',         re: /^(?:account\s+(?:number|summary|activity)|checking\s+account|savings\s+account|business\s+checking|business\s+savings|primary\s+account)\b/i },
+  { type: 'returned_items',  re: /returned\s+items?|nsf|non[\s-]?sufficient\s+funds|overdraft\s+(?:items?|fees?|protection)/i },
+  { type: 'interest',        re: /interest\s+(?:summary|paid|earned|credit)|interest\s+detail/i },
+  { type: 'deposits',        re: /deposits?\s*(?:and|\&|\/)?\s*credits?|credits?\s*only|electronic\s+deposits?\s*$/i },
+  { type: 'withdrawals',     re: /withdrawals?|debits?\s*only|electronic\s+(?:debits?|withdrawals)|atm\s+(?:withdrawals?|debits?)|ach\s+(?:debits?|withdrawals)/i },
+  { type: 'checks',          re: /checks?\s*(?:paid|cleared|presented|written|posted)/i },
+  { type: 'fees',            re: /fees?|service\s+(?:charges?|fees?)|account\s+fees?|monthly\s+fees?|bank\s+fees?/i },
+  { type: 'summary',         re: /(?:daily\s+)?balance\s+summary|statement\s+summary|totals?|ending\s+balance|closing\s+balance|activity\s+summary/i },
 ];
 
 // Sub-section patterns (often nested within broader transaction sections)
 const SUB_SECTION_PATTERNS = [
-  { type: 'deposits',   re: /deposits?\s*(?:and|\&|\/)?\s*(?:other\s+)?credits?|credits/i },
-  { type: 'withdrawals', re: /(?:other\s+)?withdrawals|debits|electronic\s+debits/i },
-  { type: 'checks',     re: /checks?\s+paid|checks?\s+cleared/i },
-  { type: 'fees',       re: /service\s+charges?\s*$|bank\s+fees?/i },
+  { type: 'deposits',        re: /deposits?\s*(?:and|\&|\/)?\s*(?:other\s+)?credits?|credits/i },
+  { type: 'withdrawals',     re: /(?:other\s+)?withdrawals|debits|electronic\s+debits/i },
+  { type: 'checks',          re: /checks?\s+paid|checks?\s+cleared/i },
+  { type: 'returned_items',  re: /returned\s+items?|nsf/i },
+  { type: 'interest',        re: /interest\s+(?:summary|paid|earned)/i },
+  { type: 'fees',            re: /service\s+charges?\s*$|bank\s+fees?/i },
 ];
 
 /**
@@ -48,7 +53,7 @@ function normalizeHeader(text) {
 /**
  * Classify a section header line into a known type.
  * @param {string} headerText
- * @returns {string} — 'deposits' | 'withdrawals' | 'checks' | 'fees' | 'summary' | 'unknown'
+ * @returns {string} — 'deposits' | 'withdrawals' | 'checks' | 'fees' | 'interest' | 'returned_items' | 'account' | 'summary' | 'unknown'
  */
 function classifySectionType(headerText) {
   const t = normalizeHeader(headerText);
@@ -97,10 +102,13 @@ export function detectSectionBoundaries(text) {
 
   // Pass 2: also check for non-all-caps but well-known section headers
   const relaxedPatterns = [
+    { re: /^\s*(?:Account\s+(?:Number|Summary|Activity)|Checking\s+Account|Savings\s+Account|Business\s+Checking)\s*$/i, type: 'account' },
+    { re: /^\s*(?:Returned\s+Items?|NSF|Non[\s-]?Sufficient\s+Funds|Overdraft\s+(?:Items?|Fees?))\s*$/i, type: 'returned_items' },
+    { re: /^\s*(?:Interest\s+(?:Summary|Paid|Earned|Detail)|Interest)\s*$/i, type: 'interest' },
     { re: /^\s*(?:Deposits?\s*(?:and|\&|\/)?\s*(?:Other\s+)?Credits?|Credits?)\s*$/i,   type: 'deposits' },
     { re: /^\s*(?:Withdrawals?|Debits?|Electronic\s+Debits?|ATM\s+Withdrawals?)\s*$/i,     type: 'withdrawals' },
     { re: /^\s*(?:Checks?\s+(?:Paid|Cleared|Presented|Written)|Checks?)\s*$/i,            type: 'checks' },
-    { re: /^\s*(?:Service\s+Charges?|Bank\s+Fees?|Account\s+Fees?|Fees?)\s*$/i,           type: 'fees' },
+    { re: /^\s*(?:Service\s+(?:Charges?|Fees?)|Bank\s+Fees?|Account\s+Fees?|Fees?)\s*$/i,  type: 'fees' },
     { re: /^\s*(?:Daily\s+Balance\s+Summary|Balance\s+Summary|Statement\s+Summary)\s*$/i, type: 'summary' },
   ];
 

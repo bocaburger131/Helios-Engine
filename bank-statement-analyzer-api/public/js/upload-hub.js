@@ -470,9 +470,39 @@
     const t = state.pendingTriage;
     if (!t) return;
 
-    const files = t.files || [];
+    // Prefer in-memory staged PDFs (Run Analysis often polls with files=[]).
+    const files = (t.files && t.files.length ? t.files : null) || state.stagedFiles || [];
     const preferredName = t.data?.fileName || t.data?.pendingFileName || null;
     const preview = pickPreviewFile(files, preferredName);
+
+    // #region agent log
+    fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '655110' },
+      body: JSON.stringify({
+        sessionId: '655110',
+        runId: 'hitl-preview',
+        hypothesisId: 'B',
+        location: 'upload-hub.js:openInspectorForTriage',
+        message: 'HITL preview attempt',
+        data: {
+          preferredName,
+          triageFileCount: (t.files || []).length,
+          stagedCount: (state.stagedFiles || []).length,
+          hasLocalPreview: Boolean(preview),
+          hasPreviewUrl: Boolean(t.data?.previewUrl),
+          sessionId: t.data?.uploadSessionId || state.lastUploadSessionId || null
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+
+    // Local blob first — fastest and works offline of triage file route.
+    if (preview) {
+      openInspectorWithFile(preview);
+      return;
+    }
 
     try {
       if (t.data?.previewUrl) {
@@ -492,6 +522,20 @@
       }
     } catch (err) {
       console.warn('[UploadHub] Authenticated PDF preview failed:', err);
+      // #region agent log
+      fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '655110' },
+        body: JSON.stringify({
+          sessionId: '655110',
+          hypothesisId: 'A',
+          location: 'upload-hub.js:openInspectorForTriage',
+          message: 'auth preview failed',
+          data: { error: String(err?.message || err) },
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+      // #endregion
     }
 
     if (state.lastResultId) {
@@ -500,11 +544,6 @@
         openInspectorWithUrl(serverUrl);
         return;
       }
-    }
-
-    if (preview) {
-      openInspectorWithFile(preview);
-      return;
     }
 
     appendSystemBubble('Could not load PDF preview.', 'is-error');
@@ -518,11 +557,16 @@
     const bankLabel = data?.detectedBankName
       ? '<br><span style="font-size:0.9em">Detected bank: <strong>' + escapeHtml(data.detectedBankName) + '</strong></span>'
       : '';
+    const attention =
+      '<p style="margin:0 0 8px;font-weight:600;">Action needed: confirm the bank for this statement so analysis can continue.</p>';
     const msg = data?.message
       ? '<p style="margin:0 0 6px;">' + escapeHtml(data.message) + '</p>'
       : '<p style="margin:0 0 6px;"><strong>System clarification required:</strong> Is this a valid bank statement?</p>';
     wrap.innerHTML =
-      msg + fileLabel + bankLabel +
+      attention +
+      msg +
+      fileLabel +
+      bankLabel +
       '<div class="triage-actions">' +
       '<button type="button" class="btn-primary" data-action="yes">Yes, Confirm</button>' +
       '<button type="button" data-action="no">No, Skip</button>' +
@@ -538,9 +582,20 @@
     if (data?.uploadSessionId) {
       state.lastUploadSessionId = data.uploadSessionId;
     }
-    state.pendingTriage = { data, files: files || [], statementId: data.statementId || null };
+    const mergedFiles =
+      (files && files.length ? files : null) || state.stagedFiles || [];
+    state.pendingTriage = {
+      data,
+      files: mergedFiles,
+      statementId: data.statementId || null
+    };
     const bubble = appendSystemBubble('', 'is-warning');
     bubble.appendChild(buildTriageBubble(data));
+    try {
+      bubble.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch {
+      /* ignore */
+    }
     void openInspectorForTriage();
   }
 
@@ -558,6 +613,74 @@
     clearTriage();
     setBusy(false);
     setPrimaryAction(state.lastUploadSessionId ? 'runAnalysis' : 'upload');
+  }
+
+  /**
+   * Checksum / ProcessingRun HITL — distinct from bank-confirmation triage.
+   */
+  function showChecksumHitlBubble(payload, files) {
+    const result = payload.result || {};
+    const fileName =
+      payload.fileName ||
+      result.fileName ||
+      result.reviewPayload?.files?.[0]?.fileName ||
+      (files && files[0] && files[0].name) ||
+      'statement.pdf';
+    const runId = payload.processingRunId || result.processingRunId || null;
+    const statementId = extractStatementId(result) || state.lastResultId;
+    const diagnosis =
+      (payload.diagnosticSummaries && payload.diagnosticSummaries[0]?.diagnosis) ||
+      (result.diagnosticSummaries && result.diagnosticSummaries[0]?.diagnosis) ||
+      'CHECKSUM_MISMATCH';
+
+    if (statementId) state.lastResultId = statementId;
+
+    // Reuse inspector path with staged PDF.
+    state.pendingTriage = {
+      data: {
+        fileName,
+        uploadSessionId: state.lastUploadSessionId,
+        message: 'Checksum reconciliation failed — human review required.'
+      },
+      files: (files && files.length ? files : null) || state.stagedFiles || [],
+      statementId
+    };
+
+    const wrap = document.createElement('div');
+    wrap.innerHTML =
+      '<p style="margin:0 0 8px;font-weight:600;">Action needed: checksum failed — review the ledger totals against the PDF.</p>' +
+      '<p style="margin:0 0 6px;">File: <strong>' +
+      escapeHtml(fileName) +
+      '</strong></p>' +
+      '<p style="margin:0 0 6px;">Diagnosis: <strong>' +
+      escapeHtml(String(diagnosis)) +
+      '</strong></p>' +
+      (runId
+        ? '<p style="margin:0 0 6px;font-size:0.9em">Processing run: <code>' +
+          escapeHtml(String(runId)) +
+          '</code></p>'
+        : '') +
+      '<p style="margin:0 0 10px;font-size:0.9em">The right panel shows the statement. Confirm printed opening/closing/deposits/withdrawals match the extract, then open Results to continue underwriting review.</p>' +
+      '<div class="triage-actions">' +
+      '<button type="button" class="btn-primary" data-action="view">View Document</button>' +
+      (statementId
+        ? '<a class="btn-primary" style="display:inline-block;text-decoration:none;padding:8px 12px;" data-action="results" href="' +
+          escapeHtml(resultsDashboardUrl(statementId, { warnings: true })) +
+          '">Open Results</a>'
+        : '') +
+      '</div>';
+
+    const bubble = appendSystemBubble('', 'is-warning');
+    bubble.appendChild(wrap);
+    try {
+      bubble.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch {
+      /* ignore */
+    }
+    wrap.querySelector('[data-action="view"]')?.addEventListener('click', () => {
+      void openInspectorForTriage();
+    });
+    void openInspectorForTriage();
   }
 
   async function onTriageYes() {
@@ -873,7 +996,7 @@
       return;
     }
 
-    await submitFullBatch([], {
+    await submitFullBatch(state.stagedFiles.slice(), {
       uploadSessionId: state.lastUploadSessionId,
       skipUserBubble: true,
       redirectOnSuccess: true
@@ -965,21 +1088,42 @@
       finalizeUi(false);
     };
 
+    /** @returns {Promise<boolean>} true = keep polling */
     const pollOnce = async () => {
       if (Date.now() - pollStartedAt > MACRO_POLL_MAX_MS) {
         appendSystemBubble('Macro analysis timed out after 30 minutes.', 'is-error');
         finalizeUi(false);
-        return;
+        return false;
       }
 
       try {
         const res = await apiFetch(batchJobEndpoint(jobId));
         const payload = await res.json().catch(() => ({}));
 
+        // #region agent log
+        fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '655110' },
+          body: JSON.stringify({
+            sessionId: '655110',
+            hypothesisId: 'A',
+            location: 'upload-hub.js:pollOnce',
+            message: 'macro job poll tick',
+            data: {
+              httpStatus: res.status,
+              jobStatus: payload.status || null,
+              businessStatus: payload.result?.businessStatus || null,
+              processingRunId: payload.processingRunId || payload.result?.processingRunId || null
+            },
+            timestamp: Date.now()
+          })
+        }).catch(() => {});
+        // #endregion
+
         if (res.status === 401 || res.status === 403) {
           // apiFetch dispatches helios-auth-expired; init onAuthExpired shows session-expired UX.
           finalizeUi(false);
-          return;
+          return false;
         }
 
         if (res.status === 404) {
@@ -988,10 +1132,10 @@
             'is-error'
           );
           finalizeUi(false);
-          return;
+          return false;
         }
 
-        if (!res.ok) return;
+        if (!res.ok) return true;
 
         if (payload.status === 'requires_bank_confirmation') {
           stopAllPolls();
@@ -1010,7 +1154,35 @@
           state.uploading = false;
           els.dropZone.classList.remove('is-busy');
           setPrimaryAction('runAnalysis');
-          return;
+          return false;
+        }
+
+        if (
+          payload.status === 'REQUIRES_HUMAN_REVIEW' ||
+          payload.result?.businessStatus === 'REQUIRES_HUMAN_REVIEW'
+        ) {
+          stopAllPolls();
+          // #region agent log
+          fetch('http://127.0.0.1:7779/ingest/14ba3817-11f8-4e9c-85f8-0a9bab98d3ad', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '655110' },
+            body: JSON.stringify({
+              sessionId: '655110',
+              hypothesisId: 'C',
+              location: 'upload-hub.js:pollOnce',
+              message: 'REQUIRES_HUMAN_REVIEW terminal',
+              data: {
+                processingRunId: payload.processingRunId || payload.result?.processingRunId || null,
+                fileName: payload.fileName || payload.result?.fileName || null,
+                statementId: extractStatementId(payload.result || {})
+              },
+              timestamp: Date.now()
+            })
+          }).catch(() => {});
+          // #endregion
+          showChecksumHitlBubble(payload, files);
+          finalizeUi(false);
+          return false;
         }
 
         if (
@@ -1030,11 +1202,11 @@
             );
             finalizeUi(false);
           }
-          return;
+          return false;
         }
 
         if (payload.status === 'completed') {
-          stopMacroJobPoll();
+          stopAllPolls();
           if (payload.result) {
             handleCompleted(payload.result);
           } else {
@@ -1044,34 +1216,38 @@
             );
             finalizeUi(false);
           }
-          return;
+          return false;
         }
 
         if (payload.status === 'failed') {
-          stopMacroJobPoll();
+          stopAllPolls();
           appendSystemBubble(
             escapeHtml(payload.error || 'Macro analysis failed in background.'),
             'is-error'
           );
           finalizeUi(false);
+          return false;
         }
+
+        return true;
       } catch (err) {
         console.warn('[UploadHub] Macro job poll error:', err);
+        return true;
       }
     };
 
     const scheduleMacroPoll = () => {
       state.macroJobPollTimer = setTimeout(async () => {
         if (!state.macroJobPollTimer) return;
-        await pollOnce();
-        if (state.macroJobPollTimer) {
+        const keepGoing = await pollOnce();
+        if (keepGoing && state.macroJobPollTimer) {
           macroPollInterval = Math.min(macroPollInterval + 2000, 20000);
           scheduleMacroPoll();
         }
       }, macroPollInterval);
     };
-    await pollOnce();
-    scheduleMacroPoll();
+    const keepGoing = await pollOnce();
+    if (keepGoing) scheduleMacroPoll();
   }
 
   async function submitFullBatch(files, options = {}) {

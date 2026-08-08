@@ -1,8 +1,18 @@
 import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_HELIOS_API_URL?.replace(/\/$/, "") ||
-  "http://localhost:3000";
+/**
+ * Helios API origin for browser fetches.
+ * Prefer NEXT_PUBLIC_API_URL; HELIOS alias kept for older env files.
+ * Default matches bank-statement-analyzer-api `.env` PORT=3000.
+ */
+export const API_BASE = (() => {
+  const raw =
+    process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_HELIOS_API_URL;
+  if (raw == null || String(raw).trim() === "") {
+    return "http://localhost:3000";
+  }
+  return String(raw).replace(/\/$/, "");
+})();
 
 export const DASHBOARD_BASE =
   process.env.NEXT_PUBLIC_DASHBOARD_URL?.replace(/\/$/, "") ||

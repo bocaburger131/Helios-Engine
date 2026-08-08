@@ -1551,6 +1551,13 @@ export class PDFParserService {
         }
 
         if (this._isNonTransactionLine(line)) {
+          // Keep open orphan rows across page breaks so amount can land on the next page.
+          if (
+            PDFParserService._isPageMarkerLine(line) &&
+            lastTransaction?._pendingOrphanAmount
+          ) {
+            continue;
+          }
           lastTransaction = null;
           continue;
         }
@@ -1594,6 +1601,42 @@ export class PDFParserService {
           });
           transactions.push(pending);
           lastTransaction = pending;
+
+          // Look-ahead: amount may sit 1–N lines below (often after a page marker).
+          const lookAheadLimit = PDFParserService.ORPHAN_AMOUNT_LOOKAHEAD;
+          for (let ahead = 1; ahead <= lookAheadLimit; ahead += 1) {
+            const nextIdx = index + ahead;
+            if (nextIdx >= lines.length) break;
+            const nextLine = String(lines[nextIdx] || '').trim();
+            if (!nextLine) continue;
+            if (
+              PDFParserService._isPageMarkerLine(nextLine) ||
+              this._looksLikeSectionHeader(nextLine)
+            ) {
+              continue;
+            }
+            if (this._parseDateFromLine(nextLine, effectiveParser, defaultYear)) {
+              break;
+            }
+            const orphanAhead = PDFParserService._parseOrphanAmountLine(nextLine, pending);
+            if (orphanAhead) {
+              Object.assign(
+                pending,
+                stageParsedTransaction({
+                  ...pending,
+                  amount: orphanAhead.amount,
+                  type: orphanAhead.type,
+                  balance: orphanAhead.balance,
+                  rawAmount: orphanAhead.rawAmount
+                })
+              );
+              delete pending._pendingOrphanAmount;
+              lastTransaction = null;
+              index = nextIdx;
+              break;
+            }
+            break;
+          }
         } else if (lastTransaction) {
           const orphan = PDFParserService._parseOrphanAmountLine(line, lastTransaction);
           if (orphan) {
@@ -1627,6 +1670,18 @@ export class PDFParserService {
           Number(t.amount) !== 0
       );
       return dedupeExactFingerprints(finalized);
+  }
+
+  /** Max lines to scan ahead for an orphan amount after date/desc (skips page markers). */
+  static ORPHAN_AMOUNT_LOOKAHEAD = 6;
+
+  /**
+   * Page footer/header markers like "Page 2 of 6" that must not flush pending orphans.
+   * @param {string} line
+   * @returns {boolean}
+   */
+  static _isPageMarkerLine(line) {
+    return /^page\s+\d+(\s+of\s+\d+)?\b/i.test(String(line || '').trim());
   }
 
   /**

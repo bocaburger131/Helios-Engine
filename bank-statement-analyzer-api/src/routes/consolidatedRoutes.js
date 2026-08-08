@@ -18,6 +18,7 @@ import healthRoutes from './healthRoutes.js';
 import metricsRoutes from './metricsRoutes.js';
 import devParseRoutes from './devParseRoutes.js';
 import testingRoutes from './testingRoutes.js';
+import processingRunRoutes from './processingRunRoutes.js';
 // import sosVerificationRoutes from './sosVerificationRoutes.js';
 // import settingsRoutes from './settingsRoutes.js';
 // import monitoringRoutes from './monitoringRoutes.js';
@@ -43,6 +44,7 @@ const router = express.Router();
 // Core API routes
 router.use('/auth', authRoutes);
 router.use('/statements', statementRoutes);
+router.use('/processing-runs', processingRunRoutes);
 // router.use('/transactions', transactionRoutes);
 // router.use('/merchants', merchantRoutes);
 

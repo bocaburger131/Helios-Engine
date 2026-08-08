@@ -1,0 +1,78 @@
+{
+  "adb": {
+    "l3mAverage": 12450.33,
+    "periodDays": 90,
+    "byMonth": [
+      { "month": "2025-01", "adb": 11800, "daysInMonth": 31 },
+      { "month": "2025-02", "adb": 12600, "daysInMonth": 28 },
+      { "month": "2025-03", "adb": 12950.99, "daysInMonth": 31 }
+    ]
+  },
+  "liquidity": {
+    "negativeDayCount": 2,
+    "lowestDailyBalance": -150.25,
+    "daysBelowZero": 2
+  },
+  "nsfAndOverdraft": {
+    "nsfCount": 2,
+    "overdraftCount": 1,
+    "flaggedTransactions": [
+      {
+        "date": "2025-01-12",
+        "amount": -35,
+        "description": "NSF FEE",
+        "riskTag": "NSF"
+      },
+      {
+        "date": "2025-02-03",
+        "amount": -35,
+        "description": "OVERDRAFT FEE",
+        "riskTag": "OVERDRAFT"
+      }
+    ]
+  },
+  "mcaStacking": {
+    "detected": true,
+    "lenderCount": 2,
+    "totalMonthlyDebtService": 4200,
+    "dailyOrWeeklyDebits": [
+      {
+        "date": "2025-01-05",
+        "amount": -350,
+        "description": "ACH DEBIT ONDECK CAPITAL",
+        "cadence": "WEEKLY_OR_DAILY",
+        "lenderHint": "ONDECK"
+      }
+    ]
+  },
+  "revenue": {
+    "l3mTrueRevenueAverage": 28500,
+    "trueTotal": 85500,
+    "trueMonthlyRevenue": [
+      { "month": "2025-01", "amount": 27000 },
+      { "month": "2025-02", "amount": 29000 },
+      { "month": "2025-03", "amount": 29500 }
+    ],
+    "excludedNonRevenue": [
+      {
+        "date": "2025-01-08",
+        "amount": 500,
+        "description": "ZELLE PAYMENT FROM JOHN SMITH",
+        "exclusionReason": "OWNER_PERSONAL_TRANSFER"
+      }
+    ]
+  },
+  "forensicBriefing": {
+    "summaryMarkdown": "## Underwriting Vitals\n- **L3M ADB:** $12,450.33",
+    "alerts": [
+      {
+        "code": "MCA_STACKING",
+        "severity": "HIGH",
+        "message": "Possible MCA / daily ACH stacking (2 lender pattern(s))"
+      }
+    ]
+  },
+  "openingBalance": 5000,
+  "closingBalance": 8200,
+  "computedAt": "2025-03-31T12:00:00.000Z"
+}

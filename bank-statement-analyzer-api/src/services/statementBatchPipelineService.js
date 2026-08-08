@@ -89,6 +89,20 @@ export function createPipelineOutcomeCollector(settle) {
         }
       }
       if (statusCode === 201) {
+        if (payload?.businessStatus === 'REQUIRES_HUMAN_REVIEW') {
+          settle({
+            status: 'REQUIRES_HUMAN_REVIEW',
+            processingRunId: payload.processingRunId,
+            fileName: payload.fileName,
+            reviewPayload: payload.reviewPayload,
+            diagnosticSummaries: payload.diagnosticSummaries || [],
+            result: payload,
+            message:
+              payload.message ||
+              'Checksum reconciliation failed — human review required.'
+          });
+          return res;
+        }
         if (payload?.businessStatus === 'COMPLETED_WITH_WARNINGS') {
           settle({
             status: 'COMPLETED_WITH_WARNINGS',

@@ -358,6 +358,31 @@ describe('mapProfileResultToRawBundle', () => {
     );
     expect(bundle.profileId).toBe('wells_initiate_checking');
   });
+
+  it('appends deduped fee ledger rows into primary transactions with source fee_ledger', () => {
+    const dm = createDocumentMap({
+      profileId: 'wells_initiate_checking',
+      regions: {
+        fee_ledger: {
+          type: 'fee_ledger',
+          text: '01/15 Service Charge 12.00\n01/20 NSF Fee 35.00'
+        }
+      }
+    });
+    const bundle = mapProfileResultToRawBundle(
+      {
+        meta: { extractionProfile: 'wells_initiate_checking', statementYear: 2023 },
+        transactions: [{ date: '2023-01-10', amount: 100, description: 'Deposit' }],
+        normalizedTransactions: [],
+        sectionChunks: {}
+      },
+      dm
+    );
+    expect(bundle.feeTransactions.length).toBeGreaterThan(0);
+    const appended = bundle.transactions.filter((t) => t.source === 'fee_ledger');
+    expect(appended.length).toBe(bundle.feeTransactions.length);
+    expect(bundle.transactions[0].description).toBe('Deposit');
+  });
 });
 
 describe('profileRecovery', () => {

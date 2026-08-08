@@ -78,6 +78,19 @@ export async function getStatementJobStatus(jobId) {
         error: returnvalue.error || returnvalue.message || 'Batch failed'
       };
     }
+    if (returnvalue?.status === 'REQUIRES_HUMAN_REVIEW') {
+      return {
+        jobId,
+        status: 'REQUIRES_HUMAN_REVIEW',
+        correlationId,
+        processingRunId: returnvalue.processingRunId,
+        fileName: returnvalue.fileName,
+        reviewPayload: returnvalue.reviewPayload,
+        diagnosticSummaries: returnvalue.diagnosticSummaries || [],
+        result: returnvalue.result,
+        message: returnvalue.message
+      };
+    }
     if (returnvalue?.status === 'COMPLETED_WITH_WARNINGS') {
       return {
         jobId,

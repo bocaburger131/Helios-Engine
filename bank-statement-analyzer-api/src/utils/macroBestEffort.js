@@ -59,10 +59,20 @@ export function buildChecksumGateBestEffortAlert(batchChecksumStats, minRatio, b
 }
 
 /**
+ * Hard-fail (422 CHECKSUM_GATE_FAILED) only when there is nothing to review.
+ * With usable transactions, continue best-effort so ProcessingRun HITL can open.
+ * @param {boolean} hasUsableTxns
+ * @returns {boolean}
+ */
+export function shouldHardFailChecksumGate(hasUsableTxns) {
+  return !Boolean(hasUsableTxns);
+}
+
+/**
  * @param {{ ratio: number }} batchChecksumStats
  * @param {Array<object>} parsedStatements
  * @param {number} minRatio
- * @param {number} [httpStatus]
+ * @param {number} [httpStatus] retained for callers; 422 no longer blocks best-effort when txs exist
  * @returns {boolean}
  */
 export function deriveBestEffortChecksumMode(
@@ -71,8 +81,10 @@ export function deriveBestEffortChecksumMode(
   minRatio,
   httpStatus = 200
 ) {
-  if (httpStatus === 422) return false;
+  void httpStatus;
   if (batchChecksumStats.ratio >= minRatio) return false;
+  // Prefer HITL / best-effort continuation whenever extractable txs exist,
+  // even if resolveBatchHttpStatus would have been 422.
   return batchHasUsableTransactions(parsedStatements);
 }
 
