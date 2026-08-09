@@ -44,6 +44,15 @@ describe('normalizeVisionTransactionRow', () => {
     );
     expect(row.date).toBe('2025-01-15');
   });
+
+  it('tags extractionSource as ai_vision_fallback with legacy alias', () => {
+    const row = normalizeVisionTransactionRow(
+      { date: '1/15', description: 'ACH', amount: 100, type: 'CREDIT' },
+      2025
+    );
+    expect(row.extractionSource).toBe('ai_vision_fallback');
+    expect(row.extractionSourceLegacy).toBe('gemini_row_fallback');
+  });
 });
 
 describe('rowFallbackEnabled', () => {

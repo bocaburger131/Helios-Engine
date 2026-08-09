@@ -11,6 +11,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PDFDocument } from 'pdf-lib';
 import { logStructured } from '../../utils/structuredLog.js';
+import { resolveLayoutColumnGeometry } from '../../utils/layoutColumnBoundaries.js';
 
 // ---------------------------------------------------------------------------
 // Module-level constants (shared prompts / schemas)
@@ -27,13 +28,17 @@ Header Anchors: Identify exact printed strings marking the start and end of tran
 Account Boundaries (REQUIRED for multi-account PDFs): Strictly segment by account. If the PDF contains more than one account (e.g. Business Checking + Savings, or multiple checking numbers), list each in accountSegments[] with its own start/end anchors and do NOT let one account's rows bleed into another's. Prefer the primary operating account for headerAnchors/vitals when multiple exist; still enumerate every account segment.
 
 Multi-Table (REQUIRED for commercial statements): Commercial PDFs contain MULTIPLE transaction tables across many pages. You MUST list ALL of them in transactionSections[], each with its own start/end anchor pair. Examples:
-- Regions: Electronic Deposits, Electronic Withdrawals, Checks Cleared, Bank Fees, Service Charges
+- Regions: DEPOSITS AND CREDITS / DEPOSITS & CREDITS, WITHDRAWALS / CHECKS AND WITHDRAWALS, CHECKS, SERVICE CHARGES / BANK FEES, RETURNED CHECKS / NSF
 - Wells Fargo: sections under Transaction history (deposits/credits block, withdrawals/debits block, fees, checks paid, card activity, etc.)
 Never return only the first sub-table or a 2–5 row sample — if the statement spans 10+ pages of activity, your transactionSections must cover the full activity span (use the broadest start anchor such as "Transaction history" and section-specific headers for each sub-table).
 
 Secondary mini-ledgers (REQUIRED when present): Service Fees / Service Charges, Interest / Interest summary detail rows, and Returned Items / NSF / Overdraft fee tables are ACTIVITY to extract — not merely stop-anchors for the main history block. Include each mini-ledger as its own transactionSections[] entry so rows can be appended to the primary activity set. Do not skip fee/interest/returned-item ledgers just because they sit after "Transaction history".
 
 Column Mapping: Determine the horizontal order (0-indexed) of Date, Description, Amount, and Balance. For DEBIT_CREDIT_SEPARATE layouts, include debitIdx and creditIdx column indices.
+
+Column X-Boundaries (REQUIRED for commercial multi-column tables): Estimate PDF-point X coordinates for Date, Description, Deposit/Credit, Withdrawal/Debit, and Balance. Return columnBoundaries and/or explicitVerticalLines for pdfplumber.
+
+Continued sections (REQUIRED): Look for headers containing "(CONTINUED)" (e.g. "DEPOSITS & CREDITS (CONTINUED)", "WITHDRAWALS (CONTINUED)"). Treat them as the SAME section as the primary header. Maintain the SAME columnBoundaries / explicitVerticalLines across ALL pages in that section sequence — do NOT invent new X coordinates per continued page.
 
 Math Patterns: Identify if the bank uses:
 - MINUS_PREFIX (e.g., -100.00)
@@ -59,16 +64,20 @@ export const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, n
   ],
   "transactionSections": [
     { "label": "Transaction history (all activity)", "start": "Transaction history", "end": "Daily balance summary" },
-    { "label": "Electronic Deposits", "start": "ELECTRONIC DEPOSITS", "end": "Total deposits" },
-    { "label": "Electronic Withdrawals", "start": "ELECTRONIC WITHDRAWALS", "end": "Total withdrawals" },
-    { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" },
-    { "label": "Service Fees", "start": "Service fee summary", "end": "Total service fees" },
-    { "label": "Interest", "start": "Interest summary", "end": "Total interest paid" },
-    { "label": "Returned Items / NSF", "start": "Returned item", "end": "Total returned items" }
-  ]
+    { "label": "Deposits and Credits", "start": "DEPOSITS AND CREDITS", "end": "Total deposits" },
+    { "label": "Withdrawals", "start": "WITHDRAWALS", "end": "Total withdrawals" },
+    { "label": "Checks", "start": "CHECKS", "end": "Total checks" },
+    { "label": "Service Charges", "start": "SERVICE CHARGES", "end": "Total service charges" },
+    { "label": "Returned Checks / NSF", "start": "RETURNED CHECKS", "end": "Total returned" }
+  ],
+  "columnBoundaries": { "xDate": 72, "xDesc": 150, "xDeposit": 400, "xWithdrawal": 470, "xBalance": 540 },
+  "explicitVerticalLines": [72, 150, 400, 470, 540]
 }
 
 Rules:
+- columnBoundaries and/or explicitVerticalLines are REQUIRED for commercial multi-column statements (Regions, Wells, Chase, etc.).
+- Look for headers containing "(CONTINUED)" and maintain the same column bounding coordinates across all pages in the section sequence. Do not return different X coords for continued pages.
+- Only omit both when the PDF is a single-column list with no visible horizontal column structure.
 - accountSegments is OPTIONAL. When the PDF has multiple accounts, list each account with exact start/end anchors so extraction does not bleed across accounts.
 - transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, interest, returned items/NSF, card, ACH, etc.). Mini-ledgers are activity sections, not stop-anchors only.
 - headerAnchors.start/end should span the full primary-account activity region; per-table sections use narrower start/end pairs.
@@ -134,6 +143,22 @@ const LAYOUT_JSON_SCHEMA = {
           end: { type: 'string' }
         },
         required: ['start']
+      }
+    },
+    explicitVerticalLines: {
+      type: 'array',
+      items: { type: 'number' }
+    },
+    columnBoundaries: {
+      type: 'object',
+      properties: {
+        xDate: { type: 'number' },
+        xDesc: { type: 'number' },
+        xDeposit: { type: 'number' },
+        xCredit: { type: 'number' },
+        xWithdrawal: { type: 'number' },
+        xDebit: { type: 'number' },
+        xBalance: { type: 'number' }
       }
     }
   },
@@ -307,7 +332,8 @@ function prenormalizeVisionPayload(parsed) {
     confidence: conf,
     transactionSections,
     _layoutName: parsed.layoutName,
-    _vitals: parsed.vitals
+    _vitals: parsed.vitals,
+    ...resolveLayoutColumnGeometry(parsed)
   };
 }
 
@@ -375,6 +401,7 @@ function coerceLayoutMapping(parsed) {
     mathPattern,
     balanceReconciliationHint,
     ...(transactionSections?.length ? { transactionSections } : {}),
+    ...resolveLayoutColumnGeometry(parsed),
     ...(layoutConfidence !== undefined ? { layoutConfidence } : {})
   };
 }
@@ -447,14 +474,14 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const rtn = String(options.rtn || '').replace(/\D/g, '');
   const logBase = {
-    domain: 'gemini-vision',
+    domain: 'ai-vision',
     rtn: rtn || null,
     bankName: options.bankName || null,
     statementId: options.statementId || null,
     jobId: options.jobId || null
   };
 
-  logStructured('info', '[VISION_START] Analyzing new layout for RTN', logBase);
+  logStructured('info', '[AI_VISION] Analyzing new layout for RTN', logBase);
 
   const subset = await extractFirstPagesPdfBuffer(pdfBuffer, layoutMaxPages());
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -486,7 +513,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   try {
     text = await generateVisionContent(model, primaryParts);
   } catch (e) {
-    logStructured('warn', '[VISION_FAILURE] Gemini generateContent failed', {
+    logStructured('warn', '[AI_VISION] Gemini generateContent failed', {
       ...logBase,
       error: e.message,
       responseLength: 0
@@ -512,7 +539,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
       text = await generateVisionContent(model, repairParts);
       parsed = extractJsonObject(text);
     } catch (e) {
-      logStructured('warn', '[VISION_FAILURE] JSON repair retry failed', {
+      logStructured('warn', '[AI_VISION] JSON repair retry failed', {
         ...logBase,
         error: e.message,
         responseLength: String(text).length
@@ -522,7 +549,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   }
 
   if (!parsed) {
-    logStructured('warn', '[VISION_FAILURE] Unparseable layout JSON after repair', {
+    logStructured('warn', '[AI_VISION] Unparseable layout JSON after repair', {
       ...logBase,
       responseLength: String(text).length
     });
@@ -531,21 +558,21 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const pre = prenormalizeVisionPayload(parsed);
   if (!pre) {
-    logStructured('warn', '[VISION_FAILURE] Vision payload pre-normalize failed', logBase);
+    logStructured('warn', '[AI_VISION] Vision payload pre-normalize failed', logBase);
     throw new Error('Gemini layout JSON could not be normalized');
   }
 
   const { _layoutName, _vitals, ...forCoerce } = pre;
   const core = coerceLayoutMapping(forCoerce);
   if (!core) {
-    logStructured('warn', '[VISION_FAILURE] coerceLayoutMapping returned null', logBase);
+    logStructured('warn', '[AI_VISION] coerceLayoutMapping returned null', logBase);
     throw new Error('Gemini layout JSON coercion failed');
   }
 
   const conf = core.layoutConfidence ?? parsed.confidenceScore ?? parsed.confidence;
   const minConf = layoutConfidenceMin();
   if (conf != null && Number(conf) < minConf) {
-    logStructured('warn', '[VISION_FAILURE] Layout confidence below floor', {
+    logStructured('warn', '[AI_VISION] Layout confidence below floor', {
       ...logBase,
       confidenceScore: conf,
       minConfidence: minConf
@@ -564,13 +591,13 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   };
 
   if (options.sampleRows && !validateLayoutAgainstSampleRows(finalOut, options.sampleRows)) {
-    logStructured('warn', '[VISION_FAILURE] Layout failed sample-row validation', logBase);
+    logStructured('warn', '[AI_VISION] Layout failed sample-row validation', logBase);
     const err = new Error('LAYOUT_SAMPLE_VALIDATION_FAILED');
     err.code = 'LAYOUT_SAMPLE_VALIDATION_FAILED';
     throw err;
   }
 
-  logStructured('info', '[VISION_SUCCESS] Layout learned', {
+  logStructured('info', '[AI_VISION] Layout learned', {
     ...logBase,
     confidenceScore: finalOut.layoutConfidence ?? null,
     layoutName: finalOut.layoutName || null

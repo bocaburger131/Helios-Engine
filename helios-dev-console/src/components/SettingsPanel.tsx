@@ -91,12 +91,21 @@ const AI_MODEL_STAGE_META: Array<{
 const DEFAULT_MODEL_CATALOG: AiModelCatalogEntry[] = [
   { id: "gpt-4o", tags: ["vision", "general"] },
   { id: "gpt-4o-mini", tags: ["vision", "general"] },
+  { id: "o1-mini", tags: ["thinking"] },
   { id: "claude-3-5-sonnet", tags: ["vision", "thinking"] },
+  { id: "claude-sonnet-4-20250514", tags: ["vision", "thinking"] },
+  { id: "gemini-flash-latest", tags: ["vision", "thinking"] },
   { id: "gemini-1.5-pro", tags: ["vision", "thinking"] },
   { id: "gemini-1.5-flash", tags: ["vision"] },
+  { id: "gemini-2.0-flash", tags: ["vision", "thinking"] },
+  { id: "gemini-2.5-pro", tags: ["vision", "thinking"] },
+  { id: "sonar", tags: ["thinking", "code", "general"] },
+  { id: "sonar-pro", tags: ["thinking", "code", "general"] },
+  { id: "anthropic/claude-sonnet-4", tags: ["vision", "thinking"] },
+  { id: "openrouter/auto", tags: ["vision", "thinking", "general"] },
+  { id: "mistral-ocr", tags: ["vision"] },
   { id: "deepseek-chat", tags: ["thinking", "code"] },
   { id: "deepseek-coder", tags: ["code"] },
-  { id: "o1-mini", tags: ["thinking"] },
   { id: "ollama-local", tags: ["general", "code"] },
 ];
 
@@ -391,7 +400,10 @@ function AddCustomModelModal({
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
-              <option value="google">Google</option>
+              <option value="google">Google / Gemini</option>
+              <option value="perplexity">Perplexity</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="mistral">Mistral</option>
               <option value="deepseek">DeepSeek</option>
               <option value="ollama">Ollama</option>
               <option value="custom">Custom</option>
@@ -721,7 +733,7 @@ export default function SettingsPanel() {
   const maskedHitl =
     presentationMode && hitlJson.startsWith("{")
       ? hitlJson.replace(
-          /("(GEMINI_API_KEY|GOOGLE_API_KEY|JWT_SECRET|API_KEY|PERPLEXITY_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|MONGO_URI|MONGODB_URI|password|token)"\s*:\s*")([^"]*)(")/gi,
+          /("(GEMINI_API_KEY|GOOGLE_API_KEY|JWT_SECRET|API_KEY|PERPLEXITY_API_KEY|OPENROUTER_API_KEY|MISTRAL_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|DEEPSEEK_API_KEY|CUSTOM_AI_API_KEY|MONGO_URI|MONGODB_URI|password|token)"\s*:\s*")([^"]*)(")/gi,
           "$1********$4"
         )
       : hitlJson;

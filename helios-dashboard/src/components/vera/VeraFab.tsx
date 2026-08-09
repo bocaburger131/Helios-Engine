@@ -1,9 +1,17 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { useVera, VERA_ACCENT } from "@/components/vera/VeraProvider";
 
+/**
+ * Global FAB — hidden on underwriting dashboard where VeraDock is the entry point.
+ */
 export default function VeraFab() {
   const { isOpen, toggle } = useVera();
+  const pathname = usePathname() || "";
+  const onDashboard = pathname.startsWith("/dashboard/");
+
+  if (onDashboard) return null;
 
   return (
     <button
@@ -11,7 +19,7 @@ export default function VeraFab() {
       onClick={toggle}
       aria-label={isOpen ? "Close Vera chat" : "Open Vera chat"}
       aria-expanded={isOpen}
-      className="fixed bottom-24 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full text-white shadow-lg transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#3366a9] dark:focus-visible:ring-offset-slate-900"
+      className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full text-white shadow-lg transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#3366a9]"
       style={{ backgroundColor: VERA_ACCENT }}
     >
       <svg

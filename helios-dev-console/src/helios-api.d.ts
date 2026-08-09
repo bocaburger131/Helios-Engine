@@ -79,7 +79,16 @@ export type AiModelsResult = {
 export type AddCustomModelPayload = {
   id: string;
   name: string;
-  provider: "openai" | "anthropic" | "google" | "deepseek" | "ollama" | "custom";
+  provider:
+    | "openai"
+    | "anthropic"
+    | "google"
+    | "perplexity"
+    | "openrouter"
+    | "mistral"
+    | "deepseek"
+    | "ollama"
+    | "custom";
   tags: AiModelTag[];
   apiKey?: string;
 };

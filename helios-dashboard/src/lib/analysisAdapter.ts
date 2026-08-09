@@ -96,6 +96,13 @@ export type HeliosStatementPayload = {
           decision?: string;
           bankabilityScore?: number;
           briefingMarkdown?: string;
+          metadata?: {
+            generatedAt?: string;
+            model?: string;
+            durationMs?: number;
+            fallback?: boolean;
+            source?: string;
+          };
           deltaFixes?: Array<{
             field?: string;
             proposedValue?: number | string;
@@ -163,14 +170,30 @@ export type HeliosStatementPayload = {
           eligibilityBand?: string;
         };
         metadata?: {
+          processingDuration?: number;
+          processedAt?: string;
+          uploadedAt?: string;
+          engine?: string;
+          version?: string;
           parseQualityByFile?: Array<{
             fileName?: string;
             checksumOk?: boolean;
             parseQuality?: string;
+            transactionCount?: number;
             layoutPipelineShadow?: LayoutPipelineShadow | null;
           }>;
+          llmCostTracking?: {
+            totalCost?: number;
+            transactionsCategorized?: number;
+            costPerTransaction?: number;
+            service?: string;
+          };
         };
       };
+      /** Statement-level timestamps (API may place these outside analysis.metadata). */
+      uploadedAt?: string;
+      processedAt?: string;
+      createdAt?: string;
       monthlyStatementSummaries?: MonthlyStatementSummary[];
       transactions?: Array<{
         date?: string | Date;
@@ -179,6 +202,7 @@ export type HeliosStatementPayload = {
         description?: string;
         category?: string;
         isNsf?: boolean;
+        extractionSource?: string;
       }>;
       alerts?: Array<{ code?: string; message?: string; severity?: string }>;
     };
@@ -189,6 +213,7 @@ export type HeliosStatementPayload = {
       description?: string;
       category?: string;
       isNsf?: boolean;
+      extractionSource?: string;
     }>;
   };
 };
@@ -457,6 +482,57 @@ export function getChecksumFailures(
 ): MonthlyStatementSummary[] {
   const summaries = payload.data?.statement?.monthlyStatementSummaries ?? [];
   return summaries.filter((s) => s.checksumOk === false);
+}
+
+/**
+ * Prefer analysis.metadata.processedAt, else uploadedAt, else statement-level timestamps.
+ * Returns ISO string or null.
+ */
+export function getAnalysisTimestamp(payload: HeliosStatementPayload): string | null {
+  const statement = payload.data?.statement;
+  const meta = statement?.analysis?.metadata;
+  const candidates = [
+    meta?.processedAt,
+    meta?.uploadedAt,
+    statement?.processedAt,
+    statement?.uploadedAt,
+    statement?.createdAt,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim() && !Number.isNaN(Date.parse(c))) {
+      return c;
+    }
+  }
+  return null;
+}
+
+/** Format as `MMM DD, YYYY • h:mm A EST` in America/New_York. */
+export function formatAnalysisTimestampEst(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+
+  const month = get("month");
+  const day = get("day");
+  const year = get("year");
+  const hour = get("hour");
+  const minute = get("minute");
+  const dayPeriod = get("dayPeriod");
+
+  return `${month} ${day}, ${year} • ${hour}:${minute} ${dayPeriod} EST`;
 }
 
 export function getLayoutShadowEntries(payload: HeliosStatementPayload): Array<{

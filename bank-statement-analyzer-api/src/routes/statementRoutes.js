@@ -140,6 +140,16 @@ router.get('/:id/download', authenticateToken, controller.downloadStatement);
 router.post('/veritas', authenticateToken, controller.calculateVeritasScore);
 router.post('/risk', authenticateToken, controller.getRiskAnalysis);
 router.post('/:id/categorize', authenticateToken, controller.categorizeTransactions);
+router.patch(
+  '/:id/transactions/:txnId',
+  authenticateToken,
+  async (req, res, next) => {
+    const { patchStatementTransaction } = await import(
+      '../controllers/statementTransactionController.js'
+    );
+    return patchStatementTransaction(req, res, next);
+  }
+);
 router.put('/:id', authenticateToken, controller.updateStatement);
 
 // Public API endpoints

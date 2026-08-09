@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseRegionsSections, REGIONS_SECTIONS } from '../../src/services/extraction/profiles/regionsSectionExtractor.js';
+import {
+  parseRegionsSections,
+  REGIONS_SECTIONS,
+  normalizeSectionLabel
+} from '../../src/services/extraction/profiles/regionsSectionExtractor.js';
 
 describe('regionsSectionExtractor glued amounts', () => {
   const year = 2025;
@@ -41,6 +45,32 @@ describe('regionsSectionExtractor glued amounts', () => {
     ].join('\n');
     const { bySection } = parseRegionsSections(text, year);
     expect(bySection[REGIONS_SECTIONS.WITHDRAWALS]).toHaveLength(2);
+  });
+
+  it('normalizeSectionLabel strips (CONTINUED) to primary section keys', () => {
+    expect(normalizeSectionLabel('DEPOSITS & CREDITS (CONTINUED)')).toBe(
+      REGIONS_SECTIONS.DEPOSITS
+    );
+    expect(normalizeSectionLabel('DEPOSITS AND CREDITS (CONTINUED)')).toBe(
+      REGIONS_SECTIONS.DEPOSITS
+    );
+    expect(normalizeSectionLabel('WITHDRAWALS (CONTINUED)')).toBe(
+      REGIONS_SECTIONS.WITHDRAWALS
+    );
+    expect(normalizeSectionLabel('CHECKS (CONTINUED)')).toBe(REGIONS_SECTIONS.CHECKS);
+    expect(normalizeSectionLabel('FEES (CONTINUED)')).toBe(REGIONS_SECTIONS.FEES);
+    expect(normalizeSectionLabel('(CONTINUED)')).toBeNull();
+  });
+
+  it('parses rows on DEPOSITS & CREDITS (CONTINUED) pages', () => {
+    const text = [
+      'DEPOSITS & CREDITS',
+      '12/01 Merchant deposit 1,000.00',
+      'DEPOSITS & CREDITS (CONTINUED)',
+      '12/02 ACH CREDIT 500.00'
+    ].join('\n');
+    const { bySection } = parseRegionsSections(text, year);
+    expect(bySection[REGIONS_SECTIONS.DEPOSITS]).toHaveLength(2);
   });
 
   it('parses RETURNED CHECKS as credits and FEES as debits', () => {

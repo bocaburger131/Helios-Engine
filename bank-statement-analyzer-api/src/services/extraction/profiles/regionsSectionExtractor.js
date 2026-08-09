@@ -32,6 +32,31 @@ export const REGIONS_SECTIONS = Object.freeze({
   FEES: 'fees'
 });
 
+/**
+ * Match primary Regions section headers, including "(CONTINUED)" variants.
+ * Group 1 = primary label; group 2 = optional CONTINUED marker (ignored for key).
+ */
+export const SECTION_HEADER_RE =
+  /^(DEPOSITS\s*&\s*CREDITS|DEPOSITS\s+AND\s+CREDITS|WITHDRAWALS|CHECKS|FEES|RETURNED\s+CHECKS)\s*(\(CONTINUED\))?/i;
+
+/**
+ * Normalize a printed section header to a REGIONS_SECTIONS key.
+ * Strips (CONTINUED) so continuation pages map to the primary section.
+ * @param {string} line
+ * @returns {string|null}
+ */
+export function normalizeSectionLabel(line) {
+  const m = String(line || '').trim().match(SECTION_HEADER_RE);
+  if (!m) return null;
+  const primary = String(m[1] || '').replace(/\s+/g, ' ').toUpperCase();
+  if (primary.startsWith('DEPOSITS')) return REGIONS_SECTIONS.DEPOSITS;
+  if (primary.startsWith('RETURNED')) return REGIONS_SECTIONS.RETURNED_CHECKS;
+  if (primary.startsWith('WITHDRAWALS')) return REGIONS_SECTIONS.WITHDRAWALS;
+  if (primary.startsWith('FEES')) return REGIONS_SECTIONS.FEES;
+  if (primary.startsWith('CHECKS')) return REGIONS_SECTIONS.CHECKS;
+  return null;
+}
+
 function moneyToNum(token) {
   if (!token) return null;
   const n = Number(String(token).replace(/,/g, ''));
@@ -184,20 +209,16 @@ function enforceSectionTotal(rows, printedTotal, { relativeTol = 0.02, absTol = 
 
 /**
  * Classify a physical line as a section header. Returns a section key or null.
+ * Continuation headers (e.g. "WITHDRAWALS (CONTINUED)") map to the primary section.
  * @param {string} line
  * @returns {string|null}
  */
 function detectSectionHeader(line) {
   const s = line.trim();
-  // DEPOSITS & CREDITS (with optional "CONTINUED" continuation header)
-  if (/^DEPOSITS\s*&\s*CREDITS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.DEPOSITS;
-  // Must precede /^CHECKS\b/ — "RETURNED CHECKS" is a credit section.
-  if (/^RETURNED\s+CHECKS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.RETURNED_CHECKS;
-  // WITHDRAWALS (with optional "CONTINUED" continuation header)
-  if (/^WITHDRAWALS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.WITHDRAWALS;
-  if (/^FEES(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.FEES;
-  // CHECKS (with optional "CONTINUED" continuation header)
-  if (/^CHECKS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.CHECKS;
+  // Includes "(CONTINUED)" variants via normalizeSectionLabel / SECTION_HEADER_RE.
+  // RETURNED CHECKS must resolve before bare CHECKS.
+  const normalized = normalizeSectionLabel(s);
+  if (normalized) return normalized;
   // Hard stops: end of transaction zone.
   if (/^DAILY\s+BALANCE\s+SUMMARY\b/i.test(s)) return '__end__';
   if (/^Easy\s+Steps\s+to\s+Balance/i.test(s)) return '__end__';
@@ -415,5 +436,7 @@ export default {
   parseRegionsSectionTotals,
   dropRowsExceedingSectionTotal,
   enforceSectionTotal,
+  normalizeSectionLabel,
+  SECTION_HEADER_RE,
   REGIONS_SECTIONS
 };

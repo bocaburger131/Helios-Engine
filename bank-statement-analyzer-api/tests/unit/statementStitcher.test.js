@@ -89,6 +89,18 @@ describe('statementStitcher', () => {
     expect(stitcher.typeB.combinedText).toContain('Electronic Deposits');
     expect(classifyPageType(stitcher.typeB.combinedText, 1)).toBe('B');
   });
+
+  it('classifies Regions CONTINUED activity pages as Type B', () => {
+    expect(
+      classifyPageType('WITHDRAWALS (CONTINUED)\n12/02 ACH PAYMENT 250.00', 3)
+    ).toBe('B');
+    expect(
+      classifyPageType(
+        'DEPOSITS & CREDITS (CONTINUED)\n12/01 Merchant deposit 100.00',
+        2
+      )
+    ).toBe('B');
+  });
 });
 
 describe('checksum with stitcher vitals', () => {

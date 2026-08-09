@@ -101,12 +101,21 @@ const AI_MODEL_KEYS = [
 const AI_MODEL_CATALOG = [
   { id: "gpt-4o", tags: ["vision", "general"] },
   { id: "gpt-4o-mini", tags: ["vision", "general"] },
+  { id: "o1-mini", tags: ["thinking"] },
   { id: "claude-3-5-sonnet", tags: ["vision", "thinking"] },
+  { id: "claude-sonnet-4-20250514", tags: ["vision", "thinking"] },
+  { id: "gemini-flash-latest", tags: ["vision", "thinking"] },
   { id: "gemini-1.5-pro", tags: ["vision", "thinking"] },
   { id: "gemini-1.5-flash", tags: ["vision"] },
+  { id: "gemini-2.0-flash", tags: ["vision", "thinking"] },
+  { id: "gemini-2.5-pro", tags: ["vision", "thinking"] },
+  { id: "sonar", tags: ["thinking", "code", "general"] },
+  { id: "sonar-pro", tags: ["thinking", "code", "general"] },
+  { id: "anthropic/claude-sonnet-4", tags: ["vision", "thinking"] },
+  { id: "openrouter/auto", tags: ["vision", "thinking", "general"] },
+  { id: "mistral-ocr", tags: ["vision"] },
   { id: "deepseek-chat", tags: ["thinking", "code"] },
   { id: "deepseek-coder", tags: ["code"] },
-  { id: "o1-mini", tags: ["thinking"] },
   { id: "ollama-local", tags: ["general", "code"] },
 ];
 
@@ -120,6 +129,9 @@ const PROVIDER_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY",
   "DEEPSEEK_API_KEY",
   "OLLAMA_BASE_URL",
   "OLLAMA_HOST",
@@ -130,10 +142,15 @@ const PROVIDER_TO_ENV = {
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   google: "GEMINI_API_KEY",
+  perplexity: "PERPLEXITY_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  mistral: "MISTRAL_API_KEY",
   deepseek: "DEEPSEEK_API_KEY",
   ollama: "OLLAMA_BASE_URL",
   custom: "CUSTOM_AI_API_KEY",
 };
+
+const VALID_CUSTOM_PROVIDERS = new Set(Object.keys(PROVIDER_TO_ENV));
 
 /** Model id → env keys that indicate API readiness. */
 const MODEL_PROVIDER_ENV = {
@@ -141,8 +158,17 @@ const MODEL_PROVIDER_ENV = {
   "gpt-4o-mini": ["OPENAI_API_KEY"],
   "o1-mini": ["OPENAI_API_KEY"],
   "claude-3-5-sonnet": ["ANTHROPIC_API_KEY"],
+  "claude-sonnet-4-20250514": ["ANTHROPIC_API_KEY"],
+  "gemini-flash-latest": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   "gemini-1.5-pro": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   "gemini-1.5-flash": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "gemini-2.0-flash": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "gemini-2.5-pro": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  sonar: ["PERPLEXITY_API_KEY"],
+  "sonar-pro": ["PERPLEXITY_API_KEY"],
+  "anthropic/claude-sonnet-4": ["OPENROUTER_API_KEY"],
+  "openrouter/auto": ["OPENROUTER_API_KEY"],
+  "mistral-ocr": ["MISTRAL_API_KEY"],
   "deepseek-chat": ["DEEPSEEK_API_KEY"],
   "deepseek-coder": ["DEEPSEEK_API_KEY"],
   "ollama-local": ["OLLAMA_BASE_URL", "OLLAMA_HOST"],
@@ -212,6 +238,9 @@ function envKeyToProvider(envKey) {
   if (envKey === "OPENAI_API_KEY" || envKey === "CUSTOM_AI_API_KEY") return "openai";
   if (envKey === "ANTHROPIC_API_KEY") return "anthropic";
   if (envKey === "GEMINI_API_KEY" || envKey === "GOOGLE_API_KEY") return "google";
+  if (envKey === "PERPLEXITY_API_KEY") return "perplexity";
+  if (envKey === "OPENROUTER_API_KEY") return "openrouter";
+  if (envKey === "MISTRAL_API_KEY") return "mistral";
   if (envKey === "DEEPSEEK_API_KEY") return "deepseek";
   if (envKey === "OLLAMA_BASE_URL" || envKey === "OLLAMA_HOST") return "ollama";
   return "custom";
@@ -285,6 +314,22 @@ async function validateApiKey(provider, key, env = {}) {
         headers: { Authorization: `Bearer ${trimmed}` },
         signal: ctrl.signal,
       });
+    } else if (provider === "openrouter") {
+      res = await fetch("https://openrouter.ai/api/v1/models", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${trimmed}` },
+        signal: ctrl.signal,
+      });
+    } else if (provider === "mistral") {
+      res = await fetch("https://api.mistral.ai/v1/models", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${trimmed}` },
+        signal: ctrl.signal,
+      });
+    } else if (provider === "perplexity") {
+      // Perplexity has no public models list; treat a non-empty key as ready.
+      clearTimeout(t);
+      return trimmed.length >= 16;
     } else {
       clearTimeout(t);
       return false;
@@ -2137,7 +2182,7 @@ function registerIpc() {
     if (!id) {
       return { ok: false, error: "Model ID is required" };
     }
-    if (!["openai", "anthropic", "google", "deepseek", "ollama", "custom"].includes(provider)) {
+    if (!VALID_CUSTOM_PROVIDERS.has(provider)) {
       return { ok: false, error: `Invalid provider: ${provider}` };
     }
     if (!tags.length) {

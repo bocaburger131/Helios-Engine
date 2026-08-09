@@ -65,12 +65,17 @@ CONT_FRAGMENT_RE = re.compile(
 )
 TXN_HISTORY_RE = re.compile(r"transaction\s+history", re.I)
 CONTINUED_HEADER_RE = re.compile(
-    r"deposits?\s*/\s*credits?|withdrawals?\s*/\s*debits?|ending\s+daily\s+balance",
+    r"deposits?\s*/\s*credits?|withdrawals?\s*/\s*debits?|ending\s+daily\s+balance|"
+    r"deposits?\s*(?:&|and)\s*credits?\s*\(\s*continued\s*\)|"
+    r"withdrawals?\s*\(\s*continued\s*\)|"
+    r"checks?\s*\(\s*continued\s*\)|"
+    r"fees?\s*\(\s*continued\s*\)",
     re.I,
 )
 REGIONS_ACTIVITY_RE = re.compile(
     r"electronic\s+deposits|deposits?\s*&\s*credits?|deposits?\s+and\s+additions?|"
-    r"withdrawals?|checks?\s+paid|card\s+purch|recurring\s+",
+    r"deposits?\s*(?:&|and)\s*credits?\s*\(\s*continued\s*\)|"
+    r"withdrawals?(?:\s*\(\s*continued\s*\))?|checks?\s+paid|card\s+purch|recurring\s+",
     re.I,
 )
 
@@ -128,24 +133,27 @@ SECTION_HEADING_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "deposits",
         re.compile(
-            r"deposits?\s*(?:/|&|and)\s*(?:credits?|additions?)|electronic\s+deposits|"
-            r"\bdeposits?(?:\s*\(?continued?\)?)?\b",
+            r"deposits?\s*(?:/|&|and)\s*(?:credits?|additions?)(?:\s*\(\s*CONTINUED\s*\))?|"
+            r"electronic\s+deposits|"
+            r"\bdeposits?(?:\s*\(\s*CONTINUED\s*\))?\b",
             re.I | re.M,
         ),
     ),
     (
         "withdrawals",
         re.compile(
-            r"withdrawals?\s*(?:/|&|and)\s*(?:debits?|payments?)|electronic\s+withdrawals|"
-            r"\bwithdrawals?(?:\s*\(?continued?\)?)?\b",
+            r"withdrawals?\s*(?:/|&|and)\s*(?:debits?|payments?)(?:\s*\(\s*CONTINUED\s*\))?|"
+            r"electronic\s+withdrawals|"
+            r"\bwithdrawals?(?:\s*\(\s*CONTINUED\s*\))?\b",
             re.I | re.M,
         ),
     ),
     (
         "checks",
         re.compile(
-            r"checks?\s*(?:paid|written|cleared)|summary\s+of\s+checks|"
-            r"\bchecks?(?:\s*\(?continued?\)?)?\b",
+            r"checks?\s*(?:paid|written|cleared)(?:\s*\(\s*CONTINUED\s*\))?|"
+            r"summary\s+of\s+checks|"
+            r"\bchecks?(?:\s*\(\s*CONTINUED\s*\))?\b",
             re.I | re.M,
         ),
     ),
@@ -156,7 +164,9 @@ SECTION_HEADING_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "fees",
         re.compile(
-            r"^fees?$|service\s+(?:charges?|fees?)|monthly\s+fee|(?:^|\n)\s*fees?\b",
+            r"(?:^|\n)\s*fees?(?:\s*\(\s*CONTINUED\s*\))?\b|"
+            r"service\s+(?:charges?|fees?)(?:\s*\(\s*CONTINUED\s*\))?|"
+            r"monthly\s+fee",
             re.I | re.M,
         ),
     ),
@@ -2136,25 +2146,46 @@ def table_from_words_with_sections(
             return (None, None)
 
         if layout is None:
-            # Header found but layout validation failed — degraded mode.
-            # Prefer money-anchored columns (right-edge clustering) over the
-            # density heuristic: it separates real amount columns even when the
-            # header text is split or worded differently.
+            # Header found but layout validation failed — prefer inherited
+            # columns from the section-start page (CONTINUED pages) over
+            # re-clustering, which often drops mappedCount to 0.
             print(
                 f"COLUMN_LAYOUT_UNCERTAIN page=? reason=invalid_header "
                 f"header={header_cells[:4]}",
                 file=sys.stderr,
             )
-            money_layout = detect_money_column_boundaries(page)
-            if money_layout and len(money_layout) <= 3:
-                breaks, col_ranges, money_header_override = _layout_from_money_columns(
-                    money_layout, page, page_width
-                )
-                source = "money_clusters"
+            if _continuation_template is not None:
+                ct = _continuation_template
+                header_xs = ct.get("breaks", [])
+                breaks = _assign_column_breaks(header_xs, page_width, bank=bank)
+                col_ranges = ct.get("col_ranges")
+                source = "continuation"
+                syn_header = [""] * (len(col_ranges) if col_ranges else len(breaks) + 1)
+                table = [syn_header]
+                data_start = header_idx  # keep section heading / noise above data
+                # Fall through to row loop with inherited columns.
             else:
-                dynamic_breaks = detect_column_boundaries(page)
-                breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks(header_xs, page_width, bank=bank)
-                source = "dynamic" if dynamic_breaks else "header_degraded"
+                money_layout = detect_money_column_boundaries(page)
+                if money_layout and len(money_layout) <= 3:
+                    breaks, col_ranges, money_header_override = _layout_from_money_columns(
+                        money_layout, page, page_width
+                    )
+                    source = "money_clusters"
+                else:
+                    dynamic_breaks = detect_column_boundaries(page)
+                    breaks = dynamic_breaks if dynamic_breaks else _assign_column_breaks(header_xs, page_width, bank=bank)
+                    source = "dynamic" if dynamic_breaks else "header_degraded"
+                if money_header_override is None:
+                    col_ranges = _compute_col_ranges(header_xs, page_width) if header_info else None
+                    if col_ranges and _continuation_template is not None:
+                        _continuation_template["col_ranges"] = col_ranges
+                        _continuation_template["header_roles"] = header_roles
+                if money_header_override is not None:
+                    table = [money_header_override]
+                else:
+                    header_cells_out = _row_words_to_cells(word_rows[header_idx], breaks, col_ranges=col_ranges)
+                    table = [header_cells_out]
+                data_start = header_idx + 1
         else:
             # Valid layout — use header-derived breaks
             header_breaks = _assign_column_breaks(header_xs, page_width, bank=bank)
@@ -2170,24 +2201,24 @@ def table_from_words_with_sections(
                 source = "header"
             set_continuation_template({"breaks": header_xs, "roles": header_roles, "layout": layout})
 
-        # Compute column ranges from header positions for range-based assignment
-        if money_header_override is None:
-            col_ranges = _compute_col_ranges(header_xs, page_width) if header_info else None
-            if col_ranges and _continuation_template is not None:
-                _continuation_template["col_ranges"] = col_ranges
-                _continuation_template["header_roles"] = header_roles
+            # Compute column ranges from header positions for range-based assignment
+            if money_header_override is None:
+                col_ranges = _compute_col_ranges(header_xs, page_width) if header_info else None
+                if col_ranges and _continuation_template is not None:
+                    _continuation_template["col_ranges"] = col_ranges
+                    _continuation_template["header_roles"] = header_roles
 
-        # Run column diagnostics on the first data-bearing page that has a header
-        if _DIAGNOSE_COLUMNS and header_info and col_ranges:
-            page_num = int(getattr(page, 'page_number', 0) or 0)
-            _run_column_diagnostics(page_num, words, col_ranges, header_roles)
+            # Run column diagnostics on the first data-bearing page that has a header
+            if _DIAGNOSE_COLUMNS and header_info and col_ranges:
+                page_num = int(getattr(page, 'page_number', 0) or 0)
+                _run_column_diagnostics(page_num, words, col_ranges, header_roles)
 
-        if money_header_override is not None:
-            table = [money_header_override]
-        else:
-            header_cells_out = _row_words_to_cells(word_rows[header_idx], breaks, col_ranges=col_ranges)
-            table = [header_cells_out]
-        data_start = header_idx + 1
+            if money_header_override is not None:
+                table = [money_header_override]
+            else:
+                header_cells_out = _row_words_to_cells(word_rows[header_idx], breaks, col_ranges=col_ranges)
+                table = [header_cells_out]
+            data_start = header_idx + 1
     elif _continuation_template is not None:
         ct = _continuation_template
         header_xs = ct.get("breaks", [])
@@ -2471,6 +2502,8 @@ def page_in_history_zone(text: str, in_history: bool) -> bool:
 def page_in_regions_zone(text: str, in_zone: bool) -> bool:
     if REGIONS_ACTIVITY_RE.search(text):
         return True
+    if CONTINUED_HEADER_RE.search(text) and in_zone:
+        return True
     if re.search(r"\bSUMMARY\b", text, re.I) and re.search(r"beginning\s+balance", text, re.I):
         return False
     return in_zone and bool(re.search(r"\d{1,2}/\d{1,2}", text))
@@ -2478,6 +2511,7 @@ def page_in_regions_zone(text: str, in_zone: bool) -> bool:
 
 def extract_regions(pdf_path: str) -> dict[str, Any]:
     reset_evidence()
+    reset_continuation_template()
     transactions: list[dict[str, Any]] = []
     tables_extracted = 0
     in_zone = False
@@ -2485,6 +2519,7 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
     page_count = 0
     page_telemetry: list[dict[str, Any]] = []
     strategies_used: set[str] = set()
+    section_id = "deposits"
 
     with pdfplumber.open(pdf_path) as pdf:
         page_count = len(pdf.pages)
@@ -2494,6 +2529,7 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
             collect_raw_word_rows(page, page_index)
             if (
                 REGIONS_ACTIVITY_RE.search(text)
+                or CONTINUED_HEADER_RE.search(text)
                 or re.search(r"deposits?\s*&\s*credits?", text, re.I)
                 or (
                     re.search(r"\bSUMMARY\b", text, re.I)
@@ -2501,6 +2537,10 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
                 )
             ):
                 in_zone = True
+
+            detected = detect_section_heading(text, section_id)
+            if detected != section_id:
+                section_id = detected
 
             if not page_in_regions_zone(text, in_zone):
                 debug_page(page_index, 0, "skipped", 0)
@@ -2510,7 +2550,10 @@ def extract_regions(pdf_path: str) -> dict[str, Any]:
                 continue
 
             page_txns, telemetry = extract_page_rows(
-                page, page_index,
+                page,
+                page_index,
+                bank="regions",
+                section_id=section_id,
                 checks_ledger=(
                     {(t.get("date"), int(round(abs(t.get("amount", 0)) * 100))) for t in transactions}
                     if transactions else set()

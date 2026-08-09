@@ -81,11 +81,35 @@ function batchGeminiEnabled() {
   return true;
 }
 
-/** Batch macro path: per-file vision row extraction (Plan C; default on, opt out with false/0). */
+/** Batch macro path: per-file vision row extraction (opt-in; default OFF). */
 export function batchUseVisionRowFallback() {
-  const v = process.env.BATCH_USE_VISION_ROW_FALLBACK;
-  if (v === 'false' || v === '0') return false;
-  return true;
+  const aliases = [
+    process.env.BATCH_USE_VISION_ROW_FALLBACK,
+    process.env.ENABLE_VISION_ROW_FALLBACK
+  ];
+  return aliases.some((v) => v === 'true' || v === '1');
+}
+
+/** Known digital institutional profiles that must inherit columns, never vision rows. */
+const DIGITAL_PROFILE_SKIP_VISION_ROWS = new Set(['regions_business_checking']);
+
+/**
+ * Skip vision row extraction for digital PDFs and known Profiles (column inheritance first).
+ * @param {object} stmt
+ * @returns {boolean}
+ */
+export function shouldSkipVisionRowFallback(stmt) {
+  if (isDigitalPdfMode(stmt)) return true;
+  const profileId =
+    stmt?.profileId ||
+    stmt?.parseResult?.profileId ||
+    stmt?.parseResult?.metadata?.profileId ||
+    stmt?.metadata?.profileId ||
+    null;
+  if (profileId && DIGITAL_PROFILE_SKIP_VISION_ROWS.has(String(profileId))) {
+    return true;
+  }
+  return false;
 }
 
 /** Diagnostic AI Rescue master switch (default on; replaces brute-force row extraction). */
@@ -775,7 +799,7 @@ async function escalateMisalignedFile(stmt, ctx) {
   // ── AI Rescue Dispatcher (Phase 2) ──
   // If deterministic rescue failed, try the AI rescue dispatcher
   // (ROW_MERGE, COLUMN_REMAP, DROP_REVIEW, RAW_LEDGER) before
-  // falling back to brute-force Gemini row extraction.
+  // falling back to brute-force vision row extraction.
   const aiRescued = await runAiRescueDispatcher(stmt, ctx);
   if (aiRescued && aiRescued.length > 0) {
     // Snapshot full state before rescue so we can roll back if it fails
@@ -800,6 +824,28 @@ async function escalateMisalignedFile(stmt, ctx) {
       parseQuality: stmt.parseQuality,
       checksumOk: stmt.checksumRecon?.ok
     });
+  }
+
+  // Digital / known profile: never escalate to extractTransactionRows — HITL after diagnostic/off path.
+  if (shouldSkipVisionRowFallback(stmt)) {
+    logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+      fileName: stmt.fileName,
+      reason: bleed ? 'checksum_bleed' : 'layout_misaligned',
+      digital: isDigitalPdfMode(stmt),
+      profileId:
+        stmt?.profileId ||
+        stmt?.parseResult?.profileId ||
+        stmt?.parseResult?.metadata?.profileId ||
+        null
+    });
+    return false;
+  }
+
+  if (!batchUseVisionRowFallback()) {
+    logger.info('[BATCH_ORCHESTRATOR] vision row fallback disabled — skipping extractTransactionRows', {
+      fileName: stmt.fileName
+    });
+    return false;
   }
 
   if (!resolveLlmApiKey()) {
@@ -854,6 +900,7 @@ async function escalateMisalignedFile(stmt, ctx) {
           ...(stmt.parseResult?.metadata || {}),
           ...rowResult.metadata,
           usedVisionRowFallback: true,
+          usedAiVisionFallback: true,
           templateCoordinateStatus: bleed ? 'BLEED_RESCUED' : 'MISALIGNED_RESCUED'
         }
       },
@@ -1119,6 +1166,21 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
 async function tryVisionRowFallback(stmt, ctx) {
   if (!batchUseVisionRowFallback() || !rowFallbackEnabled() || !stmt.fileBuffer) return false;
 
+  // Digital PDFs / known profiles: never burn row-by-row LLM tokens; inherit columns first.
+  if (shouldSkipVisionRowFallback(stmt)) {
+    logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+      fileName: stmt.fileName,
+      parseQuality: stmt.parseQuality || null,
+      digital: isDigitalPdfMode(stmt),
+      profileId:
+        stmt?.profileId ||
+        stmt?.parseResult?.profileId ||
+        stmt?.parseResult?.metadata?.profileId ||
+        null
+    });
+    return false;
+  }
+
   const { effectiveRtn, identitySources } = ctx;
   try {
     logger.info(`[BATCH_ORCHESTRATOR] BATCH_USE_VISION_ROW_FALLBACK for ${stmt.fileName}`);
@@ -1143,7 +1205,8 @@ async function tryVisionRowFallback(stmt, ctx) {
         metadata: {
           ...(stmt.parseResult?.metadata || {}),
           ...rowResult.metadata,
-          usedVisionRowFallback: true
+          usedVisionRowFallback: true,
+          usedAiVisionFallback: true
         }
       },
       identitySources
@@ -1219,9 +1282,26 @@ export async function processInstitutionalGroup(groupKey, stmts, ctx) {
         await runDiagnosticRescue(stmt, { effectiveRtn, identitySources, correlationId });
       }
     } else if (batchUseVisionRowFallback()) {
-      const fallbackCtx = { effectiveRtn, identitySources };
+      // Flag is on but digital / known-profile statements must not use vision rows.
       for (const stmt of stillFailing) {
-        await tryVisionRowFallback(stmt, fallbackCtx);
+        logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+          fileName: stmt.fileName,
+          parseQuality: stmt.parseQuality || null,
+          digital: isDigitalPdfMode(stmt),
+          profileId:
+            stmt?.profileId ||
+            stmt?.parseResult?.profileId ||
+            stmt?.parseResult?.metadata?.profileId ||
+            null
+        });
+      }
+    } else {
+      for (const stmt of stillFailing) {
+        logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+          fileName: stmt.fileName,
+          parseQuality: stmt.parseQuality || null,
+          reason: 'vision_row_fallback_disabled'
+        });
       }
     }
   }
@@ -1464,6 +1544,7 @@ export default {
   processInstitutionalGroup,
   MACRO_CHECKSUM_MIN_OK_RATIO,
   batchUseVisionRowFallback,
+  shouldSkipVisionRowFallback,
   layoutGroupKey,
   hasChecksumBleed
 };

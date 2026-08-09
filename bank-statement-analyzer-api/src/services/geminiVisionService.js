@@ -1,5 +1,9 @@
 /**
- * Gemini 1.5 Pro multimodal "Teacher" for bank statement layout → deterministic runner mapping.
+ * @deprecated Prefer `services/ai/aiVisionService.js` (provider-agnostic AI Vision entry).
+ * This module remains the Gemini provider implementation + row-fallback helpers used by
+ * the default AI Vision provider path. Kept for backwards-compatible imports.
+ *
+ * Gemini multimodal "Teacher" for bank statement layout → deterministic runner mapping.
  * @license Copyright (c) 2025 Shift 4 Financial INC
  */
 
@@ -8,6 +12,15 @@ import { PDFDocument } from 'pdf-lib';
 import { logStructured } from '../utils/structuredLog.js';
 import redisService from './RedisService.js';
 import { preprocessStatementText, buildVisionPromptBlock, summarizePreprocess } from './preprocessStatementForAI.js';
+import {
+  resolveLayoutColumnGeometry,
+  hasUsableExplicitVerticalLines
+} from '../utils/layoutColumnBoundaries.js';
+
+/** @see AI_VISION_FALLBACK_SOURCE in aiVisionService.js */
+export const AI_VISION_FALLBACK_SOURCE = 'ai_vision_fallback';
+/** @see LEGACY_GEMINI_ROW_FALLBACK_SOURCE — kept on writes for legacy DB filters */
+export const LEGACY_GEMINI_ROW_FALLBACK_SOURCE = 'gemini_row_fallback';
 
 export const MATH_PATTERNS = ['MINUS_PREFIX', 'PARENTHESES', 'DEBIT_CREDIT_SEPARATE'];
 
@@ -20,13 +33,17 @@ Header Anchors: Identify exact printed strings marking the start and end of tran
 Account Boundaries (REQUIRED for multi-account PDFs): Strictly segment by account. If the PDF contains more than one account (e.g. Business Checking + Savings, or multiple checking numbers), list each in accountSegments[] with its own start/end anchors and do NOT let one account's rows bleed into another's. Prefer the primary operating account for headerAnchors/vitals when multiple exist; still enumerate every account segment.
 
 Multi-Table (REQUIRED for commercial statements): Commercial PDFs contain MULTIPLE transaction tables across many pages. You MUST list ALL of them in transactionSections[], each with its own start/end anchor pair. Examples:
-- Regions: Electronic Deposits, Electronic Withdrawals, Checks Cleared, Bank Fees, Service Charges
+- Regions: DEPOSITS AND CREDITS / DEPOSITS & CREDITS, WITHDRAWALS / CHECKS AND WITHDRAWALS, CHECKS, SERVICE CHARGES / BANK FEES, RETURNED CHECKS / NSF
 - Wells Fargo: sections under Transaction history (deposits/credits block, withdrawals/debits block, fees, checks paid, card activity, etc.)
 Never return only the first sub-table or a 2–5 row sample — if the statement spans 10+ pages of activity, your transactionSections must cover the full activity span (use the broadest start anchor such as "Transaction history" and section-specific headers for each sub-table).
 
 Secondary mini-ledgers (REQUIRED when present): Service Fees / Service Charges, Interest / Interest summary detail rows, and Returned Items / NSF / Overdraft fee tables are ACTIVITY to extract — not merely stop-anchors for the main history block. Include each mini-ledger as its own transactionSections[] entry so rows can be appended to the primary activity set. Do not skip fee/interest/returned-item ledgers just because they sit after "Transaction history".
 
 Column Mapping: Determine the horizontal order (0-indexed) of Date, Description, Amount, and Balance. For DEBIT_CREDIT_SEPARATE layouts, include debitIdx and creditIdx column indices.
+
+Column X-Boundaries (REQUIRED for commercial multi-column tables): Estimate PDF-point X coordinates for the left/right edges of Date, Description, Deposit/Credit, Withdrawal/Debit, and Balance columns. Return them as columnBoundaries and/or explicitVerticalLines so pdfplumber can slice columns when whitespace-split text fails.
+
+Continued sections (REQUIRED): Look for headers containing "(CONTINUED)" (e.g. "DEPOSITS & CREDITS (CONTINUED)", "WITHDRAWALS (CONTINUED)"). Treat them as the SAME section as the primary header. Maintain the SAME columnBoundaries / explicitVerticalLines (xDate, xDesc, xDeposit/xCredit, xWithdrawal/xDebit, xBalance) across ALL pages in that section sequence — do NOT invent new X coordinates per continued page.
 
 Math Patterns: Identify if the bank uses:
 - MINUS_PREFIX (e.g., -100.00)
@@ -52,20 +69,22 @@ const VISION_USER_SCHEMA = `Return ONLY a raw JSON object (no markdown, no backt
   ],
   "transactionSections": [
     { "label": "Transaction history (all activity)", "start": "Transaction history", "end": "Daily balance summary" },
-    { "label": "Electronic Deposits", "start": "ELECTRONIC DEPOSITS", "end": "Total deposits" },
-    { "label": "Electronic Withdrawals", "start": "ELECTRONIC WITHDRAWALS", "end": "Total withdrawals" },
-    { "label": "Checks Paid", "start": "CHECKS PAID", "end": "Total checks" },
-    { "label": "Service Fees", "start": "Service fee summary", "end": "Total service fees" },
-    { "label": "Interest", "start": "Interest summary", "end": "Total interest paid" },
-    { "label": "Returned Items / NSF", "start": "Returned item", "end": "Total returned items" }
+    { "label": "Deposits and Credits", "start": "DEPOSITS AND CREDITS", "end": "Total deposits" },
+    { "label": "Withdrawals", "start": "WITHDRAWALS", "end": "Total withdrawals" },
+    { "label": "Checks", "start": "CHECKS", "end": "Total checks" },
+    { "label": "Service Charges", "start": "SERVICE CHARGES", "end": "Total service charges" },
+    { "label": "Returned Checks / NSF", "start": "RETURNED CHECKS", "end": "Total returned" }
   ],
-  "explicitVerticalLines": [72, 150, 310, 470, 540],
+  "columnBoundaries": { "xDate": 72, "xDesc": 150, "xDeposit": 400, "xWithdrawal": 470, "xBalance": 540 },
+  "explicitVerticalLines": [72, 150, 400, 470, 540],
   "explicitHorizontalLines": [120, 350, 580]
 }
 
 Rules:
-- explicitVerticalLines is OPTIONAL. When present it must be an array of x-coordinates (PDF points, left-to-right) marking each vertical column boundary in the transaction table, e.g. the right edge of the date column, the right edge of the description column, and the right edge of the amount column(s). Omit it (or return []) when the column boundaries are not clearly visible.
-- explicitHorizontalLines is OPTIONAL. When present it must be an array of y-coordinates (PDF points, top-to-bottom) marking each horizontal row boundary in the transaction table, e.g. the bottom edge of the header row and the top edges of section separator lines. Omit it (or return []) when horizontal boundaries are not clearly visible.
+- columnBoundaries and/or explicitVerticalLines are REQUIRED for commercial multi-column statements (Regions, Wells, Chase, etc.). columnBoundaries uses PDF points for xDate, xDesc, xDeposit (or xCredit), xWithdrawal (or xDebit), and optional xBalance. explicitVerticalLines is the sorted left-to-right array of those X breaks for pdfplumber.
+- Look for headers containing "(CONTINUED)" and maintain the same column bounding coordinates across all pages in the section sequence. Do not return different X coords for continued pages.
+- Only omit both when the PDF is a single-column list with no visible horizontal column structure.
+- explicitHorizontalLines is OPTIONAL. When present it must be an array of y-coordinates (PDF points, top-to-bottom) marking each horizontal row boundary in the transaction table. Omit it (or return []) when horizontal boundaries are not clearly visible.
 - accountSegments is OPTIONAL. When the PDF has multiple accounts, list each account with exact start/end anchors so extraction does not bleed across accounts.
 - transactionSections is REQUIRED when the PDF has more than one transaction block or multiple pages of activity. Include every distinct table (deposits, withdrawals, checks, fees, interest, returned items/NSF, card, ACH, etc.). Mini-ledgers are activity sections, not stop-anchors only.
 - headerAnchors.start/end should span the full primary-account activity region; per-table sections use narrower start/end pairs.
@@ -142,6 +161,18 @@ const LAYOUT_JSON_SCHEMA = {
     explicitHorizontalLines: {
       type: 'array',
       items: { type: 'number' }
+    },
+    columnBoundaries: {
+      type: 'object',
+      properties: {
+        xDate: { type: 'number' },
+        xDesc: { type: 'number' },
+        xDeposit: { type: 'number' },
+        xCredit: { type: 'number' },
+        xWithdrawal: { type: 'number' },
+        xDebit: { type: 'number' },
+        xBalance: { type: 'number' }
+      }
     }
   },
   required: ['headerAnchors', 'columnMapping', 'mathPattern', 'confidenceScore']
@@ -204,14 +235,14 @@ async function readLayoutCache(rtn, bankName) {
     if (!redisService.isConnected) return null;
     const raw = await redisService.get(key);
     if (!raw) {
-      logStructured('info', '[geminiVision] layout cache miss', { key, rtn, bankName });
+      logStructured('info', '[AI_VISION] layout cache miss', { key, rtn, bankName });
       return null;
     }
-    logStructured('info', '[geminiVision] layout cache hit', { key, rtn, bankName });
+    logStructured('info', '[AI_VISION] layout cache hit', { key, rtn, bankName });
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch (err) {
-    logStructured('warn', '[geminiVision] layout cache read failed', { key, err: err?.message });
+    logStructured('warn', '[AI_VISION] layout cache read failed', { key, err: err?.message });
     return null;
   }
 }
@@ -401,8 +432,10 @@ export function normalizeVisionTransactionRow(row, defaultYear) {
     amount: signed,
     type: type === 'DEBIT' ? 'DEBIT' : 'credit',
     rawAmount: absAmt.toFixed(2),
-    rawLine: `[VISION_ROW] ${description}`,
-    extractionSource: 'gemini_row_fallback'
+    rawLine: `[AI_VISION_ROWS] ${description}`,
+    extractionSource: AI_VISION_FALLBACK_SOURCE,
+    /** Back-compat for queries still filtering gemini_row_fallback */
+    extractionSourceLegacy: LEGACY_GEMINI_ROW_FALLBACK_SOURCE
   };
 }
 
@@ -461,11 +494,18 @@ export function extractJsonObject(raw) {
  * Normalize optional Gemini explicitVerticalLines (x-coordinates of column breaks).
  * @param {unknown} raw
  * @returns {number[] | undefined}
+ * @deprecated Prefer resolveLayoutColumnGeometry from layoutColumnBoundaries.js
  */
 function normalizeExplicitVerticalLines(raw) {
-  if (!Array.isArray(raw)) return undefined;
-  const nums = raw.map(Number).filter(Number.isFinite);
-  return nums.length > 0 ? nums : undefined;
+  return resolveLayoutColumnGeometry({ explicitVerticalLines: raw }).explicitVerticalLines;
+}
+
+/**
+ * @param {object} parsed
+ * @returns {object}
+ */
+function geometryFieldsFromParsed(parsed) {
+  return resolveLayoutColumnGeometry(parsed);
 }
 
 /**
@@ -563,9 +603,7 @@ export function prenormalizeVisionPayload(parsed) {
     transactionSections,
     _layoutName: parsed.layoutName,
     _vitals: parsed.vitals,
-    ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
-      ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
-      : {}),
+    ...geometryFieldsFromParsed(parsed),
     ...(normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) !== undefined
       ? { explicitHorizontalLines: normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) }
       : {})
@@ -635,9 +673,7 @@ export function coerceLayoutMapping(parsed) {
     mathPattern,
     balanceReconciliationHint,
     ...(transactionSections?.length ? { transactionSections } : {}),
-    ...(normalizeExplicitVerticalLines(parsed.explicitVerticalLines) !== undefined
-      ? { explicitVerticalLines: normalizeExplicitVerticalLines(parsed.explicitVerticalLines) }
-      : {}),
+    ...geometryFieldsFromParsed(parsed),
     ...(normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) !== undefined
       ? { explicitHorizontalLines: normalizeExplicitHorizontalLines(parsed.explicitHorizontalLines) }
       : {}),
@@ -671,7 +707,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   const bankName = String(options.bankName || '').trim();
   const rescueHints = options.rescueHints || null;
   const logBase = {
-    domain: 'gemini-vision',
+    domain: 'ai-vision',
     rtn: rtn || null,
     bankName: bankName || null,
     statementId: options.statementId || null,
@@ -680,11 +716,11 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const cached = await readLayoutCache(rtn, bankName, 0);
   if (cached?.headerAnchors) {
-    logStructured('info', '[VISION_CACHE_HIT] Using cached layout', logBase);
+    logStructured('info', '[AI_VISION] Using cached layout', logBase);
     return cached;
   }
 
-  logStructured('info', '[VISION_START] Analyzing new layout for RTN', logBase);
+  logStructured('info', '[AI_VISION] Analyzing new layout for RTN', logBase);
 
   await respectVisionRateLimit();
 
@@ -719,10 +755,10 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
       try {
         const preprocessResult = preprocessStatementText(digitalTextExcerpt);
         const { summary, stats } = summarizePreprocess(preprocessResult);
-        logStructured('info', '[VISION_PREPROCESS] Statement pre-processed', { ...logBase, ...stats, summary });
+        logStructured('info', '[AI_VISION] Statement pre-processed', { ...logBase, ...stats, summary });
         excerptBlock = buildVisionPromptBlock(preprocessResult);
       } catch (err) {
-        logStructured('warn', '[VISION_PREPROCESS] Pre-processing failed, using raw text', {
+        logStructured('warn', '[AI_VISION] Pre-processing failed, using raw text', {
           ...logBase, error: err?.message,
         });
         excerptBlock = `\n\nDigital PDF text excerpt (anchor strings MUST appear verbatim in this text):\n---\n${digitalTextExcerpt}\n---`;
@@ -742,7 +778,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   try {
     text = await generateVisionContent(model, primaryParts);
   } catch (e) {
-    logStructured('warn', '[VISION_FAILURE] Gemini generateContent failed', {
+    logStructured('warn', '[AI_VISION] Gemini generateContent failed', {
       ...logBase,
       error: e.message,
       responseLength: 0
@@ -755,7 +791,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
     const snippet = String(text).slice(0, 4000);
     const repairParts = [
       {
-        text: `Your previous output was not valid JSON or could not be parsed. Output (truncated):\n${snippet}\n\nReturn ONLY a single raw JSON object matching the schema described earlier (layoutName, headerAnchors.start/end, columnMapping with dateIdx, descIdx, amountIdx, balanceIdx, mathPattern, confidenceScore, vitals). No markdown.`
+        text: `Your previous output was not valid JSON or could not be parsed. Output (truncated):\n${snippet}\n\nReturn ONLY a single raw JSON object matching the schema (layoutName, headerAnchors.start/end, columnMapping with dateIdx/descIdx/amountIdx, mathPattern, confidenceScore, vitals, transactionSections, columnBoundaries and/or explicitVerticalLines). No markdown.`
       },
       {
         inlineData: {
@@ -768,7 +804,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
       text = await generateVisionContent(model, repairParts);
       parsed = extractJsonObject(text);
     } catch (e) {
-      logStructured('warn', '[VISION_FAILURE] JSON repair retry failed', {
+      logStructured('warn', '[AI_VISION] JSON repair retry failed', {
         ...logBase,
         error: e.message,
         responseLength: String(text).length
@@ -778,7 +814,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   }
 
   if (!parsed) {
-    logStructured('warn', '[VISION_FAILURE] Unparseable layout JSON after repair', {
+    logStructured('warn', '[AI_VISION] Unparseable layout JSON after repair', {
       ...logBase,
       responseLength: String(text).length
     });
@@ -787,21 +823,66 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   const pre = prenormalizeVisionPayload(parsed);
   if (!pre) {
-    logStructured('warn', '[VISION_FAILURE] Vision payload pre-normalize failed', logBase);
+    logStructured('warn', '[AI_VISION] Vision payload pre-normalize failed', logBase);
     throw new Error('Gemini layout JSON could not be normalized');
   }
 
-  const { _layoutName, _vitals, ...forCoerce } = pre;
-  const core = coerceLayoutMapping(forCoerce);
+  let { _layoutName, _vitals, ...forCoerce } = pre;
+  let core = coerceLayoutMapping(forCoerce);
   if (!core) {
-    logStructured('warn', '[VISION_FAILURE] coerceLayoutMapping returned null', logBase);
+    logStructured('warn', '[AI_VISION] coerceLayoutMapping returned null', logBase);
     throw new Error('Gemini layout JSON coercion failed');
+  }
+
+  // Multi-section commercial layouts need X boundaries for pdfplumber; retry once if missing.
+  const sectionCount = Array.isArray(core.transactionSections)
+    ? core.transactionSections.length
+    : 0;
+  if (sectionCount > 1 && !hasUsableExplicitVerticalLines(core)) {
+    logStructured('warn', '[AI_VISION] Multi-section layout missing column X boundaries', {
+      ...logBase,
+      sectionCount
+    });
+    try {
+      await respectVisionRateLimit();
+      const retryParts = [
+        {
+          text: `${VISION_USER_SCHEMA}\n\n${routingLine}${excerptBlock}\n\nCRITICAL RETRY: You returned ${sectionCount} transactionSections but omitted usable columnBoundaries/explicitVerticalLines. Return the SAME layout JSON WITH at least 3 PDF-point X breaks (columnBoundaries and explicitVerticalLines).`
+        },
+        {
+          inlineData: {
+            mimeType: 'application/pdf',
+            data: subset.toString('base64')
+          }
+        }
+      ];
+      const retryText = await generateVisionContent(model, retryParts);
+      const retryParsed = extractJsonObject(retryText);
+      if (retryParsed) {
+        const retryPre = prenormalizeVisionPayload(retryParsed);
+        if (retryPre) {
+          const { _layoutName: ln, _vitals: vt, ...retryCoerce } = retryPre;
+          const retryCore = coerceLayoutMapping(retryCoerce);
+          if (retryCore && hasUsableExplicitVerticalLines(retryCore)) {
+            core = retryCore;
+            _layoutName = ln;
+            _vitals = vt;
+            logStructured('info', '[AI_VISION] Column X boundaries recovered', logBase);
+          }
+        }
+      }
+    } catch (e) {
+      logStructured('warn', '[AI_VISION] Column boundary retry failed', {
+        ...logBase,
+        error: e?.message
+      });
+    }
   }
 
   const conf = core.layoutConfidence ?? parsed.confidenceScore ?? parsed.confidence;
   const minConf = layoutConfidenceMin();
   if (conf != null && Number(conf) < minConf) {
-    logStructured('warn', '[VISION_FAILURE] Layout confidence below floor', {
+    logStructured('warn', '[AI_VISION] Layout confidence below floor', {
       ...logBase,
       confidenceScore: conf,
       minConfidence: minConf
@@ -820,7 +901,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   };
 
   if (options.sampleRows && !validateLayoutAgainstSampleRows(finalOut, options.sampleRows)) {
-    logStructured('warn', '[VISION_FAILURE] Layout failed sample-row validation', logBase);
+    logStructured('warn', '[AI_VISION] Layout failed sample-row validation', logBase);
     const err = new Error('LAYOUT_SAMPLE_VALIDATION_FAILED');
     err.code = 'LAYOUT_SAMPLE_VALIDATION_FAILED';
     throw err;
@@ -830,7 +911,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
   const printedOpening = vitals.openingBalance ?? options.printedOpeningBalance;
   const printedClosing = vitals.closingBalance ?? options.printedClosingBalance;
   if (printedOpening != null || printedClosing != null) {
-    logStructured('info', '[VISION_MATH] Printed balances from teacher', {
+    logStructured('info', '[AI_VISION] Printed balances from teacher', {
       ...logBase,
       openingBalance: printedOpening ?? null,
       closingBalance: printedClosing ?? null
@@ -839,7 +920,7 @@ export async function analyzeStatementLayout(pdfBuffer, options = {}) {
 
   await writeLayoutCache(rtn, bankName, finalOut, finalOut.transactionSections?.length || 0);
 
-  logStructured('info', '[VISION_SUCCESS] Layout learned', {
+  logStructured('info', '[AI_VISION] Layout learned', {
     ...logBase,
     confidenceScore: finalOut.layoutConfidence ?? null,
     layoutName: finalOut.layoutName || null
@@ -863,7 +944,7 @@ export async function extractTransactionRows(pdfBuffer, options = {}) {
   const rtn = String(options.rtn || '').replace(/\D/g, '');
   const bankName = String(options.bankName || '').trim();
   const logBase = {
-    domain: 'gemini-vision-rows',
+    domain: 'ai-vision-rows',
     rtn: rtn || null,
     bankName: bankName || null,
     statementId: options.statementId || null,
@@ -905,13 +986,13 @@ export async function extractTransactionRows(pdfBuffer, options = {}) {
     }
   ];
 
-  logStructured('info', '[VISION_ROW_START] Direct transaction row extraction', logBase);
+  logStructured('info', '[AI_VISION_ROWS] Direct transaction row extraction', logBase);
 
   let text = '';
   try {
     text = await generateVisionContent(model, parts);
   } catch (e) {
-    logStructured('warn', '[VISION_ROW_FAILURE] generateContent failed', {
+    logStructured('warn', '[AI_VISION_ROWS] generateContent failed', {
       ...logBase,
       error: e.message
     });
@@ -953,7 +1034,7 @@ export async function extractTransactionRows(pdfBuffer, options = {}) {
     coerced.closingBalance ??
     (options.printedClosingBalance != null ? Number(options.printedClosingBalance) : null);
 
-  logStructured('info', '[VISION_ROW_SUCCESS] Rows extracted', {
+  logStructured('info', '[AI_VISION_ROWS] Rows extracted', {
     ...logBase,
     transactionCount: coerced.transactions.length,
     openingBalance,
@@ -966,6 +1047,11 @@ export async function extractTransactionRows(pdfBuffer, options = {}) {
     closingBalance,
     metadata: {
       visionRowFallback: true,
+      aiVisionFallback: true,
+      usedAiVisionFallback: true,
+      extractionSource: AI_VISION_FALLBACK_SOURCE,
+      /** Legacy tag for filters still matching gemini_row_fallback */
+      extractionSourceLegacy: LEGACY_GEMINI_ROW_FALLBACK_SOURCE,
       rowModel: resolveGeminiRowExtractionModel(),
       pageCap: rowExtractionMaxPages()
     }

@@ -71,6 +71,24 @@ describe('geminiVisionService helpers', () => {
     expect(core.layoutConfidence).toBe(0.91);
     expect(_layoutName).toBe('TestBank_Checking_v1');
   });
+
+  it('columnBoundaries derive sorted explicitVerticalLines', () => {
+    const pre = prenormalizeVisionPayload({
+      ...validVisionJson,
+      columnBoundaries: {
+        xWithdrawal: 470,
+        xDate: 72,
+        xDesc: 150,
+        xDeposit: 400
+      }
+    });
+    expect(pre.columnBoundaries.xDate).toBe(72);
+    expect(pre.explicitVerticalLines).toEqual([72, 150, 400, 470]);
+    const { _layoutName, _vitals, ...forCoerce } = pre;
+    const core = coerceLayoutMapping(forCoerce);
+    expect(core.explicitVerticalLines).toEqual([72, 150, 400, 470]);
+    expect(core.columnBoundaries.xDesc).toBe(150);
+  });
 });
 
 describe('resolveGeminiApiKey', () => {

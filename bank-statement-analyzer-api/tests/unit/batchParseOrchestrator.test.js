@@ -74,6 +74,7 @@ import {
   enhanceBatchParsesWithTeacher,
   hasChecksumBleed,
   batchUseVisionRowFallback,
+  shouldSkipVisionRowFallback,
   detectProgrammaticAnomalies
 } from '../../src/services/batchParseOrchestrator.js';
 import { learnTemplateLayout, extractTransactionRows } from '../../src/services/llm/aiLayoutService.js';
@@ -208,14 +209,40 @@ describe('enhanceBatchParsesWithTeacher', () => {
     expect(hasChecksumBleed(stmt)).toBe(true);
   });
 
-  it('batchUseVisionRowFallback defaults true unless explicitly false', () => {
+  it('batchUseVisionRowFallback defaults false unless explicitly true', () => {
     const prev = process.env.BATCH_USE_VISION_ROW_FALLBACK;
+    const prevAlias = process.env.ENABLE_VISION_ROW_FALLBACK;
     delete process.env.BATCH_USE_VISION_ROW_FALLBACK;
-    expect(batchUseVisionRowFallback()).toBe(true);
-    process.env.BATCH_USE_VISION_ROW_FALLBACK = 'false';
+    delete process.env.ENABLE_VISION_ROW_FALLBACK;
     expect(batchUseVisionRowFallback()).toBe(false);
+    process.env.BATCH_USE_VISION_ROW_FALLBACK = 'true';
+    expect(batchUseVisionRowFallback()).toBe(true);
+    delete process.env.BATCH_USE_VISION_ROW_FALLBACK;
+    process.env.ENABLE_VISION_ROW_FALLBACK = '1';
+    expect(batchUseVisionRowFallback()).toBe(true);
     if (prev !== undefined) process.env.BATCH_USE_VISION_ROW_FALLBACK = prev;
     else delete process.env.BATCH_USE_VISION_ROW_FALLBACK;
+    if (prevAlias !== undefined) process.env.ENABLE_VISION_ROW_FALLBACK = prevAlias;
+    else delete process.env.ENABLE_VISION_ROW_FALLBACK;
+  });
+
+  it('shouldSkipVisionRowFallback for digital and regions_business_checking', () => {
+    expect(
+      shouldSkipVisionRowFallback({
+        parseResult: { metadata: { extractionMode: 'digital_pdf' } }
+      })
+    ).toBe(true);
+    expect(
+      shouldSkipVisionRowFallback({
+        profileId: 'regions_business_checking',
+        parseResult: { metadata: { extractionMode: 'scan' } }
+      })
+    ).toBe(true);
+    expect(
+      shouldSkipVisionRowFallback({
+        parseResult: { metadata: { extractionMode: 'scan', profileId: 'other_bank' } }
+      })
+    ).toBe(false);
   });
 
   it('forces fresh teach when Mongo LEARNING is rejected by shouldRejectStoredMongoTemplate', async () => {

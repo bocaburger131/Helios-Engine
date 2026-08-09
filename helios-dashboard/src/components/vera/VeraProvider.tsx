@@ -11,6 +11,7 @@ import {
 } from "react";
 import { API_BASE, authHeaders } from "@/lib/apiClient";
 import { useDealContextOptional } from "@/components/shell/DealContext";
+import { answerFromDealContextClient } from "@/lib/veraResultsAnswer";
 
 export type VeraChatRole = "user" | "assistant";
 
@@ -41,6 +42,8 @@ export type VeraContextValue = {
 const VeraContext = createContext<VeraContextValue | null>(null);
 
 const VERA_ACCENT = "#3366a9";
+/** Light blue accent for results-mode assistant bubbles. */
+const VERA_RESULTS_BLUE = "#7eb6ff";
 
 function newId() {
   return `vera-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -107,6 +110,19 @@ export function VeraProvider({ children }: { children: ReactNode }) {
 
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
+          // Prefer local results answer over a hard failure for co-pilot UX.
+          const local = answerFromDealContextClient(message, dealContext);
+          if (local && (res.status >= 500 || res.status === 503 || res.status === 502)) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: newId(),
+                role: "assistant",
+                content: local,
+              },
+            ]);
+            return;
+          }
           throw new Error(
             json?.error || json?.details || `Vera chat failed (${res.status})`
           );
@@ -133,6 +149,19 @@ export function VeraProvider({ children }: { children: ReactNode }) {
           },
         ]);
       } catch (err) {
+        const local = answerFromDealContextClient(message, dealContext);
+        if (local) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: newId(),
+              role: "assistant",
+              content: local,
+            },
+          ]);
+          setError(null);
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Chat failed";
         setError(msg);
         setMessages((prev) => [
@@ -193,4 +222,4 @@ export function useVeraOptional(): VeraContextValue | null {
   return useContext(VeraContext);
 }
 
-export { VERA_ACCENT };
+export { VERA_ACCENT, VERA_RESULTS_BLUE };
