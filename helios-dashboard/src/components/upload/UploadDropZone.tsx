@@ -15,10 +15,11 @@ export default function UploadDropZone({
   onFiles,
   onPreview,
 }: Props) {
+  const list = Array.isArray(files) ? files : [];
   return (
     <div
       className={`rounded-xl border-2 border-dashed transition ${
-        files.length
+        list.length
           ? "border-emerald-300 bg-emerald-50/40"
           : "border-slate-200 bg-slate-50/50"
       } ${busy ? "pointer-events-none opacity-60" : ""} ${
@@ -31,7 +32,7 @@ export default function UploadDropZone({
       }}
     >
       <p className="text-center text-sm font-medium text-slate-800">
-        {files.length ? `${files.length} file(s) staged` : "Drop bank statement PDFs here"}
+        {list.length ? `${list.length} file(s) staged` : "Drop bank statement PDFs here"}
       </p>
       {!compact && (
         <p className="mt-1 text-center text-xs text-slate-500">
@@ -50,9 +51,9 @@ export default function UploadDropZone({
           />
         </label>
       </div>
-      {files.length > 0 && (
+      {list.length > 0 && (
         <ul className="mt-4 space-y-1">
-          {files.map((f) => (
+          {list.map((f) => (
             <li
               key={f.name}
               className="flex items-center justify-between gap-2 rounded-lg bg-white/80 px-3 py-1.5 text-sm"

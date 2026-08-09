@@ -70,11 +70,44 @@ export const uploadStatementSchema = z.object({
   anchorMode: z.enum(['auto', 'manual']).optional(),
 }).passthrough(); // Allow extra fields for forward compatibility
 
+// ── Helpers ──
+
+/** Coerce a FormData string value to an object via JSON.parse. */
+function coerceJsonString(value) {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return value;
+}
+
+/** Coerce a FormData string value to a boolean.
+ *  Zod's z.coerce.boolean() uses Boolean() which turns any non-empty string (including "false") into true.
+ *  This helper correctly handles "true"/"1"/"yes" → true and "false"/"0"/"no" → false.
+ */
+function coerceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase().trim();
+    if (lower === 'true' || lower === '1' || lower === 'yes') return true;
+    if (lower === 'false' || lower === '0' || lower === 'no') return false;
+  }
+  return value;
+}
+
+const coerceBooleanSchema = (schema) => z.preprocess(coerceBoolean, schema);
+
 // ── Schema: Batch triage ──
 // POST /batch/triage — upload metadata + optional applicationData
 export const triageSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z.record(z.unknown()).optional(),
+  applicationData: z
+    .union([z.record(z.unknown()), z.string()])
+    .transform(coerceJsonString)
+    .optional(),
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
@@ -84,7 +117,10 @@ export const triageSchema = z.object({
 // POST /batch — uploadSessionId + applicationData + bank confirmation fields
 export const batchUploadSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z.record(z.unknown()).optional(),
+  applicationData: z
+    .union([z.record(z.unknown()), z.string()])
+    .transform(coerceJsonString)
+    .optional(),
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
@@ -92,7 +128,7 @@ export const batchUploadSchema = z.object({
   businessAddress: z.string().optional(),
   requestedLoanAmount: z.number().positive().optional(),
   anchorMode: z.enum(['auto', 'manual']).optional(),
-  confirmBank: z.boolean().optional(),
+  confirmBank: coerceBooleanSchema(z.boolean()).optional(),
 }).passthrough();
 
 // ── Schema: Confirm bank ──
@@ -104,6 +140,7 @@ export const confirmBankSchema = z.object({
   routingNumber: z.string().optional(),
   confirmedFields: z.record(z.unknown()).optional(),
   fileNames: z.array(z.string()).optional(),
+  confirmBank: coerceBooleanSchema(z.boolean()).optional(),
 }).passthrough();
 
 export default {

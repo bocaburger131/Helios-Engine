@@ -21,6 +21,10 @@ import {
   type BatchProgress,
 } from "@/lib/batchUploadClient";
 import { fetchDevConfig, getStoredToken } from "@/lib/apiClient";
+import {
+  useStatementPolling,
+  type PollingStatus,
+} from "@/hooks/useStatementPolling";
 
 const AUTO_TRIAGE_DEBOUNCE_MS = 300;
 
@@ -44,6 +48,32 @@ export default function UploadHubPage() {
   const [progress, setProgress] = useState<BatchProgress | null>(null);
   const [inspectorFile, setInspectorFile] = useState<File | null>(null);
   const [serverConfig, setServerConfig] = useState("");
+  const [pollingRunId, setPollingRunId] = useState<string | null>(null);
+
+  const { status: pollStatus, reviewPayload: pollPayload } =
+    useStatementPolling(pollingRunId);
+
+  useEffect(() => {
+    if (pollStatus === "REQUIRES_HUMAN_REVIEW" && pollPayload) {
+      setMessages((prev) => [
+        ...prev,
+        createMessage(
+          `Human review required — checksum delta <strong>${pollPayload.checksumDelta}</strong>. Review the extracted rows below.`,
+          "hitl",
+          { ...pollPayload, runId: pollingRunId ?? undefined }
+        ),
+      ]);
+      if (files.length > 0) {
+        setInspectorFile(files[0]);
+      }
+      setPollingRunId(null);
+    } else if (
+      pollStatus === "COMPLETED" ||
+      pollStatus === "FAILED"
+    ) {
+      setPollingRunId(null);
+    }
+  }, [pollStatus, pollPayload, files, pollingRunId]);
 
   const triageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triageGen = useRef(0);
@@ -125,6 +155,7 @@ export default function UploadHubPage() {
       }
       setFiles(pdfs);
       setUploadSessionId(null);
+      setPollingRunId(null);
       setPrimaryMode("upload");
       append(`Staged ${pdfs.length} PDF(s). Auto-triage starting…`, "system");
 
@@ -170,8 +201,10 @@ export default function UploadHubPage() {
       let resultJson: Record<string, unknown> | null = null;
 
       if (status === 202 && json.jobId) {
-        append(`Job <code>${String(json.jobId).slice(0, 8)}…</code> running.`, "system");
-        resultJson = await pollBatchJob(String(json.jobId), {
+        const jobId = String(json.jobId);
+        append(`Job <code>${jobId.slice(0, 8)}…</code> running.`, "system");
+        setPollingRunId(jobId);
+        resultJson = await pollBatchJob(jobId, {
           correlationId,
           onProgress: (p) => {
             setProgress(p);

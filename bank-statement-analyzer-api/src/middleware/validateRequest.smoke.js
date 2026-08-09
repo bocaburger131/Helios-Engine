@@ -56,6 +56,40 @@ test('all 4 schemas catch bad data', () => {
   }
 });
 
+// ── String coercion tests (FormData sends values as strings) ──
+console.log('\n📋 FormData string coercion');
+test('triageSchema parses applicationData string to object', () => {
+  const r = triageSchema.safeParse({ applicationData: '{"companyName":"Test Corp"}' });
+  if (!r.success) throw new Error('should parse string: ' + JSON.stringify(r.error.errors));
+  if (typeof r.data.applicationData !== 'object') throw new Error('should be object after parse');
+  if (r.data.applicationData.companyName !== 'Test Corp') throw new Error('wrong companyName');
+});
+test('batchUploadSchema parses applicationData string to object', () => {
+  const r = batchUploadSchema.safeParse({ applicationData: '{"companyName":"Acme"}' });
+  if (!r.success) throw new Error('should parse string: ' + JSON.stringify(r.error.errors));
+  if (r.data.applicationData.companyName !== 'Acme') throw new Error('wrong companyName');
+});
+test('batchUploadSchema coerceBoolean parses "true" string', () => {
+  const r = batchUploadSchema.safeParse({ confirmBank: 'true' });
+  if (!r.success) throw new Error('should coerce "true": ' + JSON.stringify(r.error.errors));
+  if (r.data.confirmBank !== true) throw new Error('should be true');
+});
+test('batchUploadSchema coerceBoolean parses "false" string', () => {
+  const r = batchUploadSchema.safeParse({ confirmBank: 'false' });
+  if (!r.success) throw new Error('should coerce "false": ' + JSON.stringify(r.error.errors));
+  if (r.data.confirmBank !== false) throw new Error('should be false');
+});
+test('batchUploadSchema passes applicationData as object (no string)', () => {
+  const r = batchUploadSchema.safeParse({ applicationData: { companyName: 'Direct' } });
+  if (!r.success) throw new Error('should pass object: ' + JSON.stringify(r.error.errors));
+  if (r.data.applicationData.companyName !== 'Direct') throw new Error('wrong companyName');
+});
+test('confirmBankSchema coerceBoolean parses "true" string', () => {
+  const r = confirmBankSchema.safeParse({ uploadSessionId: 'abc-123', confirmBank: 'true' });
+  if (!r.success) throw new Error('should coerce "true": ' + JSON.stringify(r.error.errors));
+  if (r.data.confirmBank !== true) throw new Error('should be true');
+});
+
 console.log(`\n${'='.repeat(40)}\nResults: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
 else console.log('🎉 P4 validation middleware verified!');

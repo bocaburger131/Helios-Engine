@@ -189,12 +189,15 @@ function enforceSectionTotal(rows, printedTotal, { relativeTol = 0.02, absTol = 
  */
 function detectSectionHeader(line) {
   const s = line.trim();
-  if (/^DEPOSITS\s*&\s*CREDITS\b/i.test(s)) return REGIONS_SECTIONS.DEPOSITS;
+  // DEPOSITS & CREDITS (with optional "CONTINUED" continuation header)
+  if (/^DEPOSITS\s*&\s*CREDITS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.DEPOSITS;
   // Must precede /^CHECKS\b/ — "RETURNED CHECKS" is a credit section.
-  if (/^RETURNED\s+CHECKS\b/i.test(s)) return REGIONS_SECTIONS.RETURNED_CHECKS;
-  if (/^WITHDRAWALS\b/i.test(s)) return REGIONS_SECTIONS.WITHDRAWALS;
-  if (/^FEES\b/i.test(s)) return REGIONS_SECTIONS.FEES;
-  if (/^CHECKS\b/i.test(s)) return REGIONS_SECTIONS.CHECKS;
+  if (/^RETURNED\s+CHECKS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.RETURNED_CHECKS;
+  // WITHDRAWALS (with optional "CONTINUED" continuation header)
+  if (/^WITHDRAWALS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.WITHDRAWALS;
+  if (/^FEES(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.FEES;
+  // CHECKS (with optional "CONTINUED" continuation header)
+  if (/^CHECKS(?:\s*\(CONTINUED\))?\b/i.test(s)) return REGIONS_SECTIONS.CHECKS;
   // Hard stops: end of transaction zone.
   if (/^DAILY\s+BALANCE\s+SUMMARY\b/i.test(s)) return '__end__';
   if (/^Easy\s+Steps\s+to\s+Balance/i.test(s)) return '__end__';
@@ -205,18 +208,18 @@ function detectSectionHeader(line) {
 function isNoiseLine(line) {
   const s = line.trim();
   if (!s) return true;
-  if (/^Total\s+(Deposits|Withdrawals|Checks|Returned\s+Checks|Fees)\b/i.test(s)) return true;
+  if (/^Total\s+(Deposits\s*&\s*Credits|Deposits|Withdrawals|Checks|Returned\s+Checks|Fees)\b/i.test(s)) return true;
   if (/^Date\s*Check\s*No\.?\s*Amount/i.test(s)) return true;
   if (/^Date\s*Balance/i.test(s)) return true;
   if (/^DateCheck/i.test(s)) return true;
   if (/^DateBalance/i.test(s)) return true;
   if (/^Thank\s+You\s+For\s+Banking/i.test(s)) return true;
   if (
-    /\(CONTINUED\)/i.test(s) &&
-    !/^(DEPOSITS|WITHDRAWALS|CHECKS|RETURNED\s+CHECKS|FEES)\b/i.test(s)
-  ) {
-    return true;
-  }
+      /\(CONTINUED\)/i.test(s) &&
+      !/^(DEPOSITS\s*&\s*CREDITS|WITHDRAWALS|CHECKS|RETURNED\s+CHECKS|FEES)(?:\s*\(CONTINUED\))?\b/i.test(s)
+    ) {
+      return true;
+    }
   if (/^\*\s*Break\s+In/i.test(s)) return true;
   return false;
 }

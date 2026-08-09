@@ -59,3 +59,8 @@ bank-statement-analyzer-api/*-test.png
 # OS
 Thumbs.db
 .DS_Store
+
+# Binary artifacts / local dependencies
+*.deb
+*.deb.gz
+*.deb.bz2

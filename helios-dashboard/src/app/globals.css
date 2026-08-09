@@ -166,3 +166,27 @@ body.helios-app {
   right: 1.5rem;
   z-index: 40;
 }
+
+.chat-bubble--hitl-missing-balance {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.chat-bubble--hitl-multi-account {
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  color: #6b21a8;
+}
+
+.chat-bubble--hitl-date-fix {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+}
+
+.chat-bubble--hitl-fraud-review {
+  background: #fef2f2;
+  border: 2px solid #dc2626;
+  color: #991b1b;
+}
