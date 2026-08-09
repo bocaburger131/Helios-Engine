@@ -119,6 +119,12 @@ body.helios-app {
   color: #1e40af;
 }
 
+.chat-bubble--hitl {
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  color: #6b21a8;
+}
+
 .hub-progress {
   height: 4px;
   background: #e2e8f0;

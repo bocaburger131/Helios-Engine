@@ -1,4 +1,5 @@
 import { validateReconciliation } from '../services/templateGraduationService.js';
+import { validateRowRunningBalances } from '../services/extraction/statementReconciliation.js';
 import {
   buildDealIdentity,
   sanitizeTransactionsForMacro
@@ -92,8 +93,8 @@ export function buildParseResultForRecon(parsedStatement) {
 }
 
 /**
- * Sanitize → normalize → checksum; mutates parsedStatement in place.
- * @returns {{ checksumRecon: object, parseQuality: 'OK'|'FAILED_CHECKSUM', parseSanityStats: object }}
+ * Sanitize → normalize → checksum + row micro-checksum; mutates parsedStatement in place.
+ * @returns {{ checksumRecon: object, rowBalanceRecon: object, parseQuality: 'OK'|'FAILED_CHECKSUM', parseSanityStats: object }}
  */
 export function applyParseQualityPipeline(parsedStatement, identitySources = {}) {
   const rawRows = (parsedStatement.transactions || []).map((t) => ({ ...t }));
@@ -125,6 +126,11 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
   if (!reconValidation.ok) { logger.warn('checksumRecon validation failed', { errors: reconValidation.errors.slice(0, 3) }); }
   parsedStatement.checksumRecon = checksumRecon;
 
+  const rowBalanceRecon = validateRowRunningBalances(normalized, {
+    openingBalance: parsedStatement.openingBalance ?? reconInput.openingBalance
+  });
+  parsedStatement.rowBalanceRecon = rowBalanceRecon;
+
   const validationReport = validateStatement(parsedStatement, {
     pdfMeta: { numpages: parsedStatement.parseResult?.metadata?.pageCount }
   });
@@ -132,10 +138,11 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
 
   parsedStatement.validationOk = validationReport.overallOk;
   // Macro/batch gates use arithmetic reconciliation; structural/temporal tiers are advisory.
+  // Row micro-checksum failures open HITL separately via rowBalanceRecon (do not flip parseQuality alone).
   const parseQualityOk = checksumRecon.ok;
   parsedStatement.parseQuality = parseQualityOk ? 'OK' : 'FAILED_CHECKSUM';
 
-  if (parseDebugEnabled() || !checksumRecon.ok) {
+  if (parseDebugEnabled() || !checksumRecon.ok || !rowBalanceRecon.ok) {
     const printed = parsedStatement.stitcher?.typeA?.printed;
     parsedStatement.parseDiagnostic = buildParseDiagnosticReport({
       fileName: parsedStatement.fileName,
@@ -158,6 +165,13 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
         fileName: parsedStatement.fileName,
         delta: checksumRecon.delta,
         txnCount: normalized.length
+      });
+    }
+    if (!rowBalanceRecon.ok) {
+      logger.warn('[PARSE_DIAGNOSTIC] Row balance micro-checksum failed', {
+        fileName: parsedStatement.fileName,
+        violationCount: rowBalanceRecon.violations.length,
+        first: rowBalanceRecon.violations[0] || null
       });
     }
   }
@@ -183,7 +197,12 @@ export function applyParseQualityPipeline(parsedStatement, identitySources = {})
     }
   }
 
-  return { checksumRecon, parseQuality: parsedStatement.parseQuality, parseSanityStats: stats };
+  return {
+    checksumRecon,
+    rowBalanceRecon,
+    parseQuality: parsedStatement.parseQuality,
+    parseSanityStats: stats
+  };
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   buildReconciliationMismatchAlert,
   resolveGraduationTemplateVersion
 } from './templateGraduationService.js';
+import { graduateInstitutionalProfileVerified } from './processingRunResolveService.js';
 
 const PDF_URL_TTL_MS = 15 * 60 * 1000;
 
@@ -448,19 +449,32 @@ export async function completeHumanVerification(statementId, actorUserId, body) 
   const cleanedRtn = String(rtn).replace(/\D/g, '');
   if (cleanedRtn.length === 9) {
     try {
-      await InstitutionalProfile.updateOne(
-        { routingNumber: cleanedRtn },
-        { $set: { manuallyVerified: true } }
-      );
+      // Immediate VERIFIED (parity with ProcessingRun HITL resolve)
+      await graduateInstitutionalProfileVerified(cleanedRtn);
     } catch (profErr) {
       logger.warn({
-        msg: '[VERA_RESOLVED] InstitutionalProfile manuallyVerified update failed',
+        msg: '[VERA_RESOLVED] Immediate InstitutionalProfile VERIFIED graduation failed',
         service: 'bank-statement-analyzer',
         timestamp: new Date().toISOString(),
         statementId,
         rtn: cleanedRtn,
         error: profErr.message
       });
+      try {
+        await InstitutionalProfile.updateOne(
+          { routingNumber: cleanedRtn },
+          { $set: { manuallyVerified: true } }
+        );
+      } catch (fallbackErr) {
+        logger.warn({
+          msg: '[VERA_RESOLVED] InstitutionalProfile manuallyVerified update failed',
+          service: 'bank-statement-analyzer',
+          timestamp: new Date().toISOString(),
+          statementId,
+          rtn: cleanedRtn,
+          error: fallbackErr.message
+        });
+      }
     }
   }
   if (cleanedRtn.length === 9 && version != null && Number.isFinite(version)) {
@@ -478,7 +492,7 @@ export async function completeHumanVerification(statementId, actorUserId, body) 
   }
 
   logger.info({
-    msg: `[VERA_RESOLVED] Statement ${statementId} verified by ${actorStr}. Template streak updated.`,
+    msg: `[VERA_RESOLVED] Statement ${statementId} verified by ${actorStr}. Template graduated to VERIFIED.`,
     service: 'bank-statement-analyzer',
     timestamp: new Date().toISOString(),
     statementId,

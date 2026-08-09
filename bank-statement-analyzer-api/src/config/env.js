@@ -10,6 +10,8 @@ const apiRoot = path.resolve(__dirname, '../..');
 
 // Load .env from package root regardless of process cwd (npm scripts, workers, vitest)
 dotenv.config({ path: path.join(apiRoot, '.env') });
+// Dev Console simulation overrides (written by helios-dev-console) — win over .env
+dotenv.config({ path: path.join(apiRoot, '.env.dev.override'), override: true });
 
 const config = {
   // Server config

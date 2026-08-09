@@ -90,9 +90,23 @@ export function batchUseVisionRowFallback() {
 
 /** Diagnostic AI Rescue master switch (default on; replaces brute-force row extraction). */
 export function aiDiagnosticRescueEnabled() {
+  if (
+    process.env.DISABLE_AI_RESCUER === 'true' ||
+    process.env.DISABLE_AI_RESCUER === '1'
+  ) {
+    return false;
+  }
   const v = process.env.AI_DIAGNOSTIC_RESCUE_ENABLED;
   if (v === 'false' || v === '0') return false;
   return true;
+}
+
+/** Dev Console simulation: force ProcessingRun HITL even when checksums pass. */
+export function forceHitlRoutingEnabled() {
+  return (
+    process.env.FORCE_HITL_ROUTING === 'true' ||
+    process.env.FORCE_HITL_ROUTING === '1'
+  );
 }
 
 /**

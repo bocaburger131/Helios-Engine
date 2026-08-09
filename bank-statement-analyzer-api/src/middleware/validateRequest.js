@@ -7,6 +7,22 @@ import { z } from 'zod';
 import { validateData } from '../validation/validateData.js';
 
 /**
+ * Multipart FormData fields arrive as strings. Clients often send nested
+ * JSON (e.g. applicationData) via JSON.stringify — coerce before Zod.
+ */
+const formJsonObject = z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}, z.record(z.unknown()).optional());
+
+/**
  * Wraps a Zod schema into Express middleware that validates req.body.
  * @param {import('zod').ZodSchema} schema
  * @param {object} [options]
@@ -104,10 +120,7 @@ const coerceBooleanSchema = (schema) => z.preprocess(coerceBoolean, schema);
 // POST /batch/triage — upload metadata + optional applicationData
 export const triageSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z
-    .union([z.record(z.unknown()), z.string()])
-    .transform(coerceJsonString)
-    .optional(),
+  applicationData: formJsonObject,
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
@@ -117,16 +130,16 @@ export const triageSchema = z.object({
 // POST /batch — uploadSessionId + applicationData + bank confirmation fields
 export const batchUploadSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z
-    .union([z.record(z.unknown()), z.string()])
-    .transform(coerceJsonString)
-    .optional(),
+  applicationData: formJsonObject,
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
   taxId: z.string().optional(),
   businessAddress: z.string().optional(),
-  requestedLoanAmount: z.number().positive().optional(),
+  requestedLoanAmount: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v),
+    z.number().positive().optional()
+  ),
   anchorMode: z.enum(['auto', 'manual']).optional(),
   confirmBank: coerceBooleanSchema(z.boolean()).optional(),
 }).passthrough();

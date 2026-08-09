@@ -224,4 +224,73 @@ export function validateEndingDailyBalancePlacement(normalizedTxns) {
   return { valid: violations === 0, violations };
 }
 
-export default { reconcileStatement, validateEndingDailyBalancePlacement };
+/**
+ * Row-level micro-checksum: Previous + Deposit − Withdrawal = Balance.
+ * Skips rows without a usable balance. Tolerance ±$0.01.
+ * @param {Array<object>} transactions
+ * @param {{ openingBalance?: number }} [opts]
+ * @returns {{ ok: boolean, violations: Array<object> }}
+ */
+export function validateRowRunningBalances(transactions, opts = {}) {
+  const txs = Array.isArray(transactions) ? transactions : [];
+  const violations = [];
+  let prevBalance =
+    opts.openingBalance != null && Number.isFinite(Number(opts.openingBalance))
+      ? round2(opts.openingBalance)
+      : null;
+
+  for (let rowIndex = 0; rowIndex < txs.length; rowIndex++) {
+    const t = txs[rowIndex];
+    if (!t || t.parseExcluded || t.excludeFromMacroTotals) continue;
+
+    const balRaw = t.balance ?? t.endingDailyBalance ?? t.runningBalance;
+    if (balRaw == null || balRaw === '') continue;
+    const balance = round2(balRaw);
+    if (!Number.isFinite(balance)) continue;
+
+    if (prevBalance == null) {
+      prevBalance = balance;
+      continue;
+    }
+
+    let deposit = 0;
+    let withdrawal = 0;
+    if (t.deposit != null || t.credit != null) {
+      deposit = Math.abs(Number(t.deposit ?? t.credit) || 0);
+    }
+    if (t.withdrawal != null || t.debit != null) {
+      withdrawal = Math.abs(Number(t.withdrawal ?? t.debit) || 0);
+    }
+    if (deposit === 0 && withdrawal === 0) {
+      const amt = Number(t.amount);
+      if (Number.isFinite(amt)) {
+        if (amt >= 0) deposit = Math.abs(amt);
+        else withdrawal = Math.abs(amt);
+      }
+    }
+
+    const expected = round2(prevBalance + deposit - withdrawal);
+    const delta = round2(expected - balance);
+    if (Math.abs(delta) > TOLERANCE) {
+      violations.push({
+        page: t.page ?? t.pageIndex ?? t.pageNumber ?? null,
+        rowIndex,
+        delta,
+        previous: prevBalance,
+        deposit: round2(deposit),
+        withdrawal: round2(withdrawal),
+        balance,
+        description: t.description || t.desc || null
+      });
+    }
+    prevBalance = balance;
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+export default {
+  reconcileStatement,
+  validateEndingDailyBalancePlacement,
+  validateRowRunningBalances
+};
