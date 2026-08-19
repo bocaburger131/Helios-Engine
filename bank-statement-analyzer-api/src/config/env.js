@@ -10,6 +10,8 @@ const apiRoot = path.resolve(__dirname, '../..');
 
 // Load .env from package root regardless of process cwd (npm scripts, workers, vitest)
 dotenv.config({ path: path.join(apiRoot, '.env') });
+// Dev Console simulation overrides (written by helios-dev-console) — win over .env
+dotenv.config({ path: path.join(apiRoot, '.env.dev.override'), override: true });
 
 const config = {
   // Server config
@@ -24,8 +26,12 @@ const config = {
   JWT_EXPIRE: process.env.JWT_EXPIRE || '30d',
   
   // Redis
-  REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6380',
-  USE_REDIS: process.env.USE_REDIS === 'true',
+  // Nullable: when REDIS_URL is unset, connections fall back to
+  // REDIS_HOST/REDIS_PORT (do not shadow them with a localhost default).
+  REDIS_URL: process.env.REDIS_URL || null,
+  // Opt-out everywhere: Redis is ON unless explicitly disabled.
+  // (config/redis.js and RedisService.js use the same !== 'false' rule.)
+  USE_REDIS: process.env.USE_REDIS !== 'false',
   
   // API
   API_BASE_URL: process.env.API_BASE_URL || 'http://localhost:3000',

@@ -102,6 +102,25 @@ export function buildVisionPromptBlock(preprocessResult, maxChars = 6000) {
     ? `\nDetected sections:\n${sections.map((s) => `- ${s.label} (type: ${s.type}, lines ${s.startLine}–${s.endLine})`).join('\n')}`
     : '\nNo transaction sections detected.';
 
+  const accountSections = sections.filter((s) => s.type === 'account');
+  const miniLedgerSections = sections.filter((s) =>
+    s.type === 'fees' || s.type === 'interest' || s.type === 'returned_items'
+  );
+
+  const boundaryHints = [];
+  if (accountSections.length > 1) {
+    boundaryHints.push(
+      `Account boundaries: ${accountSections.length} account headers detected — segment extraction per account; do not bleed rows across accounts.`
+    );
+  } else if (accountSections.length === 1) {
+    boundaryHints.push(`Account header detected: "${accountSections[0].label}".`);
+  }
+  if (miniLedgerSections.length > 0) {
+    boundaryHints.push(
+      `Secondary mini-ledgers (include as activity, not stop-anchors only): ${miniLedgerSections.map((s) => `${s.label} [${s.type}]`).join('; ')}.`
+    );
+  }
+
   const noiseInfo = noiseRemoved > 0
     ? `\nNoise removed: ${noiseRemoved} blocks (${noiseTypes.join(', ')})`
     : '';
@@ -115,6 +134,7 @@ export function buildVisionPromptBlock(preprocessResult, maxChars = 6000) {
     noiseInfo,
     `Financial sections detected: ${sectionCount}`,
     sectionList,
+    boundaryHints.length ? `\nExtraction guidance:\n${boundaryHints.map((h) => `- ${h}`).join('\n')}` : '',
     truncatedText ? `\nCleaned text excerpt:\n${truncatedText}` : '',
     '--- End Pre-processed Text ---',
   ].filter(Boolean).join('\n');

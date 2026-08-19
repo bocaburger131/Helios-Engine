@@ -100,6 +100,43 @@ describe('templateDigitalValidator', () => {
       expect(r.probe.mappedCount).toBe(0);
     });
 
+    it('does not reject column_mapped_zero when explicitVerticalLines are usable', () => {
+      const withLines = {
+        ...WELLS_LAYOUT,
+        explicitVerticalLines: [72, 150, 310, 470]
+      };
+      const r = shouldRejectStoredMongoTemplate(withLines, WELLS_TYPE_B);
+      expect(r.reject).toBe(false);
+      expect(r.probe.spatialLinesOverride).toBe(true);
+    });
+
+    it('does not reject column_mapped_zero when columnBoundaries derive usable lines', () => {
+      const withBounds = {
+        ...WELLS_LAYOUT,
+        columnBoundaries: {
+          xDate: 72,
+          xDesc: 150,
+          xDeposit: 400,
+          xWithdrawal: 470
+        }
+      };
+      const r = shouldRejectStoredMongoTemplate(withBounds, WELLS_TYPE_B);
+      expect(r.reject).toBe(false);
+      expect(r.probe.spatialLinesOverride).toBe(true);
+    });
+
+    it('prepareLayout keeps mapping when vertical lines present despite weak probe', () => {
+      const withLines = {
+        ...WELLS_LAYOUT,
+        explicitVerticalLines: [72, 150, 310, 470]
+      };
+      const { layout, probe } = prepareLayoutForDigitalApply(withLines, WELLS_TYPE_B);
+      expect(probe.mappedCount).toBe(0);
+      expect(layout.columnMapping).toBeTruthy();
+      expect(layout.explicitVerticalLines).toHaveLength(4);
+      expect(layout.templateApplyMode).toBe('full');
+    });
+
     it('accepts layout without columnMapping when anchors hit', () => {
       const anchorsOnly = {
         headerAnchors: { tableStart: 'Transaction history', tableEnd: 'Deposits/Credits' }

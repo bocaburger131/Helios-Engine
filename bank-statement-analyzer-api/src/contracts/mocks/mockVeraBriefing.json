@@ -1,0 +1,19 @@
+{
+  "decision": "STIPULATE",
+  "bankabilityScore": 7.2,
+  "briefingMarkdown": "## Vera Executive Briefing\n\n**Applicant:** Demo Business LLC\n**Deal ID:** APP-DEMO-001\n**Requested Amount:** $250,000\n\n### Risk Assessment\n- **Veritas Score:** 72/100 \u2014 Moderate risk profile\n- **Bankability Score:** 7.2/10 \u2014 Proceed with standard due diligence\n\n### Key Findings\n\n| Category | Finding |\n|----------|--------|\n| Cash Flow | $1.25M deposited over 3 months \u2014 consistent revenue pattern \u2705 |\n| NSF Events | 3 NSF events detected \u2014 monitor closely \u26a0\ufe0f |\n| Balance Adequacy | Avg daily balance $42.5K \u2014 adequate for requested amount \u2705 |\n| Revenue Variance | Observed deposits align with stated revenue within acceptable range \u2705 |\n\n### Stipulations\n1. Provide most recent 3 months of bank statements for validation\n2. Confirm NSF resolution with applicant\n3. Verify business address and operating history\n\n**Recommendation:** PROCEED \u2014 Moderate risk with standard covenants. Recommend monthly monitoring of cash flow and NSF activity.",
+  "stipulations": [
+    {
+      "name": "NSF Letter of Explanation",
+      "status": "pending"
+    },
+    {
+      "name": "3 Months Additional Statements",
+      "status": "pending"
+    },
+    {
+      "name": "Business Verification",
+      "status": "satisfied"
+    }
+  ]
+}

@@ -27,6 +27,8 @@ import { clearVisionLayoutCacheForRtn } from './visionLayoutCacheService.js';
 import { setBatchProgress } from './batchProgressStore.js';
 import {
   persistLearningTemplate,
+  graduationTemplate,
+  isRescueStatus,
   getLatestLearnableTemplate
 } from './institutionalTemplatePersist.js';
 import { isDigitalPdfMode } from './extraction/extractionModeRouter.js';
@@ -35,6 +37,7 @@ import {
   extractTypeBTextFromBuffer,
   shouldRejectStoredMongoTemplate
 } from './extraction/templateDigitalValidator.js';
+import { detectBankName, fastPage1Text } from '../utils/bankDetector.js';
 import { shouldReuseLayoutWithoutGemini } from './extraction/layoutFingerprintService.js';
 import { triageLayoutMismatch, createRelationship } from './institutionTriageService.js';
 import {
@@ -44,6 +47,12 @@ import {
 import { isLedgerInflow } from '../utils/transactionNormalization.js';
 import { analyzeMismatch } from './aiDiagnosticService.js';
 import { applyDiagnosticCorrection } from '../utils/checksumAutoCorrection.js';
+import {
+  classifyRescueItems,
+  dispatchRescueBatches,
+  applyRepairs,
+  RESCUE_MODES
+} from './extraction/aiRescueDispatcher.js';
 
 /** Strict integrity gate — not overridable below 0.8 via env. */
 export const MACRO_CHECKSUM_MIN_OK_RATIO = 0.8;
@@ -72,18 +81,56 @@ function batchGeminiEnabled() {
   return true;
 }
 
-/** Batch macro path: per-file vision row extraction (Plan C; default on, opt out with false/0). */
+/** Batch macro path: per-file vision row extraction (opt-in; default OFF). */
 export function batchUseVisionRowFallback() {
-  const v = process.env.BATCH_USE_VISION_ROW_FALLBACK;
-  if (v === 'false' || v === '0') return false;
-  return true;
+  const aliases = [
+    process.env.BATCH_USE_VISION_ROW_FALLBACK,
+    process.env.ENABLE_VISION_ROW_FALLBACK
+  ];
+  return aliases.some((v) => v === 'true' || v === '1');
+}
+
+/** Known digital institutional profiles that must inherit columns, never vision rows. */
+const DIGITAL_PROFILE_SKIP_VISION_ROWS = new Set(['regions_business_checking']);
+
+/**
+ * Skip vision row extraction for digital PDFs and known Profiles (column inheritance first).
+ * @param {object} stmt
+ * @returns {boolean}
+ */
+export function shouldSkipVisionRowFallback(stmt) {
+  if (isDigitalPdfMode(stmt)) return true;
+  const profileId =
+    stmt?.profileId ||
+    stmt?.parseResult?.profileId ||
+    stmt?.parseResult?.metadata?.profileId ||
+    stmt?.metadata?.profileId ||
+    null;
+  if (profileId && DIGITAL_PROFILE_SKIP_VISION_ROWS.has(String(profileId))) {
+    return true;
+  }
+  return false;
 }
 
 /** Diagnostic AI Rescue master switch (default on; replaces brute-force row extraction). */
 export function aiDiagnosticRescueEnabled() {
+  if (
+    process.env.DISABLE_AI_RESCUER === 'true' ||
+    process.env.DISABLE_AI_RESCUER === '1'
+  ) {
+    return false;
+  }
   const v = process.env.AI_DIAGNOSTIC_RESCUE_ENABLED;
   if (v === 'false' || v === '0') return false;
   return true;
+}
+
+/** Dev Console simulation: force ProcessingRun HITL even when checksums pass. */
+export function forceHitlRoutingEnabled() {
+  return (
+    process.env.FORCE_HITL_ROUTING === 'true' ||
+    process.env.FORCE_HITL_ROUTING === '1'
+  );
 }
 
 /**
@@ -622,6 +669,105 @@ async function tryPdfPlumberRescue(stmt, ctx) {
 }
 
 /**
+ * AI Rescue Dispatcher: invoke the rescue infrastructure when checksum
+ * fails after deterministic extraction. Collects evidence from the
+ * statement, classifies rescue items, dispatches to the AI, and
+ * applies repairs. Returns repaired transactions or null.
+ */
+async function runAiRescueDispatcher(stmt, ctx) {
+  const { effectiveRtn, correlationId } = ctx;
+
+  // Collect evidence from the statement's parse result
+  const pr = stmt.parseResult || {};
+  const evidence = {
+    droppedRows: pr.dropped_rows || [],
+    uncertainAssignments: pr.uncertain_assignments || [],
+    transactions: stmt.transactions || [],
+    fullText: pr.metadata?.fullText || '',
+    rawWordRows: pr.raw_word_rows || [],
+    checkSummary: stmt.checksumRecon || {},
+  };
+
+  // Classify rescue items into batches
+  const { batches, modeCounts } = classifyRescueItems(evidence);
+  const hasWork = Object.values(modeCounts).some((c) => c > 0);
+  if (!hasWork) {
+    logger.info('[BATCH_ORCHESTRATOR] AI rescue skipped — no classified items', {
+      fileName: stmt.fileName,
+      modeCounts,
+    });
+    return null;
+  }
+
+  logger.info('[BATCH_ORCHESTRATOR] AI rescue dispatching', {
+    fileName: stmt.fileName,
+    modeCounts,
+    txnCount: evidence.transactions.length,
+    droppedRows: evidence.droppedRows.length,
+    uncertainAssignments: evidence.uncertainAssignments.length,
+  });
+
+  // Build AI client using the existing Gemini infrastructure
+  const aiClient = {
+    runRescue: async ({ system, user }) => {
+      const apiKey = resolveLlmApiKey();
+      if (!apiKey) throw new Error('No LLM API key');
+      const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      const result = await model.generateContent([system, user]);
+      return result.response.text();
+    },
+  };
+
+  const context = {
+    existingTxns: evidence.transactions,
+    pageWords: evidence.rawWordRows,
+    bankName: stmt.bankName,
+    printedDeposits: stmt.checksumDeltaProbe?.printedTotals,
+    printedWithdrawals: stmt.checksumDeltaProbe?.printedTotals,
+  };
+
+  let repairs, stats;
+  try {
+    ({ repairs, stats } = await dispatchRescueBatches(batches, aiClient, context));
+  } catch (e) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue dispatch failed', {
+      fileName: stmt.fileName,
+      error: e.message
+    });
+    return null;
+  }
+
+  if (!repairs.length) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue returned no accepted repairs', {
+      fileName: stmt.fileName,
+      stats,
+    });
+    return null;
+  }
+
+  let repaired;
+  try {
+    repaired = applyRepairs(evidence.transactions, repairs);
+  } catch (e) {
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue applyRepairs failed', {
+      fileName: stmt.fileName,
+      error: e.message
+    });
+    return null;
+  }
+  logger.info('[BATCH_ORCHESTRATOR] AI rescue applied repairs', {
+    fileName: stmt.fileName,
+    repairsApplied: repairs.length,
+    repairedTxnCount: repaired.length,
+    stats,
+  });
+
+  return repaired;
+}
+
+/**
  * Per-file rescue: pdfplumber spatial tables first, then Gemini row extraction.
  */
 async function escalateMisalignedFile(stmt, ctx) {
@@ -648,6 +794,58 @@ async function escalateMisalignedFile(stmt, ctx) {
   if (aiDiagnosticRescueEnabled()) {
     stmt.templateCoordinateStatus = bleed ? 'BLEED_DIAGNOSTIC' : 'MISALIGNED_DIAGNOSTIC';
     return runDiagnosticRescue(stmt, { identitySources, effectiveRtn, correlationId });
+  }
+
+  // ── AI Rescue Dispatcher (Phase 2) ──
+  // If deterministic rescue failed, try the AI rescue dispatcher
+  // (ROW_MERGE, COLUMN_REMAP, DROP_REVIEW, RAW_LEDGER) before
+  // falling back to brute-force vision row extraction.
+  const aiRescued = await runAiRescueDispatcher(stmt, ctx);
+  if (aiRescued && aiRescued.length > 0) {
+    // Snapshot full state before rescue so we can roll back if it fails
+    const snap = snapshotStatementParse(stmt);
+    // Replace transactions with rescued rows and re-run checksum validation
+    stmt.transactions = aiRescued;
+    const rescuedRecon = applyParseQualityPipeline(stmt, identitySources);
+    if (rescuedRecon?.checksumRecon?.ok) {
+      logger.info('[BATCH_ORCHESTRATOR] AI rescue PASSED checksum', {
+        fileName: stmt.fileName,
+        txnCount: effectiveTxnCount(stmt),
+        deposits: effectiveDeposits(stmt),
+        printedDeposits: printedTotalDeposits(stmt)
+      });
+      stmt.templateCoordinateStatus = 'AI_RESCUE_PASSED';
+      return true;
+    }
+    // Restore full state — rescue did not fix the checksum
+    restoreStatementParse(stmt, snap);
+    logger.warn('[BATCH_ORCHESTRATOR] AI rescue did not fix checksum', {
+      fileName: stmt.fileName,
+      parseQuality: stmt.parseQuality,
+      checksumOk: stmt.checksumRecon?.ok
+    });
+  }
+
+  // Digital / known profile: never escalate to extractTransactionRows — HITL after diagnostic/off path.
+  if (shouldSkipVisionRowFallback(stmt)) {
+    logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+      fileName: stmt.fileName,
+      reason: bleed ? 'checksum_bleed' : 'layout_misaligned',
+      digital: isDigitalPdfMode(stmt),
+      profileId:
+        stmt?.profileId ||
+        stmt?.parseResult?.profileId ||
+        stmt?.parseResult?.metadata?.profileId ||
+        null
+    });
+    return false;
+  }
+
+  if (!batchUseVisionRowFallback()) {
+    logger.info('[BATCH_ORCHESTRATOR] vision row fallback disabled — skipping extractTransactionRows', {
+      fileName: stmt.fileName
+    });
+    return false;
   }
 
   if (!resolveLlmApiKey()) {
@@ -702,6 +900,7 @@ async function escalateMisalignedFile(stmt, ctx) {
           ...(stmt.parseResult?.metadata || {}),
           ...rowResult.metadata,
           usedVisionRowFallback: true,
+          usedAiVisionFallback: true,
           templateCoordinateStatus: bleed ? 'BLEED_RESCUED' : 'MISALIGNED_RESCUED'
         }
       },
@@ -722,12 +921,24 @@ async function localReparseAllInGroup(stmts, layoutTemplate, ctx) {
   for (const stmt of stmts) {
     if (!stmt.fileBuffer) continue;
     try {
+      // ── Step 1: Fast pre-parse Page 1 text for bank detection ──
+      const page1Text = await fastPage1Text(stmt.fileBuffer);
+      const detectedBank = detectBankName(page1Text);
+      const effectiveBankName = detectedBank.bankName || stmt.bankName || 'generic';
+
+      // ── Step 2: Map detected bank name to profile flag for Python ──
+      const profileFlag = bankNameToProfileFlag(effectiveBankName);
+
+      if (detectedBank.confidence === 'HIGH' || detectedBank.bankName !== 'generic') {
+        stmt.bankName = effectiveBankName;
+      }
+
       const parseResult = await parserService.parseStatement(stmt.fileBuffer, {
         ...finalAnchorData,
         layoutTemplate,
         correlationId,
         fileName: stmt.fileName,
-        bankName: stmt.bankName,
+        bankName: effectiveBankName,
         suppressWaterfallDetailLogs: true
       });
       if (!parseResult?.success) continue;
@@ -747,6 +958,18 @@ async function localReparseAllInGroup(stmts, layoutTemplate, ctx) {
       logger.warn(`[BATCH_ORCHESTRATOR] Local re-parse error ${stmt.fileName}: ${e.message}`);
     }
   }
+}
+
+/**
+ * Map a detected bank name to the profile flag used by extract_tables.py --bank.
+ * Mirrors bankSlug() in pdfPlumberService.js.
+ */
+function bankNameToProfileFlag(bankName) {
+  const n = String(bankName || '').toLowerCase();
+  if (/wells/.test(n)) return 'wells';
+  if (/regions/.test(n)) return 'regions';
+  if (/chase|jpmorgan/.test(n)) return 'chase';
+  return 'generic';
 }
 
 async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
@@ -943,6 +1166,21 @@ async function teachLayoutOnce(groupKey, exemplar, effectiveRtn, ctx) {
 async function tryVisionRowFallback(stmt, ctx) {
   if (!batchUseVisionRowFallback() || !rowFallbackEnabled() || !stmt.fileBuffer) return false;
 
+  // Digital PDFs / known profiles: never burn row-by-row LLM tokens; inherit columns first.
+  if (shouldSkipVisionRowFallback(stmt)) {
+    logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+      fileName: stmt.fileName,
+      parseQuality: stmt.parseQuality || null,
+      digital: isDigitalPdfMode(stmt),
+      profileId:
+        stmt?.profileId ||
+        stmt?.parseResult?.profileId ||
+        stmt?.parseResult?.metadata?.profileId ||
+        null
+    });
+    return false;
+  }
+
   const { effectiveRtn, identitySources } = ctx;
   try {
     logger.info(`[BATCH_ORCHESTRATOR] BATCH_USE_VISION_ROW_FALLBACK for ${stmt.fileName}`);
@@ -967,7 +1205,8 @@ async function tryVisionRowFallback(stmt, ctx) {
         metadata: {
           ...(stmt.parseResult?.metadata || {}),
           ...rowResult.metadata,
-          usedVisionRowFallback: true
+          usedVisionRowFallback: true,
+          usedAiVisionFallback: true
         }
       },
       identitySources
@@ -1043,9 +1282,26 @@ export async function processInstitutionalGroup(groupKey, stmts, ctx) {
         await runDiagnosticRescue(stmt, { effectiveRtn, identitySources, correlationId });
       }
     } else if (batchUseVisionRowFallback()) {
-      const fallbackCtx = { effectiveRtn, identitySources };
+      // Flag is on but digital / known-profile statements must not use vision rows.
       for (const stmt of stillFailing) {
-        await tryVisionRowFallback(stmt, fallbackCtx);
+        logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+          fileName: stmt.fileName,
+          parseQuality: stmt.parseQuality || null,
+          digital: isDigitalPdfMode(stmt),
+          profileId:
+            stmt?.profileId ||
+            stmt?.parseResult?.profileId ||
+            stmt?.parseResult?.metadata?.profileId ||
+            null
+        });
+      }
+    } else {
+      for (const stmt of stillFailing) {
+        logger.info('[BATCH_ORCHESTRATOR] VISION_ROW_SKIPPED_DIGITAL_PROFILE', {
+          fileName: stmt.fileName,
+          parseQuality: stmt.parseQuality || null,
+          reason: 'vision_row_fallback_disabled'
+        });
       }
     }
   }
@@ -1123,6 +1379,28 @@ export async function enhanceBatchParsesWithTeacher(parsedStatements, ctx = {}) 
           validationTiers: stmt.validationReport?.forensicMetadata?.validationTiers
         }
       });
+    }
+  }
+
+  // Graduation Logic: when a statement passes checksum via dynamic/rescue
+  // boundaries, automatically hardcode its structural metadata as a VERIFIED template.
+  for (const stmt of parsedStatements) {
+    if (stmt.checksumRecon?.ok && isRescueStatus(stmt.templateCoordinateStatus)) {
+      const groupKey = layoutGroupKey(stmt);
+      const layoutMapping = layoutByKey?.get(groupKey);
+      try {
+        await graduationTemplate(
+          stmt.bankName,
+          layoutMapping?.explicitVerticalLines,
+          layoutMapping?.headerAnchors
+        );
+        logger.info(`Graduated ${stmt.bankName} to VERIFIED profile.`);
+      } catch (gradErr) {
+        logger.warn(
+          `[GRADUATION] Failed to graduate ${stmt.bankName}: ${gradErr.message}`,
+          { err: gradErr }
+        );
+      }
     }
   }
 
@@ -1266,6 +1544,7 @@ export default {
   processInstitutionalGroup,
   MACRO_CHECKSUM_MIN_OK_RATIO,
   batchUseVisionRowFallback,
+  shouldSkipVisionRowFallback,
   layoutGroupKey,
   hasChecksumBleed
 };

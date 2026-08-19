@@ -1,6 +1,7 @@
 import path from 'node:path';
 import logger from '../../utils/logger.js';
 import { normalizePlumberJson } from './plumberRowNormalizer.js';
+import { getVerifiedTemplate } from './institutionalTemplatePersist.js';
 import {
   API_ROOT,
   parseStdoutJson,
@@ -39,6 +40,30 @@ function bankSlug(bankName) {
   if (/regions/.test(n)) return 'regions';
   if (/chase|jpmorgan/.test(n)) return 'chase';
   return 'generic';
+}
+
+/**
+ * Normalize template explicitVerticalLines (x-coordinates of column breaks).
+ * @param {unknown} raw
+ * @returns {number[] | null} ascending unique x-coordinates, or null when empty/invalid
+ */
+export function normalizeExplicitVerticalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/**
+ * Normalize template explicitHorizontalLines (y-coordinates of row breaks).
+ * @param {unknown} raw
+ * @returns {number[] | null} ascending unique y-coordinates, or null when empty/invalid
+ */
+export function normalizeExplicitHorizontalLines(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const nums = raw.map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  if (nums.length === 0) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
 }
 
 /**
@@ -133,7 +158,7 @@ export const runPlumberChildProcess = runPythonChildProcess;
 
 /**
  * @param {Buffer} pdfBuffer
- * @param {{ bankName?: string, fileName?: string, defaultYear?: number }} [options]
+ * @param {{ bankName?: string, fileName?: string, defaultYear?: number, explicitVerticalLines?: number[], explicitHorizontalLines?: number[] }} [options]
  */
 export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) {
   if (!pdfPlumberEnabled()) {
@@ -148,12 +173,50 @@ export async function extractTransactionsFromPdfBuffer(pdfBuffer, options = {}) 
   const scriptPath = resolveScriptPath();
   const slug = bankSlug(options.bankName);
 
+  // Graduation lookup: if a VERIFIED template exists for this bank,
+  // use its deterministic structural metadata instead of the generic guesser.
+  let verifiedVLines = null;
+  try {
+    const verified = await getVerifiedTemplate(options.bankName);
+    if (verified) {
+      verifiedVLines = normalizeExplicitVerticalLines(
+        verified?.explicitVerticalLines
+      );
+      logger.info('[PDF_PLUMBER] graduated template found', {
+        bankName: options.bankName,
+        slug,
+        vLineCount: verifiedVLines?.length ?? 0
+      });
+    }
+  } catch (dbErr) {
+    logger.warn('[PDF_PLUMBER] graduation lookup failed, using fallback', {
+      bankName: options.bankName,
+      err: dbErr.message
+    });
+  }
+
   const scriptArgs = ['--bank', slug];
     if (options.__columnTolerance != null) {
       scriptArgs.push('--column-tolerance', String(options.__columnTolerance));
     }
+    // Template-learned column breaks → pdfplumber explicit vertical strategy.
+    // Prefer VERIFIED template lines over runtime options when available.
+    const explicitLines = verifiedVLines ?? normalizeExplicitVerticalLines(options.explicitVerticalLines);
+    if (explicitLines) {
+      scriptArgs.push('--explicit-vertical-lines', JSON.stringify(explicitLines));
+    }
+    // Template-learned row breaks → pdfplumber explicit horizontal strategy.
+    const explicitHLines = normalizeExplicitHorizontalLines(options.explicitHorizontalLines);
+    if (explicitHLines) {
+      scriptArgs.push('--explicit-horizontal-lines', JSON.stringify(explicitHLines));
+    }
 
-    logger.info('[PDF_PLUMBER] start', { fileName, bank: slug });
+    logger.info('[PDF_PLUMBER] start', {
+      fileName,
+      bank: slug,
+      explicitVerticalLines: explicitLines ?? null,
+      explicitHorizontalLines: explicitHLines ?? null
+    });
 
   try {
     const { stdout, stderr } = await runPythonScriptOnPdfBuffer(pdfBuffer, {

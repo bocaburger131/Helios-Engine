@@ -7,6 +7,22 @@ import { z } from 'zod';
 import { validateData } from '../validation/validateData.js';
 
 /**
+ * Multipart FormData fields arrive as strings. Clients often send nested
+ * JSON (e.g. applicationData) via JSON.stringify — coerce before Zod.
+ */
+const formJsonObject = z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}, z.record(z.unknown()).optional());
+
+/**
  * Wraps a Zod schema into Express middleware that validates req.body.
  * @param {import('zod').ZodSchema} schema
  * @param {object} [options]
@@ -70,11 +86,41 @@ export const uploadStatementSchema = z.object({
   anchorMode: z.enum(['auto', 'manual']).optional(),
 }).passthrough(); // Allow extra fields for forward compatibility
 
+// ── Helpers ──
+
+/** Coerce a FormData string value to an object via JSON.parse. */
+function coerceJsonString(value) {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return value;
+}
+
+/** Coerce a FormData string value to a boolean.
+ *  Zod's z.coerce.boolean() uses Boolean() which turns any non-empty string (including "false") into true.
+ *  This helper correctly handles "true"/"1"/"yes" → true and "false"/"0"/"no" → false.
+ */
+function coerceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase().trim();
+    if (lower === 'true' || lower === '1' || lower === 'yes') return true;
+    if (lower === 'false' || lower === '0' || lower === 'no') return false;
+  }
+  return value;
+}
+
+const coerceBooleanSchema = (schema) => z.preprocess(coerceBoolean, schema);
+
 // ── Schema: Batch triage ──
 // POST /batch/triage — upload metadata + optional applicationData
 export const triageSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z.record(z.unknown()).optional(),
+  applicationData: formJsonObject,
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
@@ -84,15 +130,18 @@ export const triageSchema = z.object({
 // POST /batch — uploadSessionId + applicationData + bank confirmation fields
 export const batchUploadSchema = z.object({
   uploadSessionId: z.string().optional(),
-  applicationData: z.record(z.unknown()).optional(),
+  applicationData: formJsonObject,
   dealId: z.string().optional(),
   clientId: z.string().optional(),
   companyName: z.string().optional(),
   taxId: z.string().optional(),
   businessAddress: z.string().optional(),
-  requestedLoanAmount: z.number().positive().optional(),
+  requestedLoanAmount: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v),
+    z.number().positive().optional()
+  ),
   anchorMode: z.enum(['auto', 'manual']).optional(),
-  confirmBank: z.boolean().optional(),
+  confirmBank: coerceBooleanSchema(z.boolean()).optional(),
 }).passthrough();
 
 // ── Schema: Confirm bank ──
@@ -104,6 +153,7 @@ export const confirmBankSchema = z.object({
   routingNumber: z.string().optional(),
   confirmedFields: z.record(z.unknown()).optional(),
   fileNames: z.array(z.string()).optional(),
+  confirmBank: coerceBooleanSchema(z.boolean()).optional(),
 }).passthrough();
 
 export default {

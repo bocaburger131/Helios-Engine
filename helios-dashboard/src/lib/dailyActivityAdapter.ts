@@ -3,12 +3,22 @@
  */
 
 export type HeliosTransaction = {
+  _id?: string;
+  id?: string;
+  /** Stable UI key when Mongo id is absent */
+  _clientKey?: string;
   date?: string | Date;
   amount?: number;
   type?: string;
   description?: string;
+  /** Raw PDF / ledger description alias */
+  originalDescription?: string;
   category?: string;
+  subcategory?: string;
+  taxDeductible?: "deductible" | "non_deductible" | "unknown" | string;
+  categorizationSource?: "auto_ai" | "analyst_override" | string;
   isNsf?: boolean;
+  isNSF?: boolean;
   balance?: number;
 };
 

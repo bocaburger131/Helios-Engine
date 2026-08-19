@@ -92,7 +92,7 @@ export function splitPages(rawText) {
 }
 
 const RE_REGIONS_ACTIVITY =
-  /electronic\s+deposits?|electronic\s+withdrawals?|checks?\s*cleared|bank\s+fees?|service\s+charges?/i;
+  /electronic\s+deposits?|electronic\s+withdrawals?|checks?\s*cleared|bank\s+fees?|service\s+charges?|deposits?\s*(?:&|and)\s*credits?(?:\s*\(\s*continued\s*\))?|withdrawals?(?:\s*\(\s*continued\s*\))?/i;
 
 /**
  * @param {string} pageText

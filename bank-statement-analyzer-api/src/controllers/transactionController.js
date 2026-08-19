@@ -1,4 +1,4 @@
-import Transaction from '../models/transactionModel.js';
+import Transaction from '../models/Transaction.js';
 import { AppError } from '../utils/appError.js';
 
 class TransactionController {
@@ -130,7 +130,7 @@ class TransactionController {
         $or: [
           { description: { $regex: query, $options: 'i' } },
           { category: { $regex: query, $options: 'i' } },
-          { merchantName: { $regex: query, $options: 'i' } }
+          { 'merchant.name': { $regex: query, $options: 'i' } }
         ]
       };
 
@@ -170,10 +170,10 @@ class TransactionController {
 
       const topMerchants = await Transaction.aggregate([
         matchStage,
-        { $match: { merchantName: { $exists: true, $ne: null } } },
+        { $match: { 'merchant.name': { $exists: true, $ne: null } } },
         {
           $group: {
-            _id: '$merchantName',
+            _id: '$merchant.name',
             totalAmount: { $sum: { $abs: '$amount' } },
             count: { $sum: 1 }
           }

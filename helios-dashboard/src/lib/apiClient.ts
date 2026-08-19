@@ -1,8 +1,18 @@
 import type { HeliosStatementPayload } from "@/lib/analysisAdapter";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_HELIOS_API_URL?.replace(/\/$/, "") ||
-  "http://localhost:3000";
+/**
+ * Helios API origin for browser fetches.
+ * Prefer NEXT_PUBLIC_API_URL; HELIOS alias kept for older env files.
+ * Default matches bank-statement-analyzer-api `.env` PORT=3000.
+ */
+export const API_BASE = (() => {
+  const raw =
+    process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_HELIOS_API_URL;
+  if (raw == null || String(raw).trim() === "") {
+    return "http://localhost:3000";
+  }
+  return String(raw).replace(/\/$/, "");
+})();
 
 export const DASHBOARD_BASE =
   process.env.NEXT_PUBLIC_DASHBOARD_URL?.replace(/\/$/, "") ||
@@ -169,6 +179,58 @@ export async function fetchDevStatements(limit = 20): Promise<StatementListItem[
   if (!res.ok) throw new Error(`Statements ${res.status}`);
   const json = await res.json();
   return (json.data?.statements ?? []) as StatementListItem[];
+}
+
+export type TransactionOverrideBody = {
+  category: string;
+  subcategory?: string;
+  taxDeductible?: string;
+};
+
+export type TransactionOverrideResult = {
+  success: boolean;
+  data?: {
+    transaction?: Record<string, unknown>;
+    vitals?: {
+      trueMonthlyRevenue?: number;
+      totalOpex?: number;
+      totalCogs?: number;
+      totalPayroll?: number;
+      totalDebtService?: number;
+      netCashFlow?: number;
+    };
+  };
+  error?: string;
+};
+
+export async function patchStatementTransaction(
+  statementId: string,
+  txnId: string,
+  body: TransactionOverrideBody,
+  token?: string | null
+): Promise<TransactionOverrideResult> {
+  const path = `${API_BASE}/api/statements/${encodeURIComponent(statementId)}/transactions/${encodeURIComponent(txnId)}`;
+
+  const res = await fetch(path, {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const json = (await res.json().catch(() => ({}))) as TransactionOverrideResult & {
+    message?: string;
+  };
+  if (!res.ok || json.success === false) {
+    throw new Error(
+      json.error ||
+        json.message ||
+        `Override failed (${res.status})`
+    );
+  }
+  return json;
 }
 
 export function formatMoney(n: number | null | undefined): string {

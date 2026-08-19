@@ -1,0 +1,10 @@
+{
+  "overallScore": 72,
+  "fiveCs": {
+    "capacity": { "score": 74 },
+    "capital": { "score": 78 },
+    "collateral": { "score": 70 },
+    "conditions": { "score": 68 },
+    "character": { "score": 72 }
+  }
+}

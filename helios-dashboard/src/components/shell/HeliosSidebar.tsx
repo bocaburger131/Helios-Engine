@@ -45,7 +45,7 @@ function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
       title={collapsed ? item.label : undefined}
       className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
         active
-          ? "bg-blue-600 text-white"
+          ? "bg-brand-blue text-white"
           : "text-slate-300 hover:bg-white/10 hover:text-white"
       }`}
     >
@@ -84,11 +84,11 @@ export default function HeliosSidebar() {
 
   return (
     <aside
-      className="flex shrink-0 flex-col bg-[var(--helios-navy)] text-white transition-[width] duration-200"
+      className="flex shrink-0 flex-col bg-sidebar-bg text-white transition-[width] duration-200"
       style={{ width }}
     >
       <div className="flex items-center gap-2 border-b border-white/10 px-4 py-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs font-bold">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-blue text-xs font-bold">
           S4
         </div>
         {!collapsed && (

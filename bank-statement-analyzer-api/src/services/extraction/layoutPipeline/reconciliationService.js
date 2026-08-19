@@ -2,8 +2,11 @@
  * Pass 2b — sole checksum owner for layout-first pipeline.
  */
 
-import { reconcileStatement, validateEndingDailyBalancePlacement } from '../statementReconciliation.js';
-import riskAnalysisService from '../../riskAnalysisService.js';
+import {
+  reconcileStatement,
+  validateEndingDailyBalancePlacement,
+  validateRowRunningBalances
+} from '../statementReconciliation.js';
 
 export const TOLERANCE = 0.01;
 
@@ -56,6 +59,13 @@ export function reconcileRawBundle(rawBundle) {
     rawBundle.normalizedTransactions ?? []
   );
 
+  const rowBalanceRecon = validateRowRunningBalances(
+    rawBundle.normalizedTransactions?.length
+      ? rawBundle.normalizedTransactions
+      : mainTxns,
+    { openingBalance: meta.openingBalance }
+  );
+
   return {
     ...reconciliation,
     reconciliationBreakdown: reconciliation,
@@ -63,7 +73,8 @@ export function reconcileRawBundle(rawBundle) {
     feeLedgerMerged: feeTxns.length > 0,
     feeWithdrawalsMerged: feeWithdrawals,
     endingDailyBalanceValid: endingDaily.valid,
-    endingDailyViolations: endingDaily.violations
+    endingDailyViolations: endingDaily.violations,
+    rowBalanceRecon
   };
 }
 

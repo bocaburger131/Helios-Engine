@@ -1,0 +1,172 @@
+{
+  "status": "success",
+  "data": {
+    "id": "demo-mock-001",
+    "_id": "demo-mock-001",
+    "deal": {
+      "companyName": "Demo Business LLC",
+      "dba": "Demo Business Solutions",
+      "taxId": "XX-XXXXXXX",
+      "businessAddress": "123 Main Street, Suite 400, Wilmington, DE 19801",
+      "requestedLoanAmount": 250000,
+      "statedGAR": 720000,
+      "dealId": "APP-DEMO-001"
+    },
+    "applicationData": {
+      "companyName": "Demo Business LLC",
+      "dbaName": "Demo Business Solutions",
+      "taxId": "XX-XXXXXXX",
+      "businessAddress": "123 Main Street, Suite 400, Wilmington, DE 19801",
+      "requestedLoanAmount": 250000,
+      "statedRevenue": 720000,
+      "dealId": "APP-DEMO-001",
+      "industry": "Wholesale Trade"
+    },
+    "coverage": {
+      "startDate": "2025-01-01",
+      "endDate": "2025-03-31",
+      "fileCount": 4,
+      "accountCount": 2
+    },
+    "metrics": {
+      "totalDeposits": 1250000,
+      "totalWithdrawals": 980000,
+      "netCashFlow": 270000,
+      "averageDailyBalance": 42500,
+      "nsfCount": 3,
+      "openingBalance": 38500,
+      "closingBalance": 52300
+    },
+    "forensicIntelligence": {
+      "monthlyBreakdown": [
+        {
+          "month": "2025-01",
+          "deposits": 410000,
+          "withdrawals": 325000
+        },
+        {
+          "month": "2025-02",
+          "deposits": 395000,
+          "withdrawals": 340000
+        },
+        {
+          "month": "2025-03",
+          "deposits": 445000,
+          "withdrawals": 315000
+        }
+      ],
+      "quarterlyBreakdown": [
+        {
+          "quarter": "Q1 2025",
+          "label": "Q1 2025",
+          "deposits": 1250000,
+          "withdrawals": 980000
+        }
+      ],
+      "l3m": {
+        "totalDeposits": 1250000,
+        "totalWithdrawals": 980000,
+        "netCashFlow": 270000,
+        "avgMonthlyDeposits": 416667,
+        "depositGrowth": 8.5
+      },
+      "dscr": {
+        "prospective": 1.85,
+        "ratio": 1.85
+      }
+    },
+    "juniorUnderwriter": {
+      "overallScore": 72,
+      "fiveCs": {
+        "capacity": {
+          "score": 74
+        },
+        "capital": {
+          "score": 78
+        },
+        "collateral": {
+          "score": 70
+        },
+        "conditions": {
+          "score": 68
+        },
+        "character": {
+          "score": 72
+        }
+      }
+    },
+    "accountingSummary": {
+      "opex": {
+        "total": 180000,
+        "categories": [
+          {
+            "name": "Payroll",
+            "amount": 95000
+          },
+          {
+            "name": "Rent & Facilities",
+            "amount": 42000
+          },
+          {
+            "name": "Operating Expenses",
+            "amount": 43000
+          }
+        ]
+      }
+    },
+    "vera": {
+      "decision": "PROCEED",
+      "bankabilityScore": 7.2,
+      "briefingMarkdown": "## Vera Executive Briefing\n\n**Applicant:** Demo Business LLC\n**Deal ID:** APP-DEMO-001\n**Requested Amount:** $250,000\n\n### Risk Assessment\n- **Veritas Score:** 72/100 \u2014 Moderate risk profile\n- **Bankability Score:** 7.2/10 \u2014 Proceed with standard due diligence\n\n### Key Findings\n\n| Category | Finding |\n|----------|--------|\n| Cash Flow | $1.25M deposited over 3 months \u2014 consistent revenue pattern \u2705 |\n| NSF Events | 3 NSF events detected \u2014 monitor closely \u26a0\ufe0f |\n| Balance Adequacy | Avg daily balance $42.5K \u2014 adequate for requested amount \u2705 |\n| Revenue Variance | Observed deposits align with stated revenue within acceptable range \u2705 |\n\n### Stipulations\n1. Provide most recent 3 months of bank statements for validation\n2. Confirm NSF resolution with applicant\n3. Verify business address and operating history\n\n**Recommendation:** PROCEED \u2014 Moderate risk with standard covenants. Recommend monthly monitoring of cash flow and NSF activity.",
+      "stipulations": [
+        {
+          "name": "NSF Letter of Explanation",
+          "status": "pending"
+        },
+        {
+          "name": "3 Months Additional Statements",
+          "status": "pending"
+        },
+        {
+          "name": "Business Verification",
+          "status": "satisfied"
+        }
+      ]
+    },
+    "alerts": [
+      {
+        "severity": "HIGH",
+        "title": "3 NSF Events Detected",
+        "message": "Insufficient funds on Mar 5, Feb 12, Jan 28"
+      },
+      {
+        "severity": "MEDIUM",
+        "title": "Cash Flow Volatility",
+        "message": "Monthly revenue varies 35% between months"
+      },
+      {
+        "severity": "LOW",
+        "title": "Minimum Balance Threshold",
+        "message": "Balance dropped below $5K on 2 days"
+      }
+    ],
+    "accountGroups": [
+      {
+        "bankName": "Chase Bank NA",
+        "accountNumber": "XXXX1234",
+        "transactionCount": 47,
+        "veritasScore": 72
+      },
+      {
+        "bankName": "Bank of America",
+        "accountNumber": "XXXX5678",
+        "transactionCount": 23,
+        "veritasScore": 68
+      }
+    ],
+    "veritasScore": 72,
+    "legacy": {
+      "report": "## Vera Executive Briefing\n\n**Applicant:** Demo Business LLC\n**Deal ID:** APP-DEMO-001\n**Requested Amount:** $250,000\n\n### Risk Assessment\n- **Veritas Score:** 72/100 \u2014 Moderate risk profile\n- **Bankability Score:** 7.2/10 \u2014 Proceed with standard due diligence\n\n### Key Findings\n\n| Category | Finding |\n|----------|--------|\n| Cash Flow | $1.25M deposited over 3 months \u2014 consistent revenue pattern \u2705 |\n| NSF Events | 3 NSF events detected \u2014 monitor closely \u26a0\ufe0f |\n| Balance Adequacy | Avg daily balance $42.5K \u2014 adequate for requested amount \u2705 |\n| Revenue Variance | Observed deposits align with stated revenue within acceptable range \u2705 |\n\n### Stipulations\n1. Provide most recent 3 months of bank statements for validation\n2. Confirm NSF resolution with applicant\n3. Verify business address and operating history\n\n**Recommendation:** PROCEED \u2014 Moderate risk with standard covenants. Recommend monthly monitoring of cash flow and NSF activity."
+    }
+  }
+}

@@ -21,27 +21,28 @@ class TransactionService {
       // Use a more descriptive error message
       throw new Error('A valid userId must be provided to save transactions.');
     }
-    
-    const transactions = [];
-    for (const txData of transactionData) {
-      const transaction = new Transaction({
-        statementId,
-        userId,
-        date: new Date(txData.date),
-        description: txData.description,
-        amount: txData.amount,
-        type: txData.amount > 0 ? 'credit' : 'debit',
-        balance: txData.balance,
-        originalDescription: txData.description,
-        metadata: {
-          lineNumber: txData.lineNumber,
-          rawText: txData.rawText,
-        },
-      });
-      await transaction.save();
-      transactions.push(transaction);
+
+    if (!Array.isArray(transactionData) || transactionData.length === 0) {
+      return [];
     }
-    
+
+    // Single round-trip instead of one save() per transaction (N+1 fix).
+    const docs = transactionData.map((txData) => ({
+      statementId,
+      userId,
+      date: new Date(txData.date),
+      description: txData.description,
+      amount: txData.amount,
+      type: txData.amount > 0 ? 'credit' : 'debit',
+      balance: txData.balance,
+      originalDescription: txData.description,
+      metadata: {
+        lineNumber: txData.lineNumber,
+        rawText: txData.rawText,
+      },
+    }));
+    const transactions = await Transaction.insertMany(docs);
+
     logger.info(`Saved ${transactions.length} transactions for statement ${statementId}`);
     return transactions;
   }

@@ -12,6 +12,7 @@ import TransactionCategory from './TransactionCategory.js';
 import UsageTracker from './UsageTracker.js';
 import RiskProfile from './RiskProfile.js';
 import InstitutionalProfile from './InstitutionalProfile.js';
+import ProcessingRun from './ProcessingRun.js';
 
 // Export all models
 export {
@@ -25,7 +26,8 @@ export {
   TransactionCategory,
   UsageTracker,
   RiskProfile,
-  InstitutionalProfile
+  InstitutionalProfile,
+  ProcessingRun
 };
 
 // Default export for the main models
@@ -40,5 +42,6 @@ export default {
   TransactionCategory,
   UsageTracker,
   RiskProfile,
-  InstitutionalProfile
+  InstitutionalProfile,
+  ProcessingRun
 };

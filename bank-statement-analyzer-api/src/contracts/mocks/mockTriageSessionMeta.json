@@ -1,0 +1,12 @@
+{
+  "fileRoles": [
+    { "fileName": "statement-1.pdf", "role": "bank_statement" },
+    { "fileName": "application-1.pdf", "role": "application" }
+  ],
+  "extractedAnchorData": {
+    "companyName": "Demo Business LLC",
+    "routingNumber": "000000000"
+  },
+  "applicationExtractionResults": [],
+  "confirmedBanks": {}
+}

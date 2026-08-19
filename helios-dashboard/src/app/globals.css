@@ -1,41 +1,134 @@
 @import "tailwindcss";
+@config "../../tailwind.config.js";
 
+/* ─── Helios Design System tokens ───────────────────────────────────────── */
 :root {
-  --helios-navy: #0f172a;
-  --helios-navy-light: #1e293b;
-  --helios-blue: #2563eb;
-  --helios-blue-hover: #1d4ed8;
-  --helios-bg: #f1f5f9;
-  --helios-surface: #ffffff;
-  --helios-border: #e2e8f0;
+  --bg-app: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-sidebar: #0f172a;
+  --border-card: #e2e8f0;
+  --brand-blue: #3366a9;
+  --results-sky-bg: #eff6ff;
+  --results-sky-border: #bfdbfe;
+  --results-sky-text: #1d4ed8;
+  --process-navy-bg: #0f172a;
+  --process-navy-border: #1e293b;
+  --process-navy-text: #94a3b8;
+
+  /* Legacy aliases → design tokens (keep existing helios-* consumers working) */
+  --helios-navy: var(--bg-sidebar);
+  --helios-navy-light: var(--process-navy-border);
+  --helios-blue: var(--brand-blue);
+  --helios-blue-hover: #2a558f;
+  --helios-bg: var(--bg-app);
+  --helios-surface: var(--bg-card);
+  --helios-border: var(--border-card);
   --helios-muted: #64748b;
   --helios-text: #0f172a;
   --helios-radius: 12px;
   --helios-sidebar-width: 280px;
   --helios-sidebar-collapsed: 72px;
-  --background: var(--helios-bg);
+  --background: var(--bg-app);
   --foreground: var(--helios-text);
+}
+
+.dark {
+  --bg-app: #020617;
+  --bg-card: #0f172a;
+  --bg-sidebar: #020617;
+  --border-card: #1e293b;
+  --brand-blue: #3366a9;
+  --results-sky-bg: rgba(30, 58, 138, 0.2);
+  --results-sky-border: rgba(30, 58, 138, 0.5);
+  --results-sky-text: #60a5fa;
+  --process-navy-bg: #0f172a;
+  --process-navy-border: #1e293b;
+  --process-navy-text: #cbd5e1;
+
+  --helios-navy: var(--bg-sidebar);
+  --helios-navy-light: var(--process-navy-border);
+  --helios-blue: var(--brand-blue);
+  --helios-blue-hover: #4a7fc0;
+  --helios-bg: var(--bg-app);
+  --helios-surface: var(--bg-card);
+  --helios-border: var(--border-card);
+  --helios-muted: #94a3b8;
+  --helios-text: #e2e8f0;
+  --background: var(--bg-app);
+  --foreground: var(--helios-text);
+}
+
+/* Prefer-system dark when no explicit .light class (pairs with Tailwind dark:) */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --bg-app: #020617;
+    --bg-card: #0f172a;
+    --bg-sidebar: #020617;
+    --border-card: #1e293b;
+    --brand-blue: #3366a9;
+    --results-sky-bg: rgba(30, 58, 138, 0.2);
+    --results-sky-border: rgba(30, 58, 138, 0.5);
+    --results-sky-text: #60a5fa;
+    --process-navy-bg: #0f172a;
+    --process-navy-border: #1e293b;
+    --process-navy-text: #cbd5e1;
+
+    --helios-navy: var(--bg-sidebar);
+    --helios-navy-light: var(--process-navy-border);
+    --helios-blue: var(--brand-blue);
+    --helios-blue-hover: #4a7fc0;
+    --helios-bg: var(--bg-app);
+    --helios-surface: var(--bg-card);
+    --helios-border: var(--border-card);
+    --helios-muted: #94a3b8;
+    --helios-text: #e2e8f0;
+    --background: var(--bg-app);
+    --foreground: var(--helios-text);
+  }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-inter);
+
+  --color-app-bg: var(--bg-app);
+  --color-card-bg: var(--bg-card);
+  --color-sidebar-bg: var(--bg-sidebar);
+  --color-card-border: var(--border-card);
+  --color-brand-blue: var(--brand-blue);
+  --color-results-bg: var(--results-sky-bg);
+  --color-results-border: var(--results-sky-border);
+  --color-results-text: var(--results-sky-text);
+  --color-process-bg: var(--process-navy-bg);
+  --color-process-border: var(--process-navy-border);
+  --color-process-text: var(--process-navy-text);
 }
 
 body.helios-app {
   margin: 0;
   min-height: 100vh;
-  background: var(--helios-bg);
+  background: var(--bg-app);
   color: var(--helios-text);
   font-family: var(--font-inter), system-ui, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .helios-card {
-  background: var(--helios-surface);
-  border: 1px solid var(--helios-border);
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
   border-radius: var(--helios-radius);
   box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+}
+
+.dark .helios-card {
+  box-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) .helios-card {
+    box-shadow: none;
+  }
 }
 
 .helios-chip {
@@ -45,8 +138,8 @@ body.helios-app {
   border-radius: 9999px;
   font-size: 0.75rem;
   font-weight: 500;
-  background: #f1f5f9;
-  color: #334155;
+  background: var(--bg-app);
+  color: var(--helios-muted);
 }
 
 .helios-btn {
@@ -62,7 +155,7 @@ body.helios-app {
 }
 
 .helios-btn-primary {
-  background: var(--helios-blue);
+  background: var(--brand-blue);
   color: #fff;
 }
 
@@ -76,8 +169,8 @@ body.helios-app {
 }
 
 .helios-btn-secondary {
-  background: var(--helios-surface);
-  border: 1px solid var(--helios-border);
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
   color: var(--helios-text);
 }
 
@@ -90,9 +183,9 @@ body.helios-app {
 }
 
 .chat-bubble--system {
-  background: #f8fafc;
-  border: 1px solid var(--helios-border);
-  color: #475569;
+  background: var(--bg-app);
+  border: 1px solid var(--border-card);
+  color: var(--helios-muted);
 }
 
 .chat-bubble--success {
@@ -114,21 +207,27 @@ body.helios-app {
 }
 
 .chat-bubble--deal {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #1e40af;
+  background: var(--results-sky-bg);
+  border: 1px solid var(--results-sky-border);
+  color: var(--results-sky-text);
+}
+
+.chat-bubble--hitl {
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  color: #6b21a8;
 }
 
 .hub-progress {
   height: 4px;
-  background: #e2e8f0;
+  background: var(--border-card);
   border-radius: 9999px;
   overflow: hidden;
 }
 
 .hub-progress__bar {
   height: 100%;
-  background: linear-gradient(90deg, var(--helios-blue), #60a5fa);
+  background: linear-gradient(90deg, var(--brand-blue), #60a5fa);
   animation: hub-pulse 1.5s ease-in-out infinite;
 }
 
@@ -143,7 +242,7 @@ body.helios-app {
 }
 
 .veritas-card {
-  background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+  background: linear-gradient(135deg, var(--process-navy-bg) 0%, #1e3a5f 100%);
   color: #f8fafc;
   border-radius: var(--helios-radius);
 }
@@ -162,7 +261,62 @@ body.helios-app {
 
 .vera-dock {
   position: fixed;
-  bottom: 1.5rem;
+  bottom: 5.25rem;
   right: 1.5rem;
-  z-index: 40;
+  z-index: 45;
+}
+
+/* react-grid-layout workspace */
+.underwriting-workspace-grid .react-grid-item {
+  height: 100%;
+}
+.underwriting-workspace-grid .react-grid-item > div {
+  height: 100%;
+}
+.underwriting-workspace-grid .react-grid-item.react-grid-placeholder {
+  background: var(--brand-blue) !important;
+  opacity: 0.2;
+  border-radius: 12px;
+}
+.underwriting-workspace-grid .react-grid-item.react-draggable-dragging {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 2px;
+  z-index: 10;
+}
+
+/* Shared widget card chrome */
+.helios-widget-shadow {
+  box-shadow: 0 1px 2px 0 rgb(226 232 240 / 0.5);
+}
+.dark .helios-widget-shadow {
+  box-shadow: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) .helios-widget-shadow {
+    box-shadow: none;
+  }
+}
+
+.chat-bubble--hitl-missing-balance {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.chat-bubble--hitl-multi-account {
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  color: #6b21a8;
+}
+
+.chat-bubble--hitl-date-fix {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+}
+
+.chat-bubble--hitl-fraud-review {
+  background: #fef2f2;
+  border: 2px solid #dc2626;
+  color: #991b1b;
 }

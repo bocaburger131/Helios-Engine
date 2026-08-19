@@ -47,7 +47,7 @@ const RESCUE_BATCH_SIZE = 10;
 export const RAW_LEDGER_LINE_CAP = 600;
 
 /** Bump when any prompt template changes — invalidates rescue cache entries. */
-export const RESCUE_PROMPT_VERSION = 'section-deltas-v1';
+export const RESCUE_PROMPT_VERSION = 'section-deltas-v2';
 
 /**
  * Evenly sample raw word rows down to cap, preserving document coverage.
@@ -190,7 +190,7 @@ function getSchemaJson(mode) {
     case RESCUE_MODES.RAW_LEDGER:
       return {
         ...baseFields,
-        proposed_transaction: '{ txn_date (YYYY-MM-DD), description_raw, amount_cents (SIGNED: negative = withdrawal/debit, positive = deposit/credit), balance? }',
+        proposed_transaction: '{ txn_date (YYYY-MM-DD), description_raw, amount_cents (SIGNED: negative = withdrawal/debit, positive = deposit/credit), section? (string — section heading this row belongs to), balance? }',
       };
     case RESCUE_MODES.SECTION_TAG:
     case RESCUE_MODES.BALANCE_FILL:
@@ -338,6 +338,10 @@ For each line that contains a transaction row (a date, a description, and a mone
 - If the description spans multiple lines, include the continuation text in description_raw.
 - A lone number at the right of a row with no description is a running balance, NOT a transaction amount. Do not promote it.
 - A line that is a header, page footer, account summary, opening/closing balance, or artifact: decide "pass".
+- Respect existing column hints (explicit vertical lines, detected money columns, section headers). Do NOT reshuffle columns unless the line is clearly misaligned.
+- Preserve section boundaries. Never mix transactions between sections (e.g. "Operating account", "Loan", "Credit card") — assign each promoted row to the section it falls under.
+- Use ISO dates (YYYY-MM-DD) for txn_date and 2-decimal precision for money.
+- Do NOT "fix" totals or balances by guessing. If a line does not reconcile or a layout decision is uncertain, encode it as a "pass" with a short reason — never invent a value to force reconciliation.
 
 Do NOT invent dates, descriptions, or amounts. Reconstruct ONLY what the raw lines contain. If you are not confident about a line, output "pass" with confidence 0.`;
       break;
@@ -610,6 +614,7 @@ export function applyRepairs(baseCandidate, repairs) {
         amount,
         type: amount >= 0 ? 'CREDIT' : 'DEBIT',
         balance: pt.balance ?? null,
+        section: pt.section ?? null,
         source: 'ai_rescue',
         rescueMode: repair.mode,
         rowFingerprint: pt.rowFingerprint,

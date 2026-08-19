@@ -119,9 +119,32 @@ export async function processTemplateLearningJob(job) {
     }
   });
 
+  // Fetch verified template for this institution to build rescue hints.
+  let rescueHints = null;
+  try {
+    const profile = await InstitutionalProfile.findById(institutionalProfileId).lean();
+    if (profile?.templates) {
+      const verified = profile.templates.find(
+        (t) => String(t.status || '').toUpperCase() === 'VERIFIED'
+      );
+      if (verified?.mapping) {
+        rescueHints = {
+          verticalLines: verified.mapping.explicitVerticalLines || [],
+          anchors: verified.mapping.headerAnchors || []
+        };
+      }
+    }
+  } catch (dbErr) {
+    logger.warn('[LEARNING] Rescue hint lookup failed, continuing without hints', {
+      rtn,
+      error: dbErr?.message
+    });
+  }
+
   const mapping = await identifyTemplate(buffer, rtn, {
     statementId: String(statementId),
-    jobId: String(job.id)
+    jobId: String(job.id),
+    ...(rescueHints ? { rescueHints } : {})
   });
   const { layoutConfidence: _omitLc, ...mappingForTemplate } = mapping;
   const fingerprint = mapping.layoutFingerprint || buildLayoutFingerprint(mapping);

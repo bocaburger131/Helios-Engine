@@ -18,17 +18,21 @@ export function mapProfileResultToRawBundle(profileResult, documentMap) {
   const feeTransactions = extractFeeLedgerTransactions(feeText, {
     defaultYear: profileResult?.meta?.statementYear
   });
-  const dedupedFees = dedupeFeeTransactions(
-    feeTransactions,
-    profileResult?.transactions ?? []
-  );
+  const primaryTxns = profileResult?.transactions ?? [];
+  const dedupedFees = dedupeFeeTransactions(feeTransactions, primaryTxns);
+
+  // Append fee-ledger rows into primary activity (tagged); keep feeTransactions for printed-total merge in reconcileRawBundle
+  const feeTagged = dedupedFees.map((f) => ({ ...f, source: 'fee_ledger' }));
+  const transactions = feeTagged.length
+    ? [...primaryTxns, ...feeTagged]
+    : primaryTxns;
 
   const contextArchive = createContextArchive({ documentMap });
 
   return createRawExtractionBundle({
     extractionMode: 'profile_strict',
     profileId: profileResult?.meta?.extractionProfile ?? documentMap?.profileId,
-    transactions: profileResult?.transactions ?? [],
+    transactions,
     feeTransactions: dedupedFees,
     normalizedTransactions: profileResult?.normalizedTransactions ?? [],
     meta: profileResult?.meta ?? {},

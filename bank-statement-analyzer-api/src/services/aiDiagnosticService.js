@@ -142,6 +142,23 @@ function summariseTelemetry(pageTelemetry, transactions = []) {
 }
 
 /**
+ * Wraps a Promise with a timeout. Rejects with a TimeoutError if the
+ * promise does not settle within `ms` milliseconds.
+ */
+function promiseTimeout(ms, promise) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Promise timed out after ${ms}ms`));
+    }, ms);
+    promise
+      .then((val) => { clearTimeout(timer); resolve(val); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+const DIAGNOSTIC_TIMEOUT_MS = 15000;
+
+/**
  * @param {object} input
  * @param {Array<object>} input.transactions
  * @param {number} [input.expectedClosingBalance]
@@ -192,12 +209,12 @@ export async function analyzeMismatch(input = {}) {
   const user = `Diagnose the checksum mismatch. Data:\n${JSON.stringify(userPayload)}`;
 
   try {
-    const raw = await runDiagnosticCompletion({
+    const raw = await promiseTimeout(DIAGNOSTIC_TIMEOUT_MS, runDiagnosticCompletion({
       system: SYSTEM_PROMPT,
       user,
       responseSchema: RESPONSE_SCHEMA,
       maxTokens: 2048
-    });
+    }));
     const result = coerceDiagnosticResult(raw, transactions.length);
     logger.info('[AI_DIAGNOSTIC] analyzeMismatch', {
       fileName: input.fileName,
@@ -207,10 +224,17 @@ export async function analyzeMismatch(input = {}) {
     });
     return result;
   } catch (e) {
-    logger.warn('[AI_DIAGNOSTIC] analyzeMismatch failed', {
-      fileName: input.fileName,
-      error: e.message
-    });
+    if (e.message.includes('timed out')) {
+      logger.warn('[AI_DIAGNOSTIC] analyzeMismatch timed out — forcing REQUIRES_HUMAN_REVIEW path', {
+        fileName: input.fileName,
+        timeoutMs: DIAGNOSTIC_TIMEOUT_MS
+      });
+    } else {
+      logger.warn('[AI_DIAGNOSTIC] analyzeMismatch failed', {
+        fileName: input.fileName,
+        error: e.message
+      });
+    }
     return coerceDiagnosticResult(
       { diagnosis: 'UNKNOWN', explanation: `Diagnostic call failed: ${e.message}` },
       transactions.length

@@ -1,0 +1,80 @@
+{
+  "accountNumber": "0241929470",
+  "routingNumber": "062000019",
+  "bankName": "Regions Bank",
+  "note": "Ground-truth printed SUMMARY figures extracted from the real Premier Fitness 9470 statements on Z:. Each month reconciles via the Regions closing identity: opening + Σcredits − Σdebits = closing, where credits = deposits + returnedChecks + automaticTransfers and debits = withdrawals + checks + fees.",
+  "statements": [
+    {
+      "fileName": "BANK STMT DEC 2023 - 9470.pdf",
+      "openingBalance": 5757.53,
+      "closingBalance": 14794.17,
+      "printedLines": { "deposits": 157766.98, "withdrawals": 137689.30, "checks": 11038.54, "fees": 2.50 }
+    },
+    {
+      "fileName": "BANK STMT JAN - 9470.pdf",
+      "openingBalance": 14794.17,
+      "closingBalance": 17238.53,
+      "printedLines": { "deposits": 139160.99, "withdrawals": 95497.24, "checks": 41219.39, "fees": 0 }
+    },
+    {
+      "fileName": "BANK STMT FEB - 9470.pdf",
+      "openingBalance": 17238.53,
+      "closingBalance": 24873.58,
+      "printedLines": { "deposits": 126133.20, "withdrawals": 96933.19, "checks": 21528.96, "fees": 36.00 }
+    },
+    {
+      "fileName": "BANK STMT MAR - 9470.pdf",
+      "openingBalance": 24873.58,
+      "closingBalance": 15190.51,
+      "printedLines": { "deposits": 182015.88, "withdrawals": 155899.82, "checks": 35772.63, "fees": 26.50 }
+    },
+    {
+      "fileName": "BANK STMT APR - 9470.pdf",
+      "openingBalance": 15190.51,
+      "closingBalance": 10040.61,
+      "printedLines": { "deposits": 171526.58, "withdrawals": 127673.21, "checks": 49003.27, "fees": 0 }
+    },
+    {
+      "fileName": "BANK STMT MAY - 9470.pdf",
+      "openingBalance": 10040.61,
+      "closingBalance": 50256.27,
+      "printedLines": { "deposits": 168130.56, "withdrawals": 117088.85, "checks": 10826.05, "fees": 0 }
+    },
+    {
+      "fileName": "BANK STMT JUNE - 9470.pdf",
+      "openingBalance": 50256.27,
+      "closingBalance": 26062.49,
+      "printedLines": { "deposits": 87911.63, "withdrawals": 134063.96, "checks": 12893.14, "fees": 0, "returnedChecks": 34851.69 }
+    },
+    {
+      "fileName": "BANK STMT JULY - 9470.pdf",
+      "openingBalance": 26062.49,
+      "closingBalance": 39414.94,
+      "printedLines": { "deposits": 176169.52, "withdrawals": 130165.01, "checks": 48548.72, "fees": 0, "returnedChecks": 15896.66 }
+    },
+    {
+      "fileName": "BANK STMT AUG - 9470.pdf",
+      "openingBalance": 39414.94,
+      "closingBalance": 18097.46,
+      "printedLines": { "deposits": 132778.37, "withdrawals": 191218.01, "checks": 38490.97, "fees": 25.00, "returnedChecks": 75638.13 }
+    },
+    {
+      "fileName": "BANK STMT SEP - 9470.pdf",
+      "openingBalance": 18097.46,
+      "closingBalance": 30665.08,
+      "printedLines": { "deposits": 127988.54, "withdrawals": 184529.37, "checks": 5255.42, "fees": 25.00, "returnedChecks": 74388.87 }
+    },
+    {
+      "fileName": "BANK STMT OCT - 9470.pdf",
+      "openingBalance": 30665.08,
+      "closingBalance": 18784.86,
+      "printedLines": { "deposits": 134365.41, "withdrawals": 114166.95, "checks": 31944.68, "fees": 134.00 }
+    },
+    {
+      "fileName": "BANK STMT NOV - 9470.pdf",
+      "openingBalance": 18784.86,
+      "closingBalance": 3960.90,
+      "printedLines": { "deposits": 164576.50, "withdrawals": 145038.31, "checks": 61369.90, "fees": 86.00, "returnedChecks": 27093.75 }
+    }
+  ]
+}

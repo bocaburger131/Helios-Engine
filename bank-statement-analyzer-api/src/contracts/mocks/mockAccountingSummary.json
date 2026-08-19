@@ -1,0 +1,28 @@
+{
+  "opex": {
+    "total": 180000,
+    "categories": [
+      { "name": "Payroll", "amount": 95000 },
+      { "name": "Rent & Facilities", "amount": 42000 },
+      { "name": "Operating Expenses", "amount": 43000 }
+    ]
+  },
+  "revenue": {
+    "total": 1250000,
+    "primarySource": "Deposits",
+    "confidence": 0.8
+  },
+  "cogs": {
+    "total": 420000,
+    "categories": [
+      { "name": "Cost of Goods Sold", "amount": 420000 }
+    ]
+  },
+  "debtService": {
+    "total": 185000,
+    "categories": [
+      { "name": "Loan Payments", "amount": 185000 }
+    ]
+  },
+  "netOperatingIncome": 450000
+}

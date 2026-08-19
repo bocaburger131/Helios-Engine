@@ -3,83 +3,119 @@
  */
 import { validateReconciliation } from '../templateGraduationService.js';
 import riskAnalysisService from '../riskAnalysisService.js';
-import { applyBalanceSequenceSigns, normalizeTransactionsForLedger } from '../../utils/transactionNormalization.js';
-import logger from '../../utils/logger.js';
 
 const TOLERANCE = 0.01;
 
+const round2 = (n) => Number((Number(n) || 0).toFixed(2));
+
 /**
- * @param {object} meta
- * @param {Array<object>} transactions — ledger-shaped (signed amount)
+ * Map a free-text transaction section label onto a spec line key.
+ * @param {string} label
+ * @param {{ summaryLines: Array<{key:string, labels:RegExp[]}> }} spec
+ * @returns {string|null}
+ */
+function sectionKeyForLabel(label, spec) {
+  const s = String(label || '').trim();
+  if (!s || !spec?.summaryLines) return null;
+  // Fast path: row already tagged with a canonical spec key.
+  const direct = spec.summaryLines.find((def) => def.key.toLowerCase() === s.toLowerCase());
+  if (direct) return direct.key;
+  // Specific labels (returnedChecks) precede generic (checks) in spec order.
+  for (const def of spec.summaryLines) {
+    if (def.labels.some((re) => re.test(s))) return def.key;
+  }
+  return null;
+}
+
+/**
+ * Sum parsed ledger amounts grouped by spec line key, using each row's section tag.
+ * @param {Array<object>} txs
+ * @param {{ summaryLines: Array<{key:string, labels:RegExp[], role:string}> }} spec
+ * @returns {Record<string, number>}
+ */
+function computeSectionTotals(txs, spec) {
+  const totals = {};
+  if (!spec?.summaryLines) return totals;
+  for (const t of txs) {
+    const key = sectionKeyForLabel(t.section ?? t.sectionLabel, spec);
+    if (!key) continue;
+    totals[key] = (totals[key] ?? 0) + Math.abs(Number(t.amount) || 0);
+  }
+  for (const k of Object.keys(totals)) totals[k] = round2(totals[k]);
+  return totals;
+}
+
+/**
+ * Per-line printed-vs-parsed comparison for the dashboard.
+ * @returns {Record<string, {printed:number|null, parsed:number|null, delta:number|null, role:string, match:boolean}>}
+ */
+function computeLineDeltas(printedLines, sectionTotals, spec) {
+  const deltas = {};
+  if (!spec?.summaryLines) return deltas;
+  for (const def of spec.summaryLines) {
+    const printed = printedLines?.[def.key];
+    const parsed = sectionTotals?.[def.key];
+    const hasPrinted = printed != null && Number.isFinite(Number(printed));
+    const hasParsed = parsed != null && Number.isFinite(Number(parsed));
+    if (!hasPrinted && !hasParsed) continue;
+    const delta = hasPrinted && hasParsed ? round2(Number(parsed) - Number(printed)) : null;
+    deltas[def.key] = {
+      printed: hasPrinted ? round2(printed) : null,
+      parsed: hasParsed ? round2(parsed) : null,
+      delta,
+      role: def.role,
+      // Only meaningful when section tags exist; absence is not a hard failure.
+      match: delta == null ? !hasParsed : Math.abs(delta) <= TOLERANCE
+    };
+  }
+  return deltas;
+}
+
+/**
+ * Printed-side closing identity: opening + Σ(printed credits) − Σ(printed debits).
+ * @returns {{ printedComputedClosing: number|null, printedClosingMatch: boolean }}
+ */
+function computePrintedClosingIdentity(opening, closing, printedLines, spec) {
+  if (!spec?.summaryLines || !printedLines) {
+    return { printedComputedClosing: null, printedClosingMatch: true };
+  }
+  let credit = 0;
+  let debit = 0;
+  let any = false;
+  for (const def of spec.summaryLines) {
+    const v = printedLines[def.key];
+    if (v == null || !Number.isFinite(Number(v))) continue;
+    any = true;
+    if (def.role === 'credit') credit += Math.abs(Number(v));
+    else if (def.role === 'debit') debit += Math.abs(Number(v));
+  }
+  if (!any) return { printedComputedClosing: null, printedClosingMatch: true };
+  const printedComputedClosing = round2(opening + credit - debit);
+  return {
+    printedComputedClosing,
+    printedClosingMatch: Math.abs(printedComputedClosing - closing) <= TOLERANCE
+  };
+}
+
+/**
+ * @param {object} meta — may carry printedLines + reconciliationSpec for spec-aware recon
+ * @param {Array<object>} transactions — ledger-shaped (signed amount, optional section tag)
  * @returns {object}
  */
 export function reconcileStatement(meta, transactions) {
-  let txs = Array.isArray(transactions) ? transactions : [];
+  const txs = Array.isArray(transactions) ? transactions : [];
   const opening = Number(meta?.openingBalance ?? 0);
   const closing = Number(meta?.closingBalance ?? 0);
   const printedDeposits = meta?.printedDeposits;
   const printedWithdrawals = meta?.printedWithdrawals;
-
-  // ---- Balance-sequence sign inference (P0) ----
-  // Uses the running balance column to correct misclassified CREDIT/DEBIT types.
-  // Institution-agnostic: works for ALL banks, not just Wells Fargo.
-  if (opening && txs.length > 0) {
-    // Normalize balance field name — profiles may use 'endingDailyBalance' or 'balance'
-    for (const t of txs) {
-      if (t.balance == null && t.endingDailyBalance != null) {
-        t.balance = t.endingDailyBalance;
-      }
-    }
-    const beforeCounts = countByType(txs);
-    const balCount = txs.filter(t => t.balance != null).length;
-    const balSample = txs.filter(t => t.balance != null).slice(0, 3);
-    logger.info('[RECONCILIATION] balance inference pre-check', {
-      txnCount: txs.length,
-      withBalance: balCount,
-      opening,
-      sample: balSample.map(t => ({ amt: t.amount, bal: t.balance, date: t.date, type: t.type })),
-    });
-
-    // PRESERVE the Python sidecar sign: only run balance inference on the subset
-    // of rows that actually HAVE balance data. Rows without balance keep their
-    // column-position-derived sign (deposits→CREDIT, withdrawals→DEBIT).
-    // Make a copy with abs amounts for the inference function (which expects
-    // positive amounts), then merge results back.
-    const absTxs = txs.map(t => ({ ...t, amount: Math.abs(Number(t.amount) || 0) }));
-    const signedTxs = applyBalanceSequenceSigns(absTxs, { openingBalance: opening });
-
-    // Merge: for rows that had balance data AND were flipped by inference,
-    // use the inferred sign. For all others, keep the original Python sign.
-    for (let i = 0; i < txs.length; i++) {
-      const orig = txs[i];
-      const inferred = signedTxs[i];
-      if (orig.balance != null && inferred && inferred.amount !== Math.abs(Number(orig.amount) || 0)) {
-        // Balance inference flipped this row — use the inferred sign
-        orig.amount = inferred.amount;
-        orig.type = inferred.type;
-      }
-      // else: keep original Python-sidecar sign (already correct from column position)
-    }
-
-    txs = normalizeTransactionsForLedger(txs);
-    const afterCounts = countByType(txs);
-    const flipped = beforeCounts.CREDIT - afterCounts.CREDIT;
-    if (flipped !== 0) {
-      logger.info('[RECONCILIATION] balance-sequence sign inference applied', {
-        flipped,
-        creditBefore: beforeCounts.CREDIT,
-        creditAfter: afterCounts.CREDIT,
-        debitBefore: beforeCounts.DEBIT,
-        debitAfter: afterCounts.DEBIT,
-      });
-    }
-  }
+  const spec = meta?.reconciliationSpec ?? null;
+  const printedLines = meta?.printedLines ?? null;
 
   const { totalDeposits, totalWithdrawals } =
     riskAnalysisService.calculateTotalDepositsAndWithdrawals(txs);
 
-  const parsedDeposits = Number(totalDeposits.toFixed(2));
-  const parsedWithdrawals = Number(totalWithdrawals.toFixed(2));
+  const parsedDeposits = round2(totalDeposits);
+  const parsedWithdrawals = round2(totalWithdrawals);
 
   const checksumRecon = validateReconciliation({
     transactions: txs,
@@ -88,7 +124,7 @@ export function reconcileStatement(meta, transactions) {
     balances: { opening, closing }
   });
 
-  const computedClosing = Number((opening + parsedDeposits - parsedWithdrawals).toFixed(2));
+  const computedClosing = round2(opening + parsedDeposits - parsedWithdrawals);
 
   let depositsMatch = true;
   let withdrawalsMatch = true;
@@ -101,14 +137,49 @@ export function reconcileStatement(meta, transactions) {
 
   const closingMatch = Math.abs(computedClosing - closing) <= TOLERANCE;
 
-  const checksumOk =
-    Boolean(checksumRecon.ok) &&
-    depositsMatch &&
-    withdrawalsMatch &&
-    closingMatch;
+  const sectionTotals = computeSectionTotals(txs, spec);
+  const lineDeltas = computeLineDeltas(printedLines, sectionTotals, spec);
+  const { printedComputedClosing, printedClosingMatch } = computePrintedClosingIdentity(
+    opening,
+    closing,
+    printedLines,
+    spec
+  );
+
+  // Universal ledger gate (any bank / any company):
+  // 1) Ledger quality: Tier-A closing on parsed rows OR printed activity match
+  // 2) Closing integrity: printed SUMMARY identity when multi-line SUMMARY exists,
+  //    else Tier-A/closingMatch on the stated ending balance
+  // Printed identity alone never passes — empty/wrong ledgers always self-reconcile on paper.
+  const hasSpecLines =
+    Boolean(spec) && printedLines != null && Object.keys(printedLines).length > 0;
+
+  const sectionReconciled = hasSpecLines
+    ? Object.values(lineDeltas).every((d) => d.match)
+    : null;
+
+  const activityOk = depositsMatch && withdrawalsMatch;
+  const tierAOk = Boolean(checksumRecon.ok);
+  const ledgerQualityOk = tierAOk || activityOk;
+  const hasPrintedActivity =
+    (printedDeposits != null && Number.isFinite(Number(printedDeposits))) ||
+    (printedWithdrawals != null && Number.isFinite(Number(printedWithdrawals)));
+
+  let checksumOk;
+  if (hasSpecLines) {
+    checksumOk = ledgerQualityOk && printedClosingMatch;
+  } else if (hasPrintedActivity) {
+    checksumOk = ledgerQualityOk && closingMatch;
+  } else {
+    checksumOk = tierAOk && closingMatch;
+  }
+  const ledgerOk = checksumOk;
 
   return {
     checksumOk,
+    ledgerOk,
+    activityOk,
+    tierAOk,
     parsedDeposits,
     parsedWithdrawals,
     computedClosing,
@@ -119,7 +190,13 @@ export function reconcileStatement(meta, transactions) {
     opening,
     closing,
     printedDeposits: printedDeposits != null ? Number(printedDeposits) : null,
-    printedWithdrawals: printedWithdrawals != null ? Number(printedWithdrawals) : null
+    printedWithdrawals: printedWithdrawals != null ? Number(printedWithdrawals) : null,
+    printedLines: printedLines ?? null,
+    sectionTotals,
+    lineDeltas,
+    printedComputedClosing,
+    printedClosingMatch,
+    sectionReconciled
   };
 }
 
@@ -147,17 +224,73 @@ export function validateEndingDailyBalancePlacement(normalizedTxns) {
   return { valid: violations === 0, violations };
 }
 
-export default { reconcileStatement, validateEndingDailyBalancePlacement };
+/**
+ * Row-level micro-checksum: Previous + Deposit − Withdrawal = Balance.
+ * Skips rows without a usable balance. Tolerance ±$0.01.
+ * @param {Array<object>} transactions
+ * @param {{ openingBalance?: number }} [opts]
+ * @returns {{ ok: boolean, violations: Array<object> }}
+ */
+export function validateRowRunningBalances(transactions, opts = {}) {
+  const txs = Array.isArray(transactions) ? transactions : [];
+  const violations = [];
+  let prevBalance =
+    opts.openingBalance != null && Number.isFinite(Number(opts.openingBalance))
+      ? round2(opts.openingBalance)
+      : null;
 
-// ---- Internal helpers ----
+  for (let rowIndex = 0; rowIndex < txs.length; rowIndex++) {
+    const t = txs[rowIndex];
+    if (!t || t.parseExcluded || t.excludeFromMacroTotals) continue;
 
-function countByType(transactions) {
-  let CREDIT = 0;
-  let DEBIT = 0;
-  for (const t of transactions) {
-    const ty = (t?.type || '').toUpperCase();
-    if (ty === 'CREDIT') CREDIT++;
-    else if (ty === 'DEBIT') DEBIT++;
+    const balRaw = t.balance ?? t.endingDailyBalance ?? t.runningBalance;
+    if (balRaw == null || balRaw === '') continue;
+    const balance = round2(balRaw);
+    if (!Number.isFinite(balance)) continue;
+
+    if (prevBalance == null) {
+      prevBalance = balance;
+      continue;
+    }
+
+    let deposit = 0;
+    let withdrawal = 0;
+    if (t.deposit != null || t.credit != null) {
+      deposit = Math.abs(Number(t.deposit ?? t.credit) || 0);
+    }
+    if (t.withdrawal != null || t.debit != null) {
+      withdrawal = Math.abs(Number(t.withdrawal ?? t.debit) || 0);
+    }
+    if (deposit === 0 && withdrawal === 0) {
+      const amt = Number(t.amount);
+      if (Number.isFinite(amt)) {
+        if (amt >= 0) deposit = Math.abs(amt);
+        else withdrawal = Math.abs(amt);
+      }
+    }
+
+    const expected = round2(prevBalance + deposit - withdrawal);
+    const delta = round2(expected - balance);
+    if (Math.abs(delta) > TOLERANCE) {
+      violations.push({
+        page: t.page ?? t.pageIndex ?? t.pageNumber ?? null,
+        rowIndex,
+        delta,
+        previous: prevBalance,
+        deposit: round2(deposit),
+        withdrawal: round2(withdrawal),
+        balance,
+        description: t.description || t.desc || null
+      });
+    }
+    prevBalance = balance;
   }
-  return { CREDIT, DEBIT };
+
+  return { ok: violations.length === 0, violations };
 }
+
+export default {
+  reconcileStatement,
+  validateEndingDailyBalancePlacement,
+  validateRowRunningBalances
+};

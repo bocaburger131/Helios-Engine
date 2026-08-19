@@ -4,6 +4,7 @@
 import pdfParse from 'pdf-parse';
 import { stitchStatement } from '../statementStitcher.js';
 import logger from '../../utils/logger.js';
+import { hasUsableExplicitVerticalLines } from '../../utils/layoutColumnBoundaries.js';
 
 const DATE_TOKEN = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const MONEY_TOKEN = /\(?-?\$?\s*[\d,]+\.\d{2}\)?/;
@@ -266,12 +267,19 @@ export function toAnchorsOnlyLayout(layout) {
  */
 export function prepareLayoutForDigitalApply(layout, typeBText) {
   const probe = probeLayoutOnDigitalText(layout, typeBText);
-  if (probe.anchorsOnly) {
+  // Keep column mapping + spatial lines when pdfplumber can slice despite weak index probe.
+  if (probe.anchorsOnly && !hasUsableExplicitVerticalLines(layout)) {
     logger.info('[TEMPLATE_DIGITAL] using anchors-only layout (column mapping dropped)', {
       mappedCount: probe.mappedCount,
       anchorStatus: probe.anchorStatus
     });
     return { layout: toAnchorsOnlyLayout(layout), probe };
+  }
+  if (probe.anchorsOnly && hasUsableExplicitVerticalLines(layout)) {
+    logger.info('[TEMPLATE_DIGITAL] keeping column mapping — explicitVerticalLines present', {
+      mappedCount: probe.mappedCount,
+      lineCount: layout.explicitVerticalLines?.length
+    });
   }
   return { layout: { ...layout, templateApplyMode: 'full' }, probe };
 }
@@ -320,6 +328,15 @@ export function shouldRejectStoredMongoTemplate(layout, typeBText) {
   const hasColumnMapping =
     layout?.columnMapping && typeof layout.columnMapping === 'object';
   if (hasColumnMapping && (probe.mappedCount ?? 0) === 0) {
+    // Spatial X-boundaries enable pdfplumber even when whitespace index probe finds 0 rows.
+    if (hasUsableExplicitVerticalLines(layout)) {
+      return {
+        reject: false,
+        reason: null,
+        anchor,
+        probe: { ...probe, spatialLinesOverride: true }
+      };
+    }
     return { reject: true, reason: 'column_mapped_zero', anchor, probe };
   }
   return { reject: false, reason: null, anchor, probe };

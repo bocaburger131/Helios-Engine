@@ -561,11 +561,21 @@ function isSectionHeader(line) {
 
 
 
+function isPageMarkerLine(line) {
+
+  return /^page\s+\d+(\s+of\s+\d+)?\b/i.test(String(line || '').trim());
+
+}
+
+
+
 function shouldSkipLine(line) {
 
   const trimmed = String(line || '').trim();
 
   if (!trimmed) return true;
+
+  if (isPageMarkerLine(trimmed)) return true;
 
   if (SKIP_LINE_RE.test(trimmed)) return true;
 
@@ -685,6 +695,13 @@ export function splitChaseRows(section) {
       current = null;
 
       activeSection = hdr;
+
+      continue;
+
+    }
+
+    // Page markers: skip without flushing an open row (amount may continue on next page).
+    if (isPageMarkerLine(line)) {
 
       continue;
 

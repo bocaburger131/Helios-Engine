@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import StatementControllerServices from './statementController.services.js';
 import Statement from '../models/Statement.js';
 import Transaction from '../models/Transaction.js';
+import { findByIdWithTransactions, findByUserMonthly } from '../services/repositories/statementRepository.js';
+import { bulkCategorize as bulkCategorizeTxns } from '../services/repositories/transactionRepository.js';
 import PDFParserService, { DocumentTriageError } from '../services/pdfParserService.js';
 import riskAnalysisService from '../services/riskAnalysisService.js';
 import { LLMCategorizationService } from '../services/llmCategorizationService.js';
@@ -91,8 +93,10 @@ import {
   runChecksumGateRecovery,
   computeBatchChecksumStats,
   resolveBatchHttpStatus,
-  MACRO_CHECKSUM_MIN_OK_RATIO
+  MACRO_CHECKSUM_MIN_OK_RATIO,
+  forceHitlRoutingEnabled
 } from '../services/batchParseOrchestrator.js';
+import { createHitlProcessingRunIfNeeded } from '../services/hitlReviewPayloadService.js';
 import { attachParseOutcomeFlags } from '../utils/statementParseQuality.js';
 import { getBatchProgress, clearBatchProgress, setBatchProgress } from '../services/batchProgressStore.js';
 import {
@@ -106,6 +110,7 @@ import {
   buildChecksumGateBestEffortAlert,
   deriveBestEffortChecksumMode,
   includeStatementInMacro,
+  shouldHardFailChecksumGate,
   tagMacroTransactionsFromStatement
 } from '../utils/macroBestEffort.js';
 
@@ -2827,8 +2832,8 @@ class StatementController {
       }
       
       // Full document as stored in MongoDB (lean avoids omitting paths not declared on the schema).
-      const statementDoc = await Statement.findById(id).lean();
-      
+      const { statement: statementDoc, transactions } = await findByIdWithTransactions(id);
+
       if (!statementDoc) {
         return res.status(404).json({ 
           success: false, 
@@ -2850,8 +2855,6 @@ class StatementController {
           error: 'Statement not found or access denied' 
         });
       }
-
-      const transactions = await Transaction.find({ statementId: id }).sort({ date: 1 }).lean();
 
       const ex = macroListExtras(statementDoc);
 
@@ -3934,8 +3937,9 @@ Vera's Underwriting Report:`;
       return res.status(400).json({ success: false, error: 'correlationId required' });
     }
     const progress = await getBatchProgress(correlationId);
+    // 200 + null when not written yet — clients poll before the worker sets progress.
     if (!progress) {
-      return res.status(404).json({ success: false, error: 'No progress for this correlation id' });
+      return res.status(200).json({ success: true, progress: null });
     }
     return res.status(200).json({ success: true, progress });
   };
@@ -3984,6 +3988,22 @@ Vera's Underwriting Report:`;
         jobId,
         status: 'failed',
         error: status.error || 'Batch failed',
+        correlationId: status.correlationId || jobId
+      });
+    }
+    if (status.status === 'REQUIRES_HUMAN_REVIEW') {
+      return res.status(200).json({
+        success: false,
+        jobId,
+        status: 'REQUIRES_HUMAN_REVIEW',
+        processingRunId: status.processingRunId || status.result?.processingRunId || null,
+        fileName: status.fileName || status.result?.fileName || null,
+        reviewPayload: status.reviewPayload || status.result?.reviewPayload || null,
+        diagnosticSummaries: status.diagnosticSummaries || status.result?.diagnosticSummaries || [],
+        result: status.result || null,
+        message:
+          status.message ||
+          'Checksum reconciliation failed — human review required.',
         correlationId: status.correlationId || jobId
       });
     }
@@ -4695,7 +4715,9 @@ Vera's Underwriting Report:`;
           logger.warn(
             `[MACRO] CHECKSUM_GATE_FAILED: ${(batchChecksumStats.ratio * 100).toFixed(0)}% pass < ${(MACRO_CHECKSUM_MIN_OK_RATIO * 100).toFixed(0)}% required`
           );
-          if (!hasUsableTxns || batchOutcome.httpStatus === 422) {
+          // Hard 422 only when there is nothing to review. With usable txs, continue
+          // best-effort so createHitlProcessingRunIfNeeded can open REQUIRES_HUMAN_REVIEW.
+          if (shouldHardFailChecksumGate(hasUsableTxns)) {
             clearBatchProgress(correlationId);
             return res.status(422).json({
               success: false,
@@ -4713,6 +4735,9 @@ Vera's Underwriting Report:`;
               processingErrors: processingErrors.length > 0 ? processingErrors : undefined
             });
           }
+          logger.info(
+            `[MACRO] CHECKSUM_GATE soft-fail → best-effort HITL path (${batchChecksumStats.okCount}/${batchChecksumStats.total} ok; httpStatus=${batchOutcome.httpStatus})`
+          );
           batchParseAlerts.push(
             buildChecksumGateBestEffortAlert(
               batchChecksumStats,
@@ -5750,9 +5775,7 @@ Vera's Underwriting Report:`;
       const { envelope } = await runMacroStages();
       clearBatchProgress(correlationId);
 
-      // Diagnostic AI Rescue: surface COMPLETED_WITH_WARNINGS for HITL review when
-      // statements were saved best-effort (failed checksum but usable) or carry an
-      // AI diagnosis. BullMQ stays "completed"; only the business status differs.
+      // Diagnostic AI Rescue / HITL: surface review status when checksum failed or AI diagnosis remains.
       const diagnosticSummaries = parsedStatements
         .filter(
           (s) =>
@@ -5769,7 +5792,80 @@ Vera's Underwriting Report:`;
           autoCorrected: Boolean(s.aiDiagnostic?.autoCorrected)
         }));
 
-      if (bestEffortChecksumMode || diagnosticSummaries.length > 0) {
+      const failingChecksum = parsedStatements.filter(
+        (s) => s.checksumRecon?.ok === false || s.rowBalanceRecon?.ok === false
+      );
+      if (
+        forceHitlRoutingEnabled() &&
+        failingChecksum.length === 0 &&
+        parsedStatements.length > 0
+      ) {
+        for (const s of parsedStatements) {
+          s.checksumRecon = {
+            ...(s.checksumRecon && typeof s.checksumRecon === 'object' ? s.checksumRecon : {}),
+            ok: false,
+            forceHitl: true,
+            delta: 'FORCE_HITL'
+          };
+          s.aiDiagnostic = s.aiDiagnostic || {
+            diagnosis: 'FORCE_HITL_ROUTING',
+            explanation: 'Forced by Dev Console FORCE_HITL_ROUTING=true',
+            confidenceScore: 1,
+            autoCorrected: false
+          };
+          failingChecksum.push(s);
+        }
+        logger.info('[HITL] FORCE_HITL_ROUTING — opening ProcessingRun for edge-case testing', {
+          correlationId,
+          count: failingChecksum.length
+        });
+      }
+      let hitlRun = null;
+      if (failingChecksum.length > 0) {
+        const statementId = envelope?.data?.statementId ?? envelope?.statementId ?? null;
+        hitlRun = await createHitlProcessingRunIfNeeded({
+          parsedStatements,
+          correlationId,
+          jobId: req.body?.jobId || correlationId,
+          uploadSessionId: uploadSessionId || '',
+          statementIds: statementId ? [statementId] : []
+        });
+      }
+
+      if (hitlRun) {
+        const firstFail = failingChecksum[0];
+        const anyChecksumFail = failingChecksum.some((s) => s.checksumRecon?.ok === false);
+        const anyRowFail = failingChecksum.some((s) => s.rowBalanceRecon?.ok === false);
+        const flags = [
+          'REQUIRES_HUMAN_REVIEW',
+          ...(anyChecksumFail ? ['CHECKSUM_MISMATCH'] : []),
+          ...(anyRowFail ? ['ROW_BALANCE_MISMATCH'] : []),
+          ...diagnosticSummaries.map((d) => d.diagnosis)
+        ];
+        envelope.businessStatus = 'REQUIRES_HUMAN_REVIEW';
+        envelope.processingRunId = String(hitlRun._id);
+        envelope.fileName = firstFail?.fileName || hitlRun.failingFileNames?.[0] || null;
+        envelope.reviewPayload = hitlRun.reviewPayload;
+        envelope.diagnosticSummaries = diagnosticSummaries;
+        envelope.analysisQuality = {
+          checksumValidated: false,
+          flags: [...new Set(flags)],
+          statementsRequiringReview: failingChecksum.length
+        };
+        setBatchProgress(correlationId, {
+          status: 'REQUIRES_HUMAN_REVIEW',
+          progress: 100,
+          phase: 'requires_human_review',
+          message: `Human review required for ${failingChecksum.length} statement(s) with failed checksum.`,
+          result: {
+            statementId: String(envelope?.data?.statementId ?? envelope?.statementId ?? ''),
+            processingRunId: String(hitlRun._id),
+            fileName: envelope.fileName,
+            diagnosticSummaries,
+            reviewPayload: hitlRun.reviewPayload
+          }
+        });
+      } else if (bestEffortChecksumMode || diagnosticSummaries.length > 0) {
         envelope.businessStatus = 'COMPLETED_WITH_WARNINGS';
         envelope.diagnosticSummaries = diagnosticSummaries;
         envelope.analysisQuality = {
@@ -6067,13 +6163,14 @@ Vera's Underwriting Report:`;
         };
       }
       
-      // Query database for user's monthly statements
-      const statements = await Statement.find({ 
-        userId, 
-        ...dateFilter 
-      })
-        .select('_id fileName uploadDate processedDate status summary transactionCount')
-        .sort({ uploadDate: -1 });
+      // Query database for user's monthly statements.
+      // NOTE: `userId` is a virtual getter (returns this.user); the real
+      // persisted field is `user`. Querying the virtual name matches nothing.
+      const statements = await findByUserMonthly(
+        userId,
+        dateFilter,
+        '_id fileName uploadDate processedDate status summary transactionCount'
+      );
       
       const statementList = statements.map(s => ({
         id: s._id,
@@ -6508,33 +6605,35 @@ Vera's Underwriting Report:`;
           // Parse categories from response (simplified logic)
           const categories = this._extractCategoriesFromAnalysis(analysis, batch);
           
-          // Update transactions with categories
-          for (let j = 0; j < batch.length; j++) {
-            const transaction = batch[j];
-            const category = categories[j] || 'Other';
-            
-            await Transaction.findByIdAndUpdate(transaction._id, {
-              category,
+          // Update transactions with categories (single bulkWrite per batch)
+          const bulkOps = batch.map((transaction, j) => ({
+            filter: { _id: transaction._id },
+            update: {
+              category: categories[j] || 'Other',
               categorizedAt: new Date(),
               categorizedBy: 'AI'
-            });
-            
-            categorizedCount++;
-          }
+            }
+          }));
+          const bulkResult = await bulkCategorizeTxns(bulkOps);
+          categorizedCount += bulkResult.modifiedCount || bulkResult.upsertedCount || batch.length;
 
         } catch (error) {
           logger.warn('Failed to categorize batch', { error: error.message, batchStart: i });
           
-          // Fallback to rule-based categorization
-          for (const transaction of batch) {
+          // Fallback to rule-based categorization (single bulkWrite per batch)
+          const fallbackOps = batch.map((transaction) => {
             const category = this._ruleBasedCategorization(transaction);
-            await Transaction.findByIdAndUpdate(transaction._id, {
-              category,
-              categorizedAt: new Date(),
-              categorizedBy: 'Rule-based'
-            });
-            categorizedCount++;
-          }
+            return {
+              filter: { _id: transaction._id },
+              update: {
+                category,
+                categorizedAt: new Date(),
+                categorizedBy: 'Rule-based'
+              }
+            };
+          });
+          const fallbackResult = await bulkCategorizeTxns(fallbackOps);
+          categorizedCount += fallbackResult.modifiedCount || fallbackResult.upsertedCount || batch.length;
         }
       }
 

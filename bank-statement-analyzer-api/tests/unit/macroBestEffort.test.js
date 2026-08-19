@@ -4,6 +4,7 @@ import {
   batchHasUsableTransactions,
   buildChecksumGateBestEffortAlert,
   deriveBestEffortChecksumMode,
+  shouldHardFailChecksumGate,
   tagMacroTransactionsFromStatement
 } from '../../src/utils/macroBestEffort.js';
 import { normalizeBankNameForMacro, buildMacroAccountGroupKey } from '../../src/utils/macroAccountGrouping.js';
@@ -72,8 +73,21 @@ describe('deriveBestEffortChecksumMode', () => {
     expect(deriveBestEffortChecksumMode({ ratio: 1 }, stmts, 0.8, 200)).toBe(false);
   });
 
-  it('returns false when http status is 422', () => {
-    expect(deriveBestEffortChecksumMode({ ratio: 0 }, stmts, 0.8, 422)).toBe(false);
+  it('returns true for 422 when usable txns exist (HITL soft-fail path)', () => {
+    expect(deriveBestEffortChecksumMode({ ratio: 0 }, stmts, 0.8, 422)).toBe(true);
+  });
+
+  it('returns false for 422 when no usable txns', () => {
+    expect(deriveBestEffortChecksumMode({ ratio: 0 }, [{ transactions: [] }], 0.8, 422)).toBe(
+      false
+    );
+  });
+});
+
+describe('shouldHardFailChecksumGate', () => {
+  it('hard-fails only when there are no usable transactions', () => {
+    expect(shouldHardFailChecksumGate(false)).toBe(true);
+    expect(shouldHardFailChecksumGate(true)).toBe(false);
   });
 });
 

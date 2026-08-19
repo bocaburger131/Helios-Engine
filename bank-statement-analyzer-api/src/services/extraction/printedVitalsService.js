@@ -169,6 +169,120 @@ export function extractDocumentPrintedTotals(text, opts = {}) {
   };
 }
 
+/**
+ * Slice the printed SUMMARY block: from the SUMMARY heading through the
+ * Ending/Closing Balance line. Falls back to a leading window.
+ * @param {string} t — already normalized text
+ * @returns {string}
+ */
+function sliceSummaryBlock(t) {
+  const sIdx = t.search(/\bsummary\b/i);
+  const start = sIdx >= 0 ? sIdx : 0;
+  const window = t.slice(start, start + 2500);
+  const endMatch = window.match(/(ending|closing)\s+balance[^\n]*\n?/i);
+  if (endMatch && endMatch.index != null) {
+    return window.slice(0, endMatch.index + endMatch[0].length);
+  }
+  return window.slice(0, 1500);
+}
+
+/**
+ * First money token on a single line (ignores trailing +/- sign markers).
+ * @param {string} line
+ * @returns {number|null}
+ */
+function firstMoneyOnLine(line) {
+  const m = String(line || '').match(/(-?\(?\$?\s*[\d,]+\.\d{2}\)?)/);
+  if (!m) return null;
+  const n = moneyToNumber(m[1]);
+  return n == null ? null : n;
+}
+
+/**
+ * Parse the SUMMARY box into a structured printedLines map using a profile's
+ * reconciliation spec. Labels are matched at the start of each physical line so
+ * generic labels ("Checks") never capture specific ones ("Returned Checks").
+ *
+ * @param {string} text
+ * @param {{ summaryLines: Array<{key:string, labels:RegExp[], role:'credit'|'debit', optional?:boolean}> }} spec
+ * @param {{ summarySlice?: string }} [opts]
+ * @returns {{
+ *   openingBalance: number|null,
+ *   closingBalance: number|null,
+ *   printedLines: Record<string, number>,
+ *   lineRoles: Record<string, 'credit'|'debit'>
+ * }}
+ */
+export function parseSummaryLines(text, spec, opts = {}) {
+  const t = normalizePrintedText(text);
+  const slice = opts.summarySlice ?? sliceSummaryBlock(t);
+  const lines = slice
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const printedLines = {};
+  const lineRoles = {};
+  const usedLineIdx = new Set();
+
+  for (const def of spec?.summaryLines ?? []) {
+    for (let i = 0; i < lines.length; i++) {
+      if (usedLineIdx.has(i)) continue;
+      const line = lines[i];
+      const matched = def.labels.some((re) => new RegExp(`^${re.source}`, re.flags).test(line));
+      if (!matched) continue;
+      const amt = firstMoneyOnLine(line);
+      if (amt == null) continue;
+      printedLines[def.key] = Math.abs(amt);
+      lineRoles[def.key] = def.role;
+      usedLineIdx.add(i);
+      break;
+    }
+  }
+
+  const openingBalance =
+    parseLabeledBalance('Beginning\\s+Balance', slice) ??
+    parseLabeledBalance('Opening\\s+Balance', slice) ??
+    parseLabeledBalance('Beginning\\s+Balance', t);
+  const closingBalance =
+    parseLabeledBalance('Ending\\s+Balance', slice) ??
+    parseLabeledBalance('Closing\\s+Balance', slice) ??
+    parseLabeledBalance('Ending\\s+Balance', t);
+
+  return { openingBalance, closingBalance, printedLines, lineRoles };
+}
+
+/**
+ * Collapse a printedLines map into legacy two-bucket aggregates using spec roles.
+ * @param {Record<string, number>} printedLines
+ * @param {{ summaryLines: Array<{key:string, role:'credit'|'debit'}> }} spec
+ * @returns {{ printedDeposits: number|null, printedWithdrawals: number|null }}
+ */
+export function summarizePrintedLines(printedLines, spec) {
+  if (!printedLines || !spec?.summaryLines) {
+    return { printedDeposits: null, printedWithdrawals: null };
+  }
+  let credit = 0;
+  let debit = 0;
+  let hasCredit = false;
+  let hasDebit = false;
+  for (const def of spec.summaryLines) {
+    const v = printedLines[def.key];
+    if (v == null || !Number.isFinite(Number(v))) continue;
+    if (def.role === 'credit') {
+      credit += Math.abs(Number(v));
+      hasCredit = true;
+    } else if (def.role === 'debit') {
+      debit += Math.abs(Number(v));
+      hasDebit = true;
+    }
+  }
+  return {
+    printedDeposits: hasCredit ? Number(credit.toFixed(2)) : null,
+    printedWithdrawals: hasDebit ? Number(debit.toFixed(2)) : null
+  };
+}
+
 /** Fill only null vitals from stitcher — never override document totals. */
 export function mergePrintedWithStitcher(summary, stitcherPrinted) {
   if (!summary && !stitcherPrinted) return null;
@@ -189,5 +303,7 @@ export default {
   parseLabeledBalance,
   parseGluedInstanceAmount,
   extractDocumentPrintedTotals,
-  mergePrintedWithStitcher
+  mergePrintedWithStitcher,
+  parseSummaryLines,
+  summarizePrintedLines
 };

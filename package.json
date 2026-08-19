@@ -3,6 +3,7 @@
   "private": true,
   "description": "Helios Engine — bank statement analyzer API + dashboard",
   "scripts": {
-    "dev": "node scripts/start-helios.js"
+    "dev": "node scripts/start-helios.js",
+    "dev:console": "npm run dev --prefix helios-dev-console"
   }
 }
